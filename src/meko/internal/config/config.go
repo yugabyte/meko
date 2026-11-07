@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,11 +18,9 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 )
 
-// DefaultPort is the API listener's: next to the web listener's DefaultWebPort.
-const DefaultPort = 7778
-
-// DefaultWebPort is the web listener's, the port Kode listened on before Meko served it.
-const DefaultWebPort = 7777
+// DefaultPort is Meko's one port, for agents, the CLI and browsers alike: the one Kode listened
+// on before Meko served it.
+const DefaultPort = 7777
 
 // Config is every setting.
 type Config struct {
@@ -39,25 +38,25 @@ type Config struct {
 	Storage            Storage            `toml:"storage"`
 }
 
-// Web is the [web] table: the web listener browsers use, for the web UI and the extensions' at
-// /ext/<name>/ (the API listener, [server], stays on 127.0.0.1 for agents and the CLI).
+// Web is the [web] table: how browsers reach Meko, for the web UI and the extensions' at
+// /ext/<name>/, on the one port ([server] port) agents and the CLI use too.
 type Web struct {
-	// Port is the web listener's (default 7777). Also MEKO_WEB_PORT.
-	Port int `toml:"port"`
 	// Access is "local" (the default: 127.0.0.1 over HTTP, for requests from this computer) or
-	// "remote" (every address over HTTPS). Neither has a login. Also MEKO_WEB_ACCESS.
+	// "remote" (every address: HTTPS for browsers, and plain HTTP for agents and the CLI on this
+	// computer). Neither has a login. Also MEKO_WEB_ACCESS.
 	Access string `toml:"access"`
-	// Name is the host name links to the web listener use; empty is this host's FQDN (remote) or
+	// Name is the host name links to the web UI use; empty is this host's FQDN (remote) or
 	// 127.0.0.1 (local).
 	Name string `toml:"name"`
-	// Enabled is whether serve runs the web listener at all (true by default): meko ui stop and
-	// meko ui start set it in web.toml (SetWebEnabled), and meko install --no-ui sets it off.
+	// Enabled is whether browsers are let in at all (true by default): meko ui stop and meko ui
+	// start set it in web.toml (SetWebEnabled), and meko install --no-ui sets it off. Off, the port
+	// stays open to agents and the CLI, on 127.0.0.1 only.
 	Enabled bool `toml:"enabled"`
 }
 
-// webTable is web.toml's [web]: Web, with Enabled unset when the file doesn't name it.
+// webTable is web.toml's [web]: Web, with Enabled unset when the file doesn't name it. A port an
+// older Meko wrote there (from the handoff, or install) is ignored, and dropped at the next write.
 type webTable struct {
-	Port    int    `toml:"port"`
 	Access  string `toml:"access"`
 	Name    string `toml:"name"`
 	Enabled *bool  `toml:"enabled"`
@@ -75,7 +74,7 @@ const (
 	AccessRemote = "remote"
 )
 
-// TLS is the [tls] table: the web listener's certificate with remote access. Empty uses a
+// TLS is the [tls] table: the certificate browsers get with remote access. Empty uses a
 // self-signed pair Meko makes in the data folder's certs/ (internal/tlscert).
 type TLS struct {
 	Cert string `toml:"cert"` // a PEM file
@@ -171,6 +170,8 @@ type ConversationSearch struct {
 
 // Server is the [server] table.
 type Server struct {
+	// Port is Meko's one port (default 7777): MCP, the REST API, the web UI and the extensions'.
+	// Also MEKO_PORT and --port.
 	Port int `toml:"port"`
 	// Auth is "token" (the default: /mcp and the data routes need the client or admin token) or
 	// "none" (they need no credential; every local user can read and write the memories). Also
@@ -199,7 +200,7 @@ type Log struct {
 // Default is the configuration with nothing set.
 func Default() Config {
 	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"},
-		Web: Web{Port: DefaultWebPort, Access: AccessLocal, Enabled: true},
+		Web: Web{Access: AccessLocal, Enabled: true},
 		Update: Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/meko",
 			RequireSignature: true},
 		CallHome: CallHome{Enabled: true}, Storage: Storage{MaxContentMB: DefaultMaxContentMB}}
@@ -231,6 +232,8 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
 		return Config{}, fmt.Errorf("%s: %w", path, err)
+	case md.IsDefined("web", "port"):
+		return Config{}, fmt.Errorf("%s: %w", path, ErrWebPort)
 	default:
 		if extra := md.Undecoded(); len(extra) > 0 {
 			keys := make([]string, len(extra))
@@ -247,12 +250,8 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 		}
 		c.Server.Port = p
 	}
-	if v := env("MEKO_WEB_PORT"); v != "" {
-		p, err := strconv.Atoi(v)
-		if err != nil {
-			return Config{}, fmt.Errorf("MEKO_WEB_PORT=%q isn't a port number", v)
-		}
-		c.Web.Port = p
+	if env("MEKO_WEB_PORT") != "" {
+		return Config{}, fmt.Errorf("MEKO_WEB_PORT: %w", ErrWebPort)
 	}
 	if v := env("MEKO_WEB_ACCESS"); v != "" {
 		c.Web.Access = v
@@ -323,21 +322,148 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	return c, c.validate()
 }
 
+// pickedPortMark is the comment meko install writes above a port it picked (SetPickedPort), which
+// tells that port from one the user chose (PortChosen).
+const pickedPortMark = "# Picked by meko install: the port before it was in use by another program"
+
+// ErrPortChosen is SetPickedPort's refusal to move a port the user chose.
+var ErrPortChosen = errors.New("config.toml sets [server] port")
+
+// PortChosen reports whether the user chose Meko's port: MEKO_PORT, or a [server] port in
+// config.toml at path that meko install didn't pick. Install moves only a port nobody chose.
+func PortChosen(path string, env func(string) string) (bool, error) {
+	if env("MEKO_PORT") != "" {
+		return true, nil
+	}
+	var c Config
+	md, err := toml.DecodeFile(path, &c)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", path, err)
+	}
+	if !md.IsDefined("server", "port") {
+		return false, nil
+	}
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the data folder's config.toml
+	if err != nil {
+		return false, err
+	}
+	return pickedPortLine(strings.Split(string(b), "\n")) < 0, nil
+}
+
+// pickedPortLine is the index of the port line under pickedPortMark in [server], or -1.
+func pickedPortLine(lines []string) int {
+	section := ""
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "[") {
+			section = tableName(t)
+			continue
+		}
+		if section == "server" && t == pickedPortMark && i+1 < len(lines) && isPortLine(lines[i+1]) {
+			return i + 1
+		}
+	}
+	return -1
+}
+
+// tableName is the name of the table a [header] line opens: "server" for "[server]  # comment".
+func tableName(header string) string {
+	h, _, _ := strings.Cut(header, "#")
+	return strings.TrimSpace(strings.Trim(strings.TrimSpace(h), "[]"))
+}
+
+func isPortLine(l string) bool {
+	k, _, ok := strings.Cut(l, "=")
+	return ok && strings.TrimSpace(k) == "port"
+}
+
+// SetPickedPort sets [server] port in config.toml at path to the port meko install picked, under
+// pickedPortMark, and keeps the rest of the file as it is: it replaces an earlier pick, adds the
+// line at the top of a [server] table, or adds the table. A port the user chose is refused
+// (ErrPortChosen). [server] port is a setting every release reads, so a rollback keeps it.
+func SetPickedPort(path string, port int) error {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the data folder's config.toml
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if chosen, err := PortChosen(path, func(string) string { return "" }); err != nil {
+		return err
+	} else if chosen {
+		return ErrPortChosen
+	}
+	text := string(b)
+	lines := strings.Split(text, "\n")
+	line := fmt.Sprintf("port = %d", port)
+	switch i, header := pickedPortLine(lines), serverHeader(lines); {
+	case i >= 0:
+		lines[i] = line
+		text = strings.Join(lines, "\n")
+	case header >= 0:
+		lines = append(lines[:header+1], append([]string{pickedPortMark, line}, lines[header+1:]...)...)
+		text = strings.Join(lines, "\n")
+	default:
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		if text != "" {
+			text += "\n"
+		}
+		text += "[server]\n" + pickedPortMark + "\n" + line + "\n"
+	}
+	var c Config
+	if _, err := toml.Decode(text, &c); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return paths.WriteFile(path, []byte(text))
+}
+
+// ClearPickedPort removes the port meko install picked (SetPickedPort) from config.toml at path, its
+// comment with it, so Meko is back on the default port; the rest of the file stays. A config.toml
+// with no such port is left as it is.
+func ClearPickedPort(path string) error {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the data folder's config.toml
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(b), "\n")
+	i := pickedPortLine(lines)
+	if i < 0 {
+		return nil
+	}
+	lines = append(lines[:i-1], lines[i+1:]...)
+	return paths.WriteFile(path, []byte(strings.Join(lines, "\n")))
+}
+
+// serverHeader is the index of the [server] header line, or -1.
+func serverHeader(lines []string) int {
+	for i, l := range lines {
+		if t := strings.TrimSpace(l); strings.HasPrefix(t, "[") && !strings.HasPrefix(t, "[[") && tableName(t) == "server" {
+			return i
+		}
+	}
+	return -1
+}
+
+// ErrWebPort refuses the browsers' old port setting ([web] port, MEKO_WEB_PORT): Meko has one
+// port now. It's refused, not ignored, so a port someone chose for browsers doesn't quietly change.
+var ErrWebPort = errors.New("[web] port is gone: Meko serves agents and browsers on one port, " +
+	"[server] port (default 7777). Set it there (or MEKO_PORT), or remove it")
+
 func (c Config) validate() error {
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("port %d is out of range: use 1 to 65535", c.Server.Port)
-	}
-	if c.Web.Port < 1 || c.Web.Port > 65535 {
-		return fmt.Errorf("web.port %d is out of range: use 1 to 65535", c.Web.Port)
 	}
 	if c.Storage.MaxContentMB < 1 {
 		return fmt.Errorf("storage.max_content_mb %d is out of range: use a whole number of MB, 1 or more",
 			c.Storage.MaxContentMB)
 	}
-	if c.Web.Port == c.Server.Port {
-		return fmt.Errorf("web.port and server.port are both %d: give the web listener a port of its own", c.Web.Port)
-	}
-	// An unknown access is refused, so a typo never opens the web listener to the network.
+	// An unknown access is refused, so a typo never opens the port to the network.
 	if c.Web.Access != AccessLocal && c.Web.Access != AccessRemote {
 		return fmt.Errorf("web.access %q isn't one of %q, %q", c.Web.Access, AccessLocal, AccessRemote)
 	}
@@ -402,7 +528,7 @@ func (l Log) SlogLevel() (slog.Level, error) {
 // WebFile is web.toml beside config.toml at path: the [web] (and [tls]) settings Meko chose
 // itself, from meko install's access, the handoff from Kode (AddWeb) and meko ui start and stop
 // (SetWebEnabled). It's a file of its own, not part of config.toml, because a release from before
-// the web listener refuses config.toml's unknown keys: a rollback after an update that failed its
+// the web UI refuses config.toml's unknown keys: a rollback after an update that failed its
 // probation, or a downgrade, would then leave a Meko that can't start. Older releases don't read
 // web.toml at all, and ones that do ignore a key they don't know there (enabled).
 func WebFile(configPath string) string {
@@ -419,9 +545,6 @@ func readWebFile(path string) (webFile, error) {
 }
 
 func mergeWeb(base Web, over webTable) Web {
-	if over.Port != 0 {
-		base.Port = over.Port
-	}
 	if over.Access != "" {
 		base.Access = over.Access
 	}
@@ -435,10 +558,10 @@ func mergeWeb(base Web, over webTable) Web {
 }
 
 // AddWeb writes web, and tls when it names files, to web.toml (WebFile), unless config.toml at path
-// or web.toml already sets [web]'s port, access or name: config.toml's are the user's, and
-// web.toml's an earlier choice. web.toml's enabled is kept. It reports whether it wrote. Meko
-// writes these settings only this way: meko install, with the access it picked, and the handoff
-// from Kode, with the access and port Kode had.
+// or web.toml already sets [web]'s access or name: config.toml's are the user's, and web.toml's an
+// earlier choice. web.toml's enabled is kept. It reports whether it wrote. Meko writes these
+// settings only this way: meko install, with the access it picked, and the handoff from Kode,
+// with the access Kode had (never its port: Meko's is [server] port).
 func AddWeb(path string, web Web, tls TLS) (bool, error) {
 	webPath := WebFile(path)
 	for _, p := range []string{path, webPath} {
@@ -450,7 +573,7 @@ func AddWeb(path string, web Web, tls TLS) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("%s: %w", p, err)
 		}
-		if md.IsDefined("web", "port") || md.IsDefined("web", "access") || md.IsDefined("web", "name") {
+		if md.IsDefined("web", "access") || md.IsDefined("web", "name") {
 			return false, nil
 		}
 	}
@@ -458,7 +581,7 @@ func AddWeb(path string, web Web, tls TLS) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	t := webTable{Port: web.Port, Access: web.Access, Name: web.Name}
+	t := webTable{Access: web.Access, Name: web.Name}
 	if f.Web != nil {
 		t.Enabled = f.Web.Enabled
 	}
@@ -472,7 +595,7 @@ func AddWeb(path string, web Web, tls TLS) (bool, error) {
 // ErrWebEnabledSet is SetWebEnabled's refusal when config.toml sets [web] enabled itself.
 var ErrWebEnabledSet = errors.New("config.toml sets [web] enabled")
 
-// SetWebEnabled turns the web listener on or off in web.toml (WebFile), keeping its other
+// SetWebEnabled turns the web UI on or off in web.toml (WebFile), keeping its other
 // settings, unless config.toml at path sets [web] enabled, which wins over it (ErrWebEnabledSet).
 func SetWebEnabled(path string, on bool) error {
 	var c Config
@@ -498,13 +621,10 @@ func SetWebEnabled(path string, on bool) error {
 // writeWebFile writes web.toml with what f sets.
 func writeWebFile(path string, f webFile) error {
 	var b strings.Builder
-	b.WriteString("# The web listener's settings Meko chose (meko install, the handoff from Kode, meko ui\n" +
+	b.WriteString("# How browsers reach Meko, as Meko chose it (meko install, the handoff from Kode, meko ui\n" +
 		"# start and stop). A [web] or [tls] key in config.toml overrides the one here. access = \"local\"\n" +
-		"# takes requests from this computer only; \"remote\" listens on every address, over HTTPS.\n[web]\n")
+		"# takes requests from this computer only; \"remote\" listens on every address, browsers over HTTPS.\n[web]\n")
 	if w := f.Web; w != nil {
-		if w.Port != 0 {
-			fmt.Fprintf(&b, "port = %d\n", w.Port)
-		}
 		if w.Access != "" {
 			fmt.Fprintf(&b, "access = %q\n", w.Access)
 		}

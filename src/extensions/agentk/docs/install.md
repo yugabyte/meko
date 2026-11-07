@@ -21,9 +21,14 @@ meko extension install kode
 
 (or **Install** on Meko's Extensions page). Meko downloads Kode's newest release, checks it and
 unpacks it into its data folder, then runs Kode's setup, which offers to install anything that's
-missing (git, gh, and Claude Code, OpenCode or Kiro CLI when none is there: it asks which, or pass
+missing (git, curl, and Claude Code, OpenCode or Kiro CLI when none is there: it asks which, or pass
 `meko extension install kode -- --agent opencode` or `-- --agent kiro`) and to set up Meko for
-each agent, asking first (Meko's own setup runs quietly: its output shows only if it fails). Then
+each agent, asking first (Meko's own setup runs quietly: its output shows only if it fails).
+gh, GitHub's command-line tool, is optional: Kode needs it to open PRs and follow reviews, and
+asks for it the first time something needs it, with a dialog that installs it (without root) and
+signs it in. Setup offers it in a question of its own once the rest is there, `-- --install-deps`
+installs it with the rest, and an install that can't ask (Meko's Extensions page) goes on without
+it and says so. Then
 it prints the address to open, and `meko kode ui`, `status` and `logs`. Its rows say only what
 needs a look: services that run and start at login go without one. On macOS the services are
 LaunchAgents: they start when you log in and stop when you log out, and sessions pause while the

@@ -189,10 +189,10 @@ var mekoCommands = []command{
 			{"meko kode attach <session>", "show a session's terminal in yours (Ctrl+\\ detaches)"},
 			{"meko kode --help", "Kode's commands"},
 		}},
-	{name: "present", group: "Extensions", summary: "Run one of Presenter's commands",
+	{name: "present", group: "Extensions", summary: "Run one of Present's commands",
 		usage: "meko present <command> [args]", examples: []example{
-			{"meko present status", "whether Presenter is running"},
-			{"meko present --help", "Presenter's commands"},
+			{"meko present status", "whether Present is running"},
+			{"meko present --help", "Present's commands"},
 		}},
 	{name: "destroy", group: "Remove", summary: "Stop Meko and delete its data",
 		usage: "meko destroy [flags]", examples: []example{
@@ -235,7 +235,7 @@ var mekoCLICommands = []command{
 		}},
 	{name: "search", group: "Memory and knowledge", summary: "Search memories, files and past conversations",
 		usage: `meko-cli search "<question>" [flags]`, examples: []example{
-			{`meko-cli search "why is the web listener separate"`, "search the default datapack"},
+			{`meko-cli search "why does Meko use one port"`, "search the default datapack"},
 			{`meko-cli search "release steps" --source knowledge_base --limit 3`, "only the knowledge base, three results"},
 			{`meko-cli search "owner's login" --datapack research --json`, "another datapack, the tool's raw reply"},
 		}},

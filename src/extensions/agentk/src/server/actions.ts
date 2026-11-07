@@ -218,7 +218,7 @@ export async function runActions(core: Core, actions: AskAgentkAction[], by: Act
     try {
       r = await runOne(core, a, by);
     } catch (e) {
-      r = { ok: false, text: `${describe(core, a)}: ${errMsg(e)}` };
+      r = { ok: false, text: `${describe(core, a)}: ${errMsg(e)}`, ...(e instanceof HttpError && e.code ? { code: e.code } : {}) };
     }
     if (by.session) {
       core.sessions.event(by.session.id, 'tools', r.text, { action: a.type, ok: r.ok });

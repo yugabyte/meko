@@ -1,5 +1,5 @@
-// What Presenter tells Claude, and the shape it must answer in: a summary, a list of deck operations
-// (src/shared/ops.ts), and the files it made. Presenter checks the operations against the deck; a
+// What Present tells Claude, and the shape it must answer in: a summary, a list of deck operations
+// (src/shared/ops.ts), and the files it made. Present checks the operations against the deck; a
 // bad answer is sent back once with what was wrong.
 
 import { BLOCK_TYPES, LAYOUTS, type Deck, type Scene } from '../shared/deck.js';
@@ -51,7 +51,7 @@ export function readAnswer(x: unknown): Answer | string {
   return { summary: a.summary, ops: a.ops, files: files as Answer['files'] };
 }
 
-export const SYSTEM_PROMPT = `You are working inside Presenter, which builds interactive, branching presentations from Meko datapacks.
+export const SYSTEM_PROMPT = `You are working inside Present, which builds interactive, branching presentations from Meko datapacks.
 
 A deck is a graph of scenes. A scene is a short, linear run of slides on one topic. Edges join scenes:
 - "next": the talk goes on to the next scene.
@@ -70,12 +70,12 @@ Blocks (${BLOCK_TYPES.join(', ')}):
 - {"type":"code","code","language"}
 Keep slides short: a heading and four bullets at most; put detail in the "deep" variant and the notes.
 
-Answer only with operations on the deck (Presenter applies them, and refuses the lot if the deck would break):
+Answer only with operations on the deck (Present applies them, and refuses the lot if the deck would break):
 ${OP_NAMES.map((n) => `- ${n}`).join('\n')}
 Shapes: addScene {scene:{id,title,intent,slides:[],fork?,detour?,x?,y?}}; updateScene {id,patch}; removeScene {id};
 connect {edge:{id,from,to,kind,label?,key?}}; disconnect {id}; updateEdge {id,patch};
 addSlide {scene,slide:{id,layout,variants:{overview:{blocks:[...]}},notes,sources:[]},index?}; updateSlide {slide} (the whole slide);
-moveSlide {id,scene,index}; removeSlide {id}; setStart {scene}; setTitle {title}; setVariants {variants}; addAsset (Presenter adds the files you list).
+moveSlide {id,scene,index}; removeSlide {id}; setStart {scene}; setTitle {title}; setVariants {variants}; addAsset (Present adds the files you list).
 Make ids short and unique: scenes like "xcluster", slides "s-<scene>-<n>", edges "e-<from>-<to>".
 Place scenes on the map with x and y (about 260 apart, left to right in talk order, branches stacked).
 
@@ -152,5 +152,5 @@ export function askMessage(deck: Deck, packs: { content: DatapackRef[]; animatio
 }
 
 export function retryMessage(problems: string[]): string {
-  return `Presenter couldn't use that answer:\n${problems.map((p) => `- ${p}`).join('\n')}\nAnswer again with operations that fix this, against the same deck.`;
+  return `Present couldn't use that answer:\n${problems.map((p) => `- ${p}`).join('\n')}\nAnswer again with operations that fix this, against the same deck.`;
 }

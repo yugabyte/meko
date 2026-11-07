@@ -11,7 +11,7 @@ import (
 // forwarded are the headers a proxy adds: the request really came from somewhere else.
 var forwarded = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Real-Ip"}
 
-// LocalAccess reports whether a request to the web listener with local access is let in (the rule
+// LocalAccess reports whether a browser's request over plain HTTP is let in (the rule
 // Kode had for its own local access, which Meko took over with its port):
 //   - the connection comes from loopback, and Host names this computer (localhost, 127.0.0.1 or
 //     [::1]), so a DNS-rebound page, which sends its own host name, gets nothing;
@@ -48,7 +48,7 @@ func LocalAccess(r *http.Request) bool {
 	return false
 }
 
-// SameSite reports whether a request to the web listener came from no other site's page: the
+// SameSite reports whether a browser's request came from no other site's page: the
 // browser says Sec-Fetch-Site is same-origin or none (typed in the address bar), and an Origin is
 // this one. For a browser that sends Fetch Metadata it does a SameSite=Strict cookie's job: an <img>
 // or <script> on another site can't make requests and learn from whether they load. One that

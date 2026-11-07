@@ -1,4 +1,4 @@
-/* Meko's theme tokens (src/meko/web_ui/src/index.css), so Presenter reads as part of Meko, plus the
+/* Meko's theme tokens (src/meko/web_ui/src/index.css), so Present reads as part of Meko, plus the
    built-in slide template's. Components use the Tailwind colors mapped below, never raw values. */
 @import "tailwindcss";
 

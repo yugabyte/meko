@@ -72,7 +72,7 @@ describe("moving Kode's home into Meko's data folder (real session host + git, f
     const db = openDb(paths.defaultDb);
     let handle: HostHandle | null = null;
     const host = new SessionHost(paths, { services: () => null, start: async () => void (handle ??= await startHost({ paths, version: '0.0.0-test', lockDeps: testLockDeps() })) });
-    const core = new Core({ paths, config: env.core.config, db, version: '0.0.0-test', meko: env.meko, mekoCaptureScript: null, host, services: () => null, log: silentLogger, timers: false, mekoApi: env.mekoApi.api, mekoTools: env.mekoTools.tools, localMeko: async () => ({ ...env.local }) });
+    const core = new Core({ paths, config: env.core.config, db, version: '0.0.0-test', meko: env.meko, mekoCaptureScript: null, host, services: () => null, log: silentLogger, timers: false, mekoApi: env.mekoApi.api, mekoTools: env.mekoTools.tools, localMeko: async () => ({ ...env.local }), ghProbe: async () => env.gh.state });
     open.push({ close: () => db.close() }, { close: () => handle?.close() }, { close: () => core.stop() });
     await core.start();
     return core;

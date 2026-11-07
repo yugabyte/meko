@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -108,8 +107,8 @@ func readLog(t *testing.T, path string) string {
 	return string(b)
 }
 
-// configurePort makes the data folder's servers use port: a server the fake service starts gets no
-// flags, and the test binary drops MEKO_PORT when it runs as serve.
+// configurePort makes the data folder's servers use port in config.toml, as a user would: a server
+// the fake service starts gets no flags.
 func configurePort(t *testing.T, dir, port string) {
 	t.Helper()
 	if err := os.WriteFile(paths.New(dir).Config, []byte("[server]\nport = "+port+"\n"), 0o600); err != nil {
@@ -304,7 +303,7 @@ func TestAFailingExtensionGetsAFailRow(t *testing.T) {
 	code, out, errs := run("stop", "--data-dir", dir)
 	want(t, "the failing extension's own output", code, 0, errs, "it broke\n")
 	want(t, "the failing extension's row", code, 0, out, "  ✗ Kode            didn't stop: ")
-	want(t, "the damaged extension's row", code, 0, out, "  ✗ Presenter       is damaged (")
+	want(t, "the damaged extension's row", code, 0, out, "  ✗ Present         is damaged (")
 	want(t, "Meko's row", code, 0, out, "  ✓ Server          isn't running\n")
 }
 
@@ -328,19 +327,17 @@ func TestInstallWithoutTheWebUI(t *testing.T) {
 	}
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status", code, 0, out, "Web UI          off (meko ui start turns it on)")
-	//nolint:gosec // G704: the test's own server
-	if c, derr := net.DialTimeout("tcp", "127.0.0.1:"+os.Getenv("MEKO_WEB_PORT"), time.Second); derr == nil {
-		_ = c.Close()
-		t.Error("the web port answers after install --no-ui")
+	if got := httpCode(t, "http://127.0.0.1:"+os.Getenv("MEKO_PORT")+"/", ""); got != 404 {
+		t.Errorf("the web UI after install --no-ui: %d, want 404", got)
 	}
 
 	dir2, _ := setup(t)
 	if err = os.WriteFile(paths.New(dir2).Config, []byte("[web]\nenabled = true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs = run("install", "--data-dir", dir2, "--no-ui", "--no-service")
-	want(t, "install --no-ui with config.toml's enabled", code, exitError, errs,
-		"config.toml sets [web] enabled, which --no-ui would change: change it there instead")
+	code, out, _ = run("install", "--data-dir", dir2, "--no-ui", "--no-service")
+	want(t, "install --no-ui with config.toml's enabled", code, exitError, out,
+		"  ✗ Web UI          config.toml sets [web] enabled, which --no-ui would change: change it there instead")
 }
 
 func TestInstallWithoutAServiceLeavesStartToTheUser(t *testing.T) {
@@ -435,7 +432,7 @@ func TestLogsMergesAndFormats(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(l.Log, `{"time":"2026-10-21T10:00:00Z","level":"INFO","msg":"Meko started","port":7778}
+	write(l.Log, `{"time":"2026-10-21T10:00:00Z","level":"INFO","msg":"Meko started","port":7777}
 {"time":"2026-10-21T10:00:02Z","level":"WARN","msg":"slow","path":"/mcp"}
 `)
 	write(l.ContextEngineLog, `{"time":"2026-10-21T10:00:01Z","msg":"engine listening","embedder":{"dims":384}}

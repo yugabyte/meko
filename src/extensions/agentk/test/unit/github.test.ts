@@ -97,7 +97,7 @@ describe('gh missing from PATH', () => {
 
   // Node says "spawn gh ENOENT" for a missing gh and for a missing folder to run in alike.
   it.each([
-    ['no gh', false, true, /^Kode can't find gh, GitHub's command-line tool\. Install gh, then run meko kode restart\.$/],
+    ['no gh', false, true, /^Kode can't find gh, GitHub's command-line tool\. Kode offers to install it the next time you open a PR/],
     ['no gh, and no PATH from the login shell', true, true, /^Kode can't find gh, because it couldn't read PATH from your login shell when it started\..* meko kode restart\.$/],
     ['a folder that is gone', false, false, /^spawn gh ENOENT$/],
   ])('%s', async (_, noLoginPath, folderThere, want) => {

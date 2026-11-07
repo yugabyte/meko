@@ -5,6 +5,8 @@ import {
   type ProjectWithSessions, type Session, type SessionAction, type SessionMatch, type StartFromLinkResult, type WorkItem, type WorkLinkMatch,
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { openGhDialog } from '../ghdialog';
+import { GH_NEEDED } from '../../shared/types';
 import { appUrl } from '../base';
 import { useMedia, useTouch } from '../hooks/useMedia';
 import { useInstall } from '../installapp';
@@ -314,6 +316,9 @@ export function CommandPalette({
       busy: starting === 'ask-all' ? 'Doing them' : undefined, wrap: true, keepOpen: true,
       run: () => void (!starting && run('ask-all', async () => {
         const r = await api.runActions({ actions: steps });
+        // A step refused for want of gh: the GitHub dialog, as that step's own route would open.
+        const gh = r.results.find((x) => x.code === GH_NEEDED);
+        if (gh) openGhDialog(gh.text);
         if (!mounted.current) return;
         // The results take the actions' place, with items to go where they led.
         setChat((c) => c.map((x, i) => (i === c.length - 1 ? { ...x, results: r.results, notes: [...x.notes, ...r.notes] } : x)));

@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,8 +123,8 @@ func serveAndUpdate(t *testing.T, old, next string) (update.App, paths.Layout, e
 			<-done
 		}
 	})
-	// The web listener reads its port as serve does, from MEKO_WEB_PORT (setup's).
-	web := "http://127.0.0.1:" + os.Getenv("MEKO_WEB_PORT")
+	// Meko's one port, as serve reads it: MEKO_PORT (setup's).
+	web := "http://127.0.0.1:" + os.Getenv("MEKO_PORT")
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		resp, err := http.Get(web + "/api/v1/update") //nolint:noctx,gosec // G704: the test's own server
 		if err == nil {
@@ -199,7 +200,7 @@ func serveUntilUp(t *testing.T, dir, port string) {
 			t.Errorf("serve: %v", err)
 		}
 	}()
-	web := "http://127.0.0.1:" + os.Getenv("MEKO_WEB_PORT")
+	web := "http://127.0.0.1:" + os.Getenv("MEKO_PORT")
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		resp, err := http.Get(web + "/api/v1/update") //nolint:noctx,gosec // G704: the test's own server
 		if err == nil {
@@ -233,7 +234,7 @@ func TestServeRenamesExtensionsPastProbation(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(filepath.Dir(old), "me_kode")); !os.IsNotExist(err) {
 		t.Fatalf("~/.local/bin/me_kode on probation: %v", err)
 	}
-	finishUpdate(context.Background(), app, release, 0, paths.New(dir), slog.New(slog.DiscardHandler))
+	finishUpdate(context.Background(), app, release, 0, paths.New(dir), slog.New(slog.DiscardHandler), nil)
 	wantRenamed(t, dir, old)
 }
 
@@ -257,7 +258,7 @@ func TestServeMakesMekoCLIPastProbation(t *testing.T) {
 	if _, err := os.Lstat(mekoCLI); !os.IsNotExist(err) { //nolint:gosec // G703: the test's home
 		t.Fatalf("meko-cli on probation: %v", err)
 	}
-	finishUpdate(context.Background(), app, release, 0, paths.New(dir), slog.New(slog.DiscardHandler))
+	finishUpdate(context.Background(), app, release, 0, paths.New(dir), slog.New(slog.DiscardHandler), nil)
 	if p, _ := app.ReadPending(); p != nil {
 		t.Fatalf("the update isn't done: %+v", p)
 	}
@@ -271,4 +272,42 @@ func TestServeMakesMekoCLIPastProbation(t *testing.T) {
 	if target, err := os.Readlink(mekoCLI); err != nil || target != app.CurrentExe() {
 		t.Fatalf("meko-cli past probation -> %q, %v", target, err)
 	}
+}
+
+// A release on probation leaves the agents a Meko from before one port connected to 7778 where they
+// are, since one rolled back to it serves agents only there; it moves them once the update is done.
+func TestServeMovesAgentsToOnePortPastProbation(t *testing.T) {
+	dir, port := setup(t)
+	fakeAgents(t, false, "kiro-cli")
+	_, tok, _ := run("token", "--data-dir", dir)
+	tok = strings.TrimSpace(tok)
+	release := "0.20261021.0"
+	app := releaseInstall(t, release, "0.20261022.0")
+	if err := app.Switch("0.20261020.0", release, 1); err != nil {
+		t.Fatal(err)
+	}
+	old := update.HealthyAfter
+	update.HealthyAfter = 2 * time.Second
+	t.Cleanup(func() { update.HealthyAfter = old })
+	kiroAt(t, oldAgentsURL, tok)
+	cfg := config.Default()
+	cfg.Server.Port, _ = strconv.Atoi(port)
+	cfg.Secrets.Store = "file"
+	cfg.Update.Channel = update.ChannelOff
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, ServeOptions{Layout: paths.New(dir), Config: cfg}) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("serve: %v", err)
+		}
+	}()
+	time.Sleep(time.Second)
+	if !strings.Contains(readFile(t, kiroFile(t)), oldAgentsURL) {
+		t.Fatalf("moved on probation: %s", readFile(t, kiroFile(t)))
+	}
+	waitFor(t, "Kiro CLI on the one port once the update is done", func() bool {
+		return strings.Contains(readFile(t, kiroFile(t)), `"http://127.0.0.1:`+port+`/mcp"`)
+	})
 }

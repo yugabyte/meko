@@ -71,11 +71,10 @@ func SignalContext() context.Context {
 }
 
 // Serve runs the server until ctx ends: it locks the data folder, opens and migrates the
-// database, listens on 127.0.0.1 (the API listener), writes the admin token, pid and port files,
-// and serves; and it runs the web listener beside it (webListener), which hands over from the
-// extensions first. On
-// the way out it drains requests, stops children, checkpoints the WAL, closes the database and
-// removes the run files.
+// database, takes Meko's one port (webListener: 127.0.0.1, or every address with remote access),
+// writes the admin token, pid and port files, and serves agents, the CLI and browsers on it, with
+// the extensions' handoff once it serves. On the way out it drains requests, stops children,
+// checkpoints the WAL, closes the database and removes the run files.
 func Serve(ctx context.Context, o ServeOptions) (err error) {
 	l, cfg := o.Layout, o.Config
 	if err = l.Ensure(); err != nil {
@@ -157,6 +156,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		}
 		if pending, _ := app.ReadPending(); pending != nil && pending.To == release {
 			onProbation = true
+			// The context engine keeps the old names of its files until MoveRenamed may move them.
+			l = l.BeforeRenames()
 		} else {
 			makeMekoCLI(app, log)
 			renameExtensions(l, log)
@@ -192,11 +193,13 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 
-	ln, err := server.Listen(cfg.Server.Port)
-	if err != nil {
+	// The one port, for agents, the CLI and browsers: taken now, so one another program holds stops
+	// serve before anything starts. The extensions hand over once it serves (web.Run).
+	web := newWebListener(l, st, log, cfg.Server.Port)
+	if err = web.Bind(cfg); err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer web.Close()
 	token, err := auth.NewToken()
 	if err != nil {
 		return err
@@ -324,15 +327,21 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return mcp.Call(ctx, mcpOpts, cred, name, args)
 	}
 	registerREST := func(g *echo.Group) { rest.Register(g, restOpts) }
-	// The web listener: the web UI and the extensions' for browsers, with local or remote access.
-	web := newWebListener(l, st, log)
 	// Updates: a release install checks for them, and the Status page checks and installs them.
 	restart := make(chan struct{})
+	// Closed once this release is past probation: at once, unless it's on probation, then when
+	// finishUpdate finishes the update. What a rolled-back release couldn't undo waits for it.
+	pastProbation := make(chan struct{})
+	var pastOnce sync.Once
+	healthy := func() { pastOnce.Do(func() { close(pastProbation) }) }
+	if !onProbation {
+		healthy()
+	}
 	updCtx, stopUpdates := context.WithCancel(context.Background())
 	defer stopUpdates()
 	var updates server.Updates
 	if isRelease {
-		if u, off := startUpdates(updCtx, app, release, l, cfg, log, onProbation, restart, web); u != nil {
+		if u, off := startUpdates(updCtx, app, release, l, cfg, log, onProbation, healthy, restart, web); u != nil {
 			updates = u
 		} else {
 			updates = update.Off{Version: release, Reason: off}
@@ -369,22 +378,17 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	// The routes that take a datapack send one this Meko doesn't have to the linked Meko Cloud.
 	restOpts.Cloud = cloud
 	mcpHandler := mcp.NewHandler(mcpOpts)
+	// The server for the settings the listener takes up: [web] (access, and whether browsers are let
+	// in) may change while serve runs; the rest is read at start.
 	web.newOpts = func(wcfg config.Config) server.Options {
-		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
-			Children: sup.Statuses, ContextEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
-			MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, UI: ui, Cloud: cloud,
-			Agents: agentsMgr, Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
-				Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates, CheckExtensions: web.CheckExtensions,
-				SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
+		return server.Options{Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken,
+			Auth: cfg.Server.Auth, Logger: log, Children: sup.Statuses, ContextEngine: svc.EngineStatus,
+			UsageStats: usage.State, Storage: svc.Storage, MCP: mcpHandler, REST: registerREST, Upload: upload,
+			Download: download, UI: ui, Cloud: cloud, Agents: agentsMgr, WebStatus: web.Status, ReloadWeb: web.Reload,
+			Web: &server.Web{Access: wcfg.Web.Access, Off: !wcfg.Web.Enabled, Extensions: web.Proxies,
+				Installed: web.Installed, Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates,
+				CheckExtensions: web.CheckExtensions, SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
 	}
-	srv := server.New(server.Options{
-		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
-		Children: sup.Statuses, ContextEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
-		MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, Cloud: cloud, Agents: agentsMgr,
-		WebStatus: web.Status, ReloadWeb: web.Reload,
-	})
-	served := make(chan error, 1)
-	go func() { served <- srv.Serve(ln) }()
 	webCtx, stopWeb := context.WithCancel(context.Background())
 	defer stopWeb()
 	webDone := make(chan struct{})
@@ -399,6 +403,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	go func() {
 		defer close(followDone)
 		moveBackOnce(followCtx, st, cloud, log)
+		followPort(followCtx, st, agentsMgr, local, cfg.Server.Port, log)
+		// Not on probation: a release rolled back to from before one port serves agents only on
+		// 7778, and nothing would move them back.
+		select {
+		case <-pastProbation:
+			moveToOnePortOnce(followCtx, st, agentsMgr, local, log)
+		case <-followCtx.Done():
+		}
 	}()
 	go cloud.CloudTools(followCtx)
 	// The extensions still running from before this start read Meko again: an update or a rollback may
@@ -411,7 +423,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			"write your memories through /mcp and /api/v1")
 	}
 
-	var serveErr error
 	// Without a service to start the new version, serve runs it in its own place once it has stopped.
 	var execInto string
 	select {
@@ -427,7 +438,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		if os.Getenv("MEKO_SERVICE") == "" {
 			execInto = app.CurrentExe()
 		}
-	case serveErr = <-served:
 	}
 	stopUpdates()
 	// An action still running is stopped (an install is cut off; Install again finishes it). Its
@@ -437,20 +447,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		defer close(jobsDone)
 		web.jobs.Cancel(jobsWait)
 	}()
-	if onProbation && serveErr == nil {
+	if onProbation {
 		// A clean stop of a version on probation isn't a failed start.
 		if err := app.Uncount(release); err != nil {
 			log.Warn("can't update the pending update", "error", err)
 		}
 	}
-	stopWeb() // Run drains the web listener (drainTimeout) before it returns
+	stopWeb() // Run drains the port (drainTimeout) before it returns
 	<-webDone
-	// The API listener's own drain, after the web listener's: agents' requests get the whole of it.
-	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
-	defer cancel()
-	if err := srv.Shutdown(drain); err != nil {
-		log.Warn("requests didn't finish in time", "error", err)
-	}
 	stopEmbedder()
 	<-embedderDone
 	stopFollow()
@@ -469,10 +473,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	<-jobsDone
 	log.Info("Meko stopped")
 	// A stop asked for while serve was stopping (meko stop, restart or destroy) wins over the exec.
-	if serveErr == nil && execInto != "" && ctx.Err() == nil {
+	if execInto != "" && ctx.Err() == nil {
 		return &execError{exe: execInto, why: "restarting into the update"}
 	}
-	return serveErr
+	return nil
 }
 
 // installFacts is what the usage stats say about this install: versions, platform, settings and
@@ -615,10 +619,11 @@ func refreshLaunchAgent(l paths.Layout, log *slog.Logger) {
 }
 
 // finishUpdate finishes the update to release once it has run for after (update.HealthyAfter),
-// unless ctx ends first, and then makes the meko-cli command and moves the extensions onto their
-// commands' new names (renameExtensions).
+// unless ctx ends first, and then makes the meko-cli command, moves the extensions onto their
+// commands' new names (renameExtensions) and calls healthy (when set): what serve held back while
+// the release was on probation, such as the agents' move to one port, goes ahead.
 func finishUpdate(ctx context.Context, app update.App, release string, after time.Duration, l paths.Layout,
-	log *slog.Logger) {
+	log *slog.Logger, healthy func()) {
 	select {
 	case <-ctx.Done():
 	case <-time.After(after):
@@ -630,6 +635,9 @@ func finishUpdate(ctx context.Context, app update.App, release string, after tim
 		log.Info("the update is done", "version", release, "pruned", pruned)
 		makeMekoCLI(app, log)
 		renameExtensions(l, log)
+		if healthy != nil {
+			healthy()
+		}
 	}
 }
 
@@ -641,9 +649,10 @@ func finishUpdate(ctx context.Context, app update.App, release string, after tim
 // page's too, even with [update] channel = "off" (which stops only the scheduled checks). When the
 // schema can't be read it returns nil and why.
 func startUpdates(ctx context.Context, app update.App, release string, l paths.Layout, cfg config.Config,
-	log *slog.Logger, onProbation bool, restart chan struct{}, web *webListener) (*update.Updater, string) {
+	log *slog.Logger, onProbation bool, healthy func(), restart chan struct{}, web *webListener) (*update.Updater,
+	string) {
 	if onProbation {
-		go finishUpdate(ctx, app, release, update.HealthyAfter, l, log)
+		go finishUpdate(ctx, app, release, update.HealthyAfter, l, log, healthy)
 	}
 	schema, err := store.LatestSchema()
 	if err != nil {
@@ -752,6 +761,69 @@ func moveBackOnce(ctx context.Context, st *store.Store, cloud *cloudlink.Service
 	}
 	if err := st.SetSetting(ctx, keyAgentsOnThisMeko, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		log.Warn("can't record that the agents came back from Meko Cloud", "error", err)
+	}
+}
+
+// keyAgentsOnOnePort records that this Meko moved the agents connected to the listener agents had
+// before one port (127.0.0.1:7778) to its one port, so it runs once.
+const keyAgentsOnOnePort = "agents_one_port"
+
+// oldAgentsURL is where a Meko before one port had its agents connect: its agents' listener's MCP URL.
+const oldAgentsURL = "http://127.0.0.1:7778/mcp"
+
+// moveToOnePortOnce connects to the one port, once, the agents a Meko before it connected to its
+// agents' listener: only those whose meko server is at exactly oldAgentsURL (an Exact move), so one
+// pointed by hand at another Meko on this computer is left as it is. It's recorded only when no
+// agent failed, so a failed one is tried again at the next start; a stop during it leaves it for
+// the next start too.
+func moveToOnePortOnce(ctx context.Context, st *store.Store, m *agents.Manager, to agents.Target, log *slog.Logger) {
+	if _, done, err := st.Setting(ctx, keyAgentsOnOnePort); err != nil || done {
+		return
+	}
+	from := agents.Target{Kind: agents.KindLocal, URL: oldAgentsURL, Token: to.Token, Exact: true}
+	moves := m.Move(ctx, from, to)
+	logMoves(log, moves)
+	if ctx.Err() != nil || len(moves.Failed) > 0 {
+		return
+	}
+	if err := st.SetSetting(ctx, keyAgentsOnOnePort, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		log.Warn("can't record that the agents moved to Meko's one port", "error", err)
+	}
+}
+
+// keyAgentsPort is the port Meko's agents were last connected to (followPort).
+const keyAgentsPort = "agents_port"
+
+// followPort moves the agents to this start's port when it isn't the one they were connected to:
+// meko install moves Meko to a free port when another program holds its own (pickPort), and
+// someone may change [server] port by hand. Only agents whose meko server is at exactly the old
+// port's URL move (an Exact move), so one pointed at another Meko on this computer stays. The new
+// port is recorded once no agent failed, so a failed one is tried again at the next start. With
+// none recorded yet (the first start of a release with followPort), the agents' port is taken to be
+// the default: install may have moved Meko off it in the same run that brought followPort.
+func followPort(ctx context.Context, st *store.Store, m *agents.Manager, to agents.Target, port int,
+	log *slog.Logger) {
+	last, ok, err := st.Setting(ctx, keyAgentsPort)
+	if err != nil {
+		return
+	}
+	if !ok {
+		last = strconv.Itoa(config.DefaultPort)
+	}
+	now := strconv.Itoa(port)
+	if last != now {
+		from := agents.Target{Kind: agents.KindLocal, URL: "http://127.0.0.1:" + last + "/mcp", Token: to.Token,
+			Exact: true}
+		moves := m.Move(ctx, from, to)
+		logMoves(log, moves)
+		if ctx.Err() != nil || len(moves.Failed) > 0 {
+			return
+		}
+	} else if ok {
+		return
+	}
+	if err := st.SetSetting(ctx, keyAgentsPort, now); err != nil {
+		log.Warn("can't record the port Meko's agents use", "error", err)
 	}
 }
 

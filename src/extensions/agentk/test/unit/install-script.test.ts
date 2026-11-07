@@ -96,7 +96,8 @@ describe('deps.sh: installing missing tools', () => {
     expect(r.code).toBe(1);
     expect(r.err).toContain('Missing');
     expect(r.err).toContain('sudo -n dnf install -y git curl');
-    expect(r.err).toContain('download gh from github.com/cli/cli releases into ~/.local/bin');
+    // gh is optional: not in the plan without --install-deps.
+    expect(r.err).not.toContain('download gh');
     expect(r.err).toContain('Run meko extension install kode -- --install-deps to install them');
     expect(r.calls).toEqual([]); // nothing was installed
   });
@@ -224,14 +225,41 @@ describe('deps.sh: installing missing tools', () => {
     expect(r.err).not.toContain(brewDir);
   });
 
-  it('goes on without gh when GITHUB_TOKEN can do the downloads, unless told to install it', () => {
+  it('goes on without gh, which Kode asks for later, unless told to install it', () => {
     have('git', 'curl');
-    const r = run(['--non-interactive'], { GITHUB_TOKEN: 't' });
-    expect(r.code).toBe(0);
-    expect(r.err).toMatch(/gh isn't installed: install gh for PRs and reviews/);
-    const installed = run(['--non-interactive', '--install-deps'], { GITHUB_TOKEN: 't' });
+    for (const args of [['--non-interactive'], ['--no-install-deps']]) {
+      const r = run(args);
+      expect(r.code).toBe(0);
+      expect(r.err).toContain("gh isn't installed: Kode asks for it when you open a PR");
+      expect(r.calls).toEqual([]);
+    }
+    const installed = run(['--non-interactive', '--install-deps']);
     expect(installed.code).toBe(0);
     expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(true);
+  });
+
+  it('installs gh alone with --only gh, without root and without the other checks', () => {
+    have('curl');
+    rmSync(join(bin, 'claude'));
+    expect(run(['--only', 'gh', '--non-interactive']).code).toBe(1);
+    const r = run(['--only', 'gh', '--install-deps', '--non-interactive']);
+    expect(r.code).toBe(0);
+    expect(r.calls.every((c) => c.startsWith('curl '))).toBe(true);
+    expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(true);
+    // There now: nothing to do.
+    expect(run(['--only', 'gh', '--non-interactive']).code).toBe(0);
+  });
+
+  it('installs gh alone with Homebrew on a Mac, and says where to get it without Homebrew', () => {
+    const mac = { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' };
+    const r = run(['--only', 'gh', '--install-deps', '--non-interactive'], mac);
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual(['brew install gh']);
+    rmSync(join(bin, 'gh'));
+    rmSync(join(bin, 'brew'));
+    const none = run(['--only', 'gh', '--install-deps', '--non-interactive'], mac);
+    expect(none.code).toBe(1);
+    expect(none.err).toContain('https://cli.github.com');
   });
 
   it('asks for Homebrew when a Mac has none', () => {
@@ -285,12 +313,27 @@ describe('deps.sh: installing missing tools', () => {
     });
   }
 
-  it('asks before installing anything, and installs on yes', async () => {
-    have('gh');
-    const r = await runInTerminal('y');
+  it('asks before installing anything, and installs on yes, then offers gh on its own', async () => {
+    const r = await runInTerminal('y', 'Install them now?', [['Install gh, GitHub', '']]);
     expect(r.out).toContain('sudo dnf install -y git curl');
+    // gh isn't in the main plan: it's shown with its own question.
+    const [main, gh] = r.out.split('Install them now?');
+    expect(main).not.toContain('download gh');
+    expect(gh.split('Install gh, GitHub')[0]).toContain('download gh from github.com/cli/cli releases into ~/.local/bin');
     expect(r.code).toBe(0);
     expect(r.calls).toContain('sudo dnf install -y git curl');
+    // Enter takes the default: yes.
+    expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(true);
+    expect(r.out).toContain('git, curl, gh, Claude Code');
+  });
+
+  it("skips gh on no, saying Kode asks for it later, and asks nothing else when it's all that's missing", async () => {
+    have('git', 'curl');
+    const r = await runInTerminal('n', 'Install gh, GitHub');
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain('Install them now?');
+    expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(false);
+    expect(r.out).toContain("gh isn't installed: Kode asks for it when you open a PR");
   });
 
   it('installs nothing on no', async () => {

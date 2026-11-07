@@ -33,7 +33,7 @@ describe("Meko's data folder", () => {
   });
 });
 
-describe("Presenter's home", () => {
+describe("Present's home", () => {
   it('is extensions/present in Meko\'s data folder', () => {
     expect(homeIn('/data/meko')).toBe('/data/meko/extensions/present');
     expect(mekoDirOf('/data/meko/extensions/present')).toBe('/data/meko');

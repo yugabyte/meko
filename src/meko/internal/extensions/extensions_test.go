@@ -107,7 +107,7 @@ func TestOldNames(t *testing.T) {
 		}
 	}
 	if got := Known["present"].WebPath("present", ""); got != "/ext/present/" {
-		t.Errorf("Presenter's WebPath = %q", got)
+		t.Errorf("Present's WebPath = %q", got)
 	}
 }
 

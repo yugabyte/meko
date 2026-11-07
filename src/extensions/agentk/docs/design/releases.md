@@ -25,7 +25,7 @@ Part of the [Kode design](../design.md).
   release runs the tests and cuts the next version, and those subjects become the release notes;
   `ci`, `test`, `docs`, `nit` and `chore` don't release. Releases are scoped by component: Meko
   (`src/meko`) releases on its own, from its own tags (`meko-v…`), and subjects naming only `meko`
-  never release Kode. Presenter (`src/extensions/present`) releases on its own too
+  never release Kode. Present (`src/extensions/present`) releases on its own too
   (`present-release.yml`, tags `present-v…`): subjects naming only `present` (or `meko` and
   `present`) release nothing for Kode. Every other subject
   (`agentk`, `repo`, lists such as `agentk,meko`, and older ones with no component or a free-form
@@ -101,14 +101,18 @@ meko extension install kode -- --agent kiro      # options after -- go to `meko 
 #     --json`, `meko kode selftest`), and points app/current at it; an
 #     install Kode already has (one still in ~/.agent-k-local too) is set up again in place
 # then `meko kode install --meko-url … --meko-key …`, on the terminal it was started from:
-#  1. scripts/deps.sh (lib/scripts/deps.sh in a release): checks for git, curl, gh and a coding
+#  1. scripts/deps.sh (lib/scripts/deps.sh in a release): checks for git, curl and a coding
 #     agent (Claude Code, OpenCode or Kiro CLI; one is enough); offers to install whatever is
 #     missing (it shows the commands and asks first): brew on macOS, the package manager with sudo
-#     on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux from its GitHub release
-#     (checksum-verified) into ~/.local/bin, and an agent with its own installer (Claude Code's
-#     claude.ai/install.sh, which publishes no checksum, OpenCode's or Kiro's; which one: --agent,
-#     else it asks, else Claude Code); with GITHUB_TOKEN set, a missing gh is only installed with
-#     --install-deps. It checks the tools themselves afterwards: Homebrew exiting with an error
+#     on Linux (apt-get, dnf, yum, zypper, pacman or apk), and an agent with its own installer
+#     (Claude Code's claude.ai/install.sh, which publishes no checksum, OpenCode's or Kiro's; which
+#     one: --agent, else it asks, else Claude Code). gh is optional (Kode asks for it when a PR
+#     or a review needs it: lifecycle.md's "gh on demand"): once the rest is there, a missing gh is
+#     offered in a question of its own, default yes, after showing what it runs (brew on macOS, its
+#     GitHub release, checksum-verified, into ~/.local/bin on Linux, no root either way);
+#     --install-deps installs it with the rest, and --non-interactive and --no-install-deps skip it
+#     with a warning. `--only gh` installs gh alone that way (the GitHub dialog's Install gh). It
+#     checks the tools themselves afterwards: Homebrew exiting with an error
 #     once they work (it builds from source on a macOS it no longer supports) is a warning, while
 #     a failed Linux package manager stops it; then offers each agent's sign-in and `gh auth
 #     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login
@@ -135,7 +139,7 @@ product). A Meko from before Kode was called Kode reads only `agentk-v` and `v` 
 Kode's releases once `meko update` has updated Meko itself, which it does before the extensions;
 an install still on AgentK's own updater from before Meko served it (reading `agentk-v`) needs
 `meko extension install kode`; Meko's are `meko-v<version>`, and
-Presenter's `present-v<version>` (`present-release.yml`; Meko installs and updates them). Versions stay
+Present's `present-v<version>` (`present-release.yml`; Meko installs and updates them). Versions stay
 bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and Meko's `bad-versions` use them, and on the day of
 the switch `next-version.sh` counted both prefixes so no version was used twice. AgentKs installed
 before the switch read only `v…` tags; the last `v…` release (the bridge) reads both, so they reach

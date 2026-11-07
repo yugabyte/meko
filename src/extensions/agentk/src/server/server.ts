@@ -6,7 +6,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
-  AutoConnectClaim, ChangedText, EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
+  AutoConnectClaim, ChangedText, EventsClientMessage, GhStatus, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
   HeldReview, HeldReviewsResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
@@ -632,6 +632,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack', 'codeReviewCheck'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
+    if (b.workQueueGithub && !core.config.workQueue.github) await core.gh.require("The work queue's GitHub source");
     const slackListBefore = core.config.workQueue.slackList;
     const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
     const harnessBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, JSON.stringify(core.config[id])]));
@@ -719,6 +720,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (req.body?.what === 'cloud') void core.refreshMeko().catch((e: unknown) => core.log.warn('reading Meko again failed', errMsg(e)));
     return reply.code(204).send();
   });
+
+  // ---- gh: the GitHub dialog ----
+  app.post('/api/gh/check', async (): Promise<GhStatus> => {
+    await core.gh.check();
+    return core.gh.status();
+  });
+  app.post('/api/gh/install', async (): Promise<GhStatus> => core.gh.install());
+  app.post('/api/gh/login', async (): Promise<GhStatus> => core.gh.login());
+  app.delete('/api/gh/job', async (): Promise<GhStatus> => core.gh.cancel());
 
   // ---- updates ----
   app.post('/api/claude/update', async () => core.claudeCode.update());

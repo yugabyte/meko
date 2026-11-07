@@ -18,10 +18,10 @@ import (
 )
 
 // App is a release install's app folder: Meko's, or an extension's that Meko installs from its
-// releases (Presenter's, in <data folder>/extensions/present/app). Name is the program, which
+// releases (Present's, in <data folder>/extensions/present/app). Name is the program, which
 // names its binary (<version>/bin/<name>) and its link in ~/.local/bin; empty is meko. Package
 // names its tarballs (<package>-<version>-<os>-<arch>.tar.gz, one folder <package>-<version>/);
-// empty is Name. Presenter's program is me_present, its package present. OldPackages are names its
+// empty is Name. Present's program is me_present, its package present. OldPackages are names its
 // package had before (Kode's agentk), which older releases' tarballs carry. OldNames are names the
 // program had before (Kode's agentk): a version unpacked then has only bin/<old name>, and Adopt
 // gives it bin/<name> too, so app/current/bin/<name> and the links to it resolve whichever version is

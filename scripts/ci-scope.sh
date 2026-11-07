@@ -17,7 +17,7 @@
 # its bundled workshops (src/workshops/, whose demo repos' READMEs ship and are tested).
 # Kode's tests read root files under scripts/ and .github/, so those run Kode,
 # and Meko's resolution cases (src/meko/internal/paths/testdata/resolve-cases.json),
-# which Kode's and Presenter's tests read too, run all three
+# which Kode's and Present's tests read too, run all three
 # (src/extensions/agentk/test/unit/ci-scope.test.ts checks that every such read, and
 # every Markdown file a Meko test globs or Kode's release packs, is covered).
 # Exits 2 on bad usage.
@@ -46,7 +46,7 @@ elif [ $# -eq 0 ]; then
       '') ;;
       # The CI workflow and this script decide what runs: check every component.
       .github/workflows/ci.yml | scripts/ci-scope.sh) agentk=true meko=true present=true ;;
-      # Where Meko's data folder is: Meko's paths.Resolve, and Kode's and Presenter's mekoHome, are tested against it.
+      # Where Meko's data folder is: Meko's paths.Resolve, and Kode's and Present's mekoHome, are tested against it.
       src/meko/internal/paths/testdata/resolve-cases.json) agentk=true meko=true present=true ;;
       # Markdown a test reads: Meko's docs and test fixtures. These match before a component's docs.
       src/meko/docs/* | src/meko/*/test/* | src/meko/*/testdata/*) meko=true ;;

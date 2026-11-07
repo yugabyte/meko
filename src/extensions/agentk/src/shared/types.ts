@@ -1114,6 +1114,8 @@ export interface AppState {
   failedStarts: FailedStart[];
   /** The Claude Code sessions launch with, and whether it runs Kode's mod. */
   claudeCode: ClaudeCodeStatus;
+  /** gh, GitHub's command-line tool, as Kode last found it, and the GitHub dialog's install or sign-in under way. */
+  gh: GhStatus;
   /** Each harness sessions can run on, in HARNESS_IDS order, and the default for new sessions. */
   harnesses: HarnessStatus[];
   /** `[ask_kode] enabled` and a coding agent available to answer: the command palette offers Ask Kode. */
@@ -1211,6 +1213,37 @@ export interface ClaudeCodeStatus {
    * after, and the last lines Claude Code printed.
    */
   lastUpdate: { ok: boolean; from: string | null; to: string | null; message: string; at: number } | null;
+}
+
+/**
+ * The machine-readable `code` of a refusal because an action works on GitHub and gh isn't installed
+ * or isn't signed in (409): the page opens the GitHub dialog for it, whichever call it came from.
+ */
+export const GH_NEEDED = 'GH_NEEDED';
+
+/** Whether Kode can use gh: `ok` (installed and signed in), `missing`, `signed-out`, or `unknown` until checked. */
+export type GhState = 'ok' | 'missing' | 'signed-out' | 'unknown';
+
+/**
+ * gh as Kode last found it (`gh --version`, `gh auth token`), and what the GitHub dialog started
+ * (POST /api/gh/install, POST /api/gh/login; DELETE /api/gh/job forgets it).
+ */
+export interface GhStatus {
+  state: GhState;
+  /** The login gh is signed in as, once known. */
+  login: string | null;
+  /** The install or sign-in under way, or the last one that failed; null when there's none. */
+  job: GhJob | null;
+}
+
+export interface GhJob {
+  kind: 'install' | 'login';
+  /** `running`; `code`: the sign-in's one-time code is shown and gh waits for GitHub; `failed`: `message` says why. */
+  phase: 'running' | 'code' | 'failed';
+  /** The sign-in's one-time code, to enter at `url`. */
+  code?: string;
+  url?: string;
+  message?: string;
 }
 
 /**
@@ -1793,6 +1826,8 @@ export interface ActionResult {
   /** Where it led: the session started or changed, the project opened. */
   projectId?: string;
   sessionId?: string;
+  /** A refusal's machine-readable code, as a route's would carry it (GH_NEEDED: the page opens the GitHub dialog). */
+  code?: string;
 }
 
 export interface RunActionsResult {
@@ -2890,6 +2925,16 @@ export type TermServerMessage =
 // POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`claude update`,
 //        `opencode upgrade`, `kiro-cli update`), then reads its version again; 409 while one runs. Settings › Harness's
 //        Update OpenCode and Update Kiro call it; the UI updates Claude Code through POST /api/claude/update, whose answer carries the outcome)
+// POST   /api/gh/check                         → GhStatus   (reads gh's state again: the GitHub dialog's Check again)
+// POST   /api/gh/install                       → GhStatus   (installs gh with deps.sh --only gh, no root; 409 while an install or sign-in runs)
+// POST   /api/gh/login                         → GhStatus   (starts gh auth login --web; the job's code once gh gives it; 409 while one runs)
+// DELETE /api/gh/job                           → GhStatus   (stops a sign-in under way, and forgets an install or sign-in that failed: the dialog closed)
+// Any route that starts work on GitHub (Open PR, Run to merge, a move to Pull Request, Merge, Update to latest, starting
+//        a Review a PR or a task on a PR or a PR looked up for either, the task-PR picker, starting from a GitHub link,
+//        turning the work queue's GitHub source on) answers 409 with code GH_NEEDED while gh isn't usable; Do all carries
+//        the code in ActionResult.code. Reads the page makes by itself don't: the plain review-prs list answers no PRs
+//        and the reason, a link's plan (GET /api/github-link) answers 409 with the reason and no code, and the work
+//        queue's sync records the reason as the GitHub source's result.
 // POST   /api/claude/update                    → ClaudeCodeStatus   (runs `claude update`, Claude Code's own updater, then
 //        reads its version again; the outcome is in `lastUpdate`, a failed update included; 409 while one runs. Called
 //        by the too-old banner's Update Claude Code and by Settings › Harness's)

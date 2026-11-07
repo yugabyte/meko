@@ -1,11 +1,11 @@
-// Package extproxy serves an extension's web UI on the web listener at /ext/<name>/: it passes each
+// Package extproxy serves an extension's web UI at /ext/<name>/ on Meko's port: it passes each
 // request to the unix socket the extension listens on, with the prefix stripped, and keeps the
-// WebSockets it upgrades, so the web listener closes them when it stops (CloseAll). An extension
-// renamed in Meko is served at one of its paths, the one its page is built for (Prefix), and the
-// others redirect there.
+// WebSockets it upgrades, so Meko closes them when it stops or the web UI is turned off (CloseAll). An
+// extension renamed in Meko is served at one of its paths, the one its page is built for (Prefix), and
+// the others redirect there.
 //
 // The extension trusts every request on its socket (only the user who runs Meko can connect to it),
-// so what reaches it is only what the web listener let in. The browser's Host and Origin are passed
+// so what reaches it is only what Meko let in. The browser's Host and Origin are passed
 // as they are, so the extension's own same-origin checks still hold; its Cookie header (the host's
 // cookies, none of them the extension's) is dropped, and no X-Forwarded-* headers are added.
 package extproxy
@@ -226,7 +226,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.rp.ServeHTTP(w, r)
 }
 
-// CloseAll closes the WebSockets the proxy upgraded: the web listener's shutdown doesn't, since
+// CloseAll closes the WebSockets the proxy upgraded: a server's shutdown doesn't, since
 // they're hijacked from its server, so without this one would outlive meko ui stop.
 func (p *Proxy) CloseAll() {
 	p.mu.Lock()

@@ -23,6 +23,9 @@ import (
 
 const cloudKey = "mko_tkn_cloud_0123456789wxyz"
 
+// cloudRoute is the Meko Cloud link's route.
+const cloudRoute = "/api/v1/settings/meko-cloud"
+
 func cloudService(t *testing.T) *cloudlink.Service {
 	t.Helper()
 	dir := t.TempDir()
@@ -44,9 +47,9 @@ func send(t *testing.T, method, url, payload string, header map[string]string) (
 	return code, b
 }
 
-// On the API listener the link's routes take only the admin token (meko cloud-link): an agent's
-// client token can't read it or point it elsewhere.
-func TestCloudRoutesOnTheAPIListener(t *testing.T) {
+// The link's routes take the admin token (meko cloud-link), never an agent's client token, which
+// can't read it or point it elsewhere.
+func TestCloudRoutesWithTokens(t *testing.T) {
 	ln, err := Listen(0)
 	if err != nil {
 		t.Fatal(err)
@@ -74,9 +77,8 @@ func TestCloudRoutesOnTheAPIListener(t *testing.T) {
 	}
 }
 
-// On the web listener the owner reads and changes the link, and each running extension hears of a
-// change on its socket.
-func TestCloudRoutesOnTheWebListener(t *testing.T) {
+// A browser reads and changes the link, and each running extension hears of a change on its socket.
+func TestCloudRoutesForBrowsers(t *testing.T) {
 	sock := filepath.Join(shortTemp(t), "web.sock")
 	heard := make(chan string, 4)
 	ln, err := net.Listen("unix", sock)

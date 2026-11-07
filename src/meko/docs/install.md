@@ -12,13 +12,13 @@ working, its Meko features skipping or retrying.
 curl -fsSL https://mekodata.ai/install.sh | sh
 ```
 
-A first install at a terminal ends by asking which extension to add (Kode, Presenter, or none),
+A first install at a terminal ends by asking which extension to add (Kode, Present, or none),
 and runs `meko extension install <name>` for the one picked; `meko extension install kode` adds
 one at any time.
 
 `mekodata.ai/install.sh` is a 302 redirect, set on the website, to
 `https://github.com/yugabyte/meko/releases/latest/download/install.sh`. Meko's releases are the
-repo's "latest" (Kode's and Presenter's are published `--latest=false`), so that is the newest
+repo's "latest" (Kode's and Present's are published `--latest=false`), so that is the newest
 Meko release's `install.sh` (`src/meko/scripts/install.sh`), and a release needs no change on the
 website. It's a 302, not a 301, so no cache keeps it for good. The link is `mekodata.ai`:
 `www.mekodata.ai` redirects elsewhere.
@@ -32,18 +32,29 @@ from a `main` function called on the script's last line, so a download cut short
 
 1. Checks the platform: Linux x64 or arm64, or an Apple Silicon Mac on macOS 14 or newer.
 2. Finds the newest `meko-v*` release (or `--version`). If that version is the one installed
-   (`app/current`), it prints `✓ Meko <version> is up to date` and exits 0, unless `--reinstall`.
+   (`app/current`), it prints `✓ Meko <version> is up to date` and exits 0, unless `--reinstall`,
+   or unless `app/setup-pending` names that version: `meko install`'s setup of it didn't finish
+   (below), so the installer runs it again, as a first install if the file's second line says
+   `first`.
 3. Prints its header, `◆ meko  <version> · macOS · Apple Silicon` (on an upgrade, `<installed> →
-   <version>`; on a first install, a second line: "Installs into your home folder, no sudo").
-4. Downloads `meko-<version>-<linux|darwin>-<x64|arm64>.tar.gz` and `SHA256SUMS`, and checks the
+   <version>`; on a first install, a second line: "Installs into your home folder, no sudo"; when
+   it finishes a setup, "Finishing the setup of meko <version>").
+4. Checks the disk space (`df -Pk`), unless the version is already unpacked: 600 MB free where the
+   releases go and 200 MB in `$TMPDIR`, or 800 MB when they're on one file system (a release is
+   about 150 MB downloaded and 400 MB unpacked). Short of it, a `✗ Disk` row says how much it needs
+   and has, before anything is downloaded.
+5. Downloads `meko-<version>-<linux|darwin>-<x64|arm64>.tar.gz` and `SHA256SUMS`, and checks the
    checksum: one `Download` row, with the size and the time it took. On a terminal the row shows the
    dots and the megabytes so far while curl runs in the background.
-5. Unpacks it to `~/.local/share/meko/app/<version>` (`$XDG_DATA_HOME/meko/app`), outside the data
+   A version already unpacked at `app/<version>` (by a run whose `meko install` then stopped) isn't
+   downloaded again unless `--reinstall`: its row says `already downloaded`. It's moved into place
+   whole, so a folder that's there is complete.
+6. Unpacks it to `~/.local/share/meko/app/<version>` (`$XDG_DATA_HOME/meko/app`), outside the data
    folder, clearing macOS's quarantine flag in
    case the tarball came through a browser. That takes seconds (some 400 MB unpacked), so on a
    terminal an `Install` row shows the dots meanwhile (`unpacking meko <version>`), which `meko
    install`'s own `Install` row then replaces.
-6. Runs that version's `meko install`, which prints the rest of the run on the same grid, with
+7. Runs that version's `meko install`, which prints the rest of the run on the same grid, with
    `MEKO_INSTALL_STARTED` (when the run began, for "installed in 14s"), `MEKO_INSTALL_FROM` (the
    version it replaces, on an upgrade), `MEKO_INSTALL_FIRST=1` (nothing was installed before, so the
    run ends with the extension picker) and `MEKO_INSTALL_ASK=0` with `--non-interactive` (no PATH
@@ -75,24 +86,72 @@ safe.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service. Before
   it writes anything (`app/current`, the commands, the data folder, the service), it runs the
-  service manager's checks and checks that no other program holds the API port (`[server] port`,
-  7778 by default): if one does, its `Server` row is `✗` with how to find the program or move Meko,
-  and nothing is written, so running the installer again is safe (it would otherwise find
-  `app/current` at the new version and stop as up to date). A Meko server on that port doesn't
-  count: this data folder's, or the one the installed service runs, which installing the service
-  moves to this folder. The web port isn't checked, since Meko takes it over from a Kode on this
-  computer. The `Server` row shows the dots until the service's server
-  answers (`started in 0.9s`, or `restarted` over a running one or an upgrade).
-- It writes the web listener's access to `web.toml` when neither it nor `config.toml` sets one:
+  service manager's checks (a `✗ Service` row when there's no systemd user manager, or no login
+  session for launchd) and makes sure Meko's port (`[server] port`, 7777 by default) is free
+  (`pickPort`). A Meko server on that port doesn't count: this data folder's, or the one the
+  installed service runs, which installing the service moves to this folder, by its port file or by
+  its status's web UI port (a Meko from before one port held 7777 for its web UI, beside 7778 in
+  its port file). When another program holds it (a Kode from before Meko served it is one):
+  - If nobody chose the port, install takes the first free one of the 20 after it and writes it to
+    `config.toml`'s `[server]` under the comment `# Picked by meko install: …`
+    (`config.SetPickedPort`, which keeps the rest of the file): a `! Port  7777 is in use by another
+    program · Meko uses 7778, set in ~/.meko/config.toml` row. `[server] port` is a setting every
+    release reads, so a rollback keeps it. A port install picked is nobody's choice either, so it
+    moves again if it's taken later, and goes back out of `config.toml` (`config.ClearPickedPort`,
+    a `✓ Port  back on 7777` row) at an install that finds the default port free again. The agents
+    Meko connected follow at the server's start (`followPort`,
+    [below](#the-port-the-agents-use)).
+  - If someone chose it (`MEKO_PORT`, or a `[server] port` in `config.toml` without install's
+    comment above it), if a Kode is on this computer (one from before Meko served it holds 7777
+    until it's updated, and Meko should then take 7777 over rather than move off it), or if the 20
+    after it are taken too, the `Server` row is `✗` with how to find the program and how to move
+    Meko (`change or unset MEKO_PORT` when that chose it, since it overrides `config.toml`; else
+    `set [server] port in ~/.meko/config.toml`), and nothing is written.
+- It writes `app/setup-pending` (the version, and `first` on a first install) once its checks
+  pass, and removes it once the server answers (with `--no-service`, at the end). Until then,
+  running the installer again finishes the setup instead of stopping as up to date.
+- On an upgrade with a service (`app/current` is another version that's still there), it puts the
+  new version on probation as an automatic update does (`update.App.Switch`, with the database's
+  schema read without writing to it, `store.Peek`), in place of pointing `app/current` at it. A new
+  version that fails to start three times is rolled back by `serve`, its database with it
+  ([below](#updates-and-rollback)). Run again to finish such an upgrade's setup (its server didn't
+  answer in time, so `setup-pending` and the update on probation both name the version), it keeps
+  the probation and waits as on it. Otherwise (a first install, or the same version again) it
+  points `app/current` at its version and clears an update on probation.
+- The `Server` row shows the dots until the service's server answers (`started in 0.9s`, or
+  `restarted` over a running one or an upgrade). It stops waiting when the server can't start
+  (`waitStarted`): once `logs/service.log`, the service's stderr, has two of `serve`'s `meko: …`
+  error lines from after the service was written (two failed starts; the service restarts it
+  every 2 s, launchd every 5 s), or after a minute. Its `✗` row gives that error, then the log's
+  last lines, `meko logs --service` and the service manager's own status command. A first install
+  stops the service, so it doesn't restart every few seconds forever, and keeps it installed:
+  `meko start` runs it once the cause is fixed. An upgrade on probation waits the full minute,
+  since `serve` rolls it back at its fourth start: when the old version answers, the rows are
+  `✗ Server  meko <new> didn't start: …` and `! Rolled back  meko <old> is running again · with its
+  data as it was`.
+- Every failure past its arguments' check ends the same way (`installing.fail`), stopping a server
+  started by hand that won't stop included: a `✗` row for the step, then "Nothing was
+  left half-done: running the installer again is safe" when nothing was written yet, or "Fix it,
+  then run the installer again to finish the setup" (`meko install`, run by hand), and a link to
+  the bug form unless it's a cause install explains (a taken port, the service manager). The error
+  is on the row, not again on stderr; the exit code is 1.
+- A failure is reported to call home, where the usage stats would go
+  ([below](#install-failures-to-call-home)).
+- It writes how browsers reach Meko (its access) to `web.toml` when neither it nor `config.toml` sets one:
   `--access local|remote`, or by Kode's old rule (remote over SSH or on Linux with no display,
   else local), unless Kode is on this computer, whose access the handoff takes over instead
   ([web.md](web.md#settings)). Neither access has a login. `--no-ui` turns the web UI off there
   too (`[web] enabled = false`; `meko ui start` turns it on). The summary's `Web UI` link row
   gives the URL and the access.
 - It installs Meko alone. On a first install from the installer (`MEKO_INSTALL_FIRST=1`) at a
-  terminal, it ends, after the links, with a picker of the known extensions not installed yet
-  (`extensions.Known`, Kode first, each with its `Summary`) and "Skip for now": ↑ and ↓ then
-  Enter, or a number (`pickKey`, on `/dev/tty`). Picking one prints `→ meko extension install
+  terminal, it ends, after the links, with "Choose your agentic experience": a picker of the
+  known extensions not installed yet (`extensions.Known`, Kode first), each by the `meko`
+  command that runs it (`kode`, `present`) with its `Summary`; then the experiences still to come
+  (`migrate`, `scribe`), dim and ending " · coming soon"; then "skip for now". ↑ and ↓ (or k and
+  j) move the mark, skipping the ones to come, and Enter picks; the rows have no numbers
+  (`pickRows`, on `/dev/tty`). A row wider than the terminal is cut with "…" to fit (its
+  description first, then " · coming soon" with it, and last its label, at the width read for each
+  drawing), since the redraw moves up one line a row. Picking one prints `→ meko extension install
   <name>` and runs that install on the terminal, where it asks its own questions; one that fails is
   a `✗` row, and Meko stays installed (exit 0). With no terminal it prints `Add an extension at any
   time: meko extension install kode` instead. The commands to run next start with opening the
@@ -117,6 +176,33 @@ manager doesn't start the server again mid-removal; removes the data folder and 
 which `uninstall --purge`, removing it next, doesn't. The releases are outside the data folder, so
 the service can still start Meko on a fresh one.
 
+### The port the agents use
+
+`serve` records the port its agents were connected to (the setting `agents_port`). At a start on
+another port, because install picked a free one or someone changed `[server] port`, it moves the
+agents whose `meko` server is at exactly `http://127.0.0.1:<old port>/mcp` to this one
+(`followPort`, an exact `agents.Manager.Move`, as the move to one port does), so one pointed by hand
+at another Meko on this computer stays. It records the new port once no agent failed, so a failed
+one is tried again at the next start. With no port recorded yet (the first start of a release with
+`followPort`), the agents' port is taken to be the default, 7777: install may have moved Meko off it
+in the run that brought this release, and the move is exact, so only agents at exactly
+`http://127.0.0.1:7777/mcp` follow.
+Kode and Present read Meko's URL again when it starts. An agent session that was running keeps
+the old URL until it's restarted, and so does an MCP setup Meko didn't write.
+
+### Install failures to call home
+
+A failed `meko install` sends one report, `install_failure`, in the heartbeat's envelope
+(`internal/callhome/failure.go`): the step (`checks`, `install`, `data`, `service`, `server`), an
+error class (`service_manager`, `port_in_use`, `no_free_port`, `start_failed`, `start_timeout`,
+`rolled_back`, `error`), the version, the one an upgrade replaced, whether it's a first install,
+the platform, architecture and service manager. Never an error's text, a path or a host name. The
+install id is the database's, read without writing to it, or a random one for this report when
+there's no database yet. It goes where the usage stats go: from a release install, or to `[call_home]
+url` (`MEKO_CALL_HOME_URL`), unless `config.toml`, `MEKO_CALL_HOME`, `YB_DISABLE_CALLHOME` or the web
+UI's setting (read from the database) turned them off. It waits at most 3 s and prints nothing.
+`install.sh`'s own failures (the platform, the download, the disk) aren't sent.
+
 ## Release builds
 
 `src/meko/scripts/package-release.sh <version> <arch> <node-dir> <out-dir>`, run on the platform
@@ -128,7 +214,7 @@ meko-<version>/
   bin/meko                     the CLI and server (cgo: SQLite and sqlite-vec compiled in)
   node/bin/node, node/LICENSE  Meko's own Node (22.18.0, checked against nodejs.org's SHASUMS256)
   context_engine/package.json, dist/, node_modules/, stubs/
-  web_ui/dist/                 the built web UI, served at / on the web listener (web-ui.md)
+  web_ui/dist/                 the built web UI, served at / (web-ui.md)
   models/                      the pinned models: the embedder and the reranker
   VERSION, LICENSE
 ```
@@ -156,8 +242,9 @@ meko-<version>/
   `meko` 24 MB. The reranker adds about 23 MB.
 - `scripts/smoke-release.sh <tarball> <version>` unpacks a tarball, checks `meko version --json`,
   starts it on a fresh data folder, waits for the context engine, saves a memory, finds it, checks that
-  nothing was downloaded into `models/`, checks that the web listener (on the port after the API
-  listener's, never 7777) serves the web UI at the address `meko ui` prints (with `SSH_CONNECTION` set, so it opens no browser), and stops.
+  nothing was downloaded into `models/`, checks that Meko (on a port of its own, never 7777)
+  serves the web UI at the address `meko ui` prints (with `SSH_CONNECTION` set, so it opens no
+  browser), and stops.
 
 Linux tarballs are built in `almalinux:8` (glibc 2.28, so they run on RHEL 8 and newer) with
 gcc-toolset-13; the Mac one on `macos-15` with `MACOSX_DEPLOYMENT_TARGET=14.0`. Their downloads
@@ -172,7 +259,7 @@ download carry no quarantine flag, and Go signs darwin/arm64 binaries ad hoc.
 `src/meko`). It uses the repo's
 release scripts with `--product meko`:
 
-| | Kode (`agentk-release.yml`) | Meko (`meko-release.yml`) | Presenter (`present-release.yml`) |
+| | Kode (`agentk-release.yml`) | Meko (`meko-release.yml`) | Present (`present-release.yml`) |
 |---|---|---|---|
 | Tag | `kode-v0.YYYYMMDD.N` (`agentk-v0.…` before Meko called it Kode, `v0.…` before that) | `meko-v0.YYYYMMDD.N` | `present-v0.YYYYMMDD.N` |
 | Title | its tag | its tag | its tag |
@@ -184,7 +271,7 @@ release scripts with `--product meko`:
 Plan, then `make test`, then the three builds (each packaged and smoke-tested), then publish:
 `SHA256SUMS` and its signature ([below](#signed-releases)), the release with notes from
 `release-notes.sh --product meko`, provenance attestation, and pruning. Meko picks each product's
-releases by its own tag prefixes and tarball names, so a Kode or Presenter release is never taken
+releases by its own tag prefixes and tarball names, so a Kode or Present release is never taken
 for Meko's, nor the other way round.
 
 ### Signed releases
@@ -312,10 +399,11 @@ only see it started again), and `meko restart` restarts it. Without it, they sta
 each one. The contract is the extension's own CLI: `<command> start`, `stop` and `status`, and
 its uninstall (`Catalog.UninstallArgs`; Kode's is `uninstall --purge --delete-worktrees
 --non-interactive`) for `meko destroy --with-extensions`. `status` exits 0 only while the
-extension runs (Kode and Presenter exit 3 when stopped), and its first line is shown in `meko
+extension runs (Kode and Present exit 3 when stopped), and its first line is shown in `meko
 status`'s row. A first line that starts with a mark (`✓`, `!` or `✗`), the extensions' own headline
 (`✓ Kode 0.20261103.13 is running (pid 39527, up 2h4m0s)`), is shown without the mark and the
-extension's title (`✓ Kode   0.20261103.13 is running (pid 39527, up 2h4m0s)`), and its mark is the
+extension's title (`✓ Kode   0.20261103.13 is running (pid 39527, up 2h4m0s)`), or one of its old
+titles (`Catalog.OldTitles`, Present's `Presenter`) that an older release still prints, and its mark is the
 row's: a server that runs but doesn't answer exits 0 and is a `!`. Any other line is shown after
 `running` or `not running`, with the exit code's mark. Meko runs every extension's `status` at once and gives each 3 s
 (`extensions.StatusTimeout`); an update's check of whether the extension runs (`Entry.Status`)
@@ -325,7 +413,7 @@ present`) gets `MEKO_HOME` naming Meko's data folder, so the
 extension knows where its own folder is: `<data>/extensions/<name>` (`extensions.Dir`). Kode's
 home is `<data>/extensions/kode`, wherever Meko's rule puts the data folder (`MEKO_HOME`,
 `~/.meko`, or the network-home fallback; Kode runs the same rule when Meko didn't tell it, and
-Kode's and Presenter's tests read `internal/paths/testdata/resolve-cases.json` as Meko's do). A Kode whose home is in
+Kode's and Present's tests read `internal/paths/testdata/resolve-cases.json` as Meko's do). A Kode whose home is in
 another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff` run with this one's
 `MEKO_HOME`, and does nothing.
 
@@ -342,7 +430,7 @@ keeps what only it knows: Kode's stop row says where its sessions resume, `meko 
 `meko kode serve` when it runs without services. On a failure it prints its error
 to stderr as usual and exits non-zero, and Meko adds its own `✗` row after it. Run without
 `MEKO_SUMMARY` (by hand, by an older Meko, or by `meko extension update` and the Extensions page,
-which keep its output for their logs) it prints what it always has. Kode and Presenter format the
+which keep its output for their logs) it prints what it always has. Kode and Present format the
 row in `src/server/summary.ts`.
 
 `meko update`, `meko extension update` and `meko extension install` print the rows of the steps that
@@ -377,7 +465,7 @@ background; the rest are base ANSI colors, which every terminal theme tunes for 
 | Done | `32` green | `✓`, and the headline's `●` |
 | Warning | `1;33` bold yellow (bold, since some themes draw yellow pale on white) | `!` |
 | Failed | `31` red | `✗` |
-| Secondary | `2` faint | notes after a ` · `, link labels, the picker's descriptions and key hint |
+| Secondary | `2` faint | notes after a ` · `, link labels, the picker's descriptions, key hint and coming-soon rows |
 | Emphasis | `1` bold, in the terminal's own text color | `meko` in the header, the headline, a question, the picked choice |
 | Call to action | `1;97;44` white on blue | the first command under Next |
 
@@ -424,7 +512,7 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   `--with-extensions` the extensions are uninstalled, their data removed, and the folder too if
   that empties it.
 
-- The catalog (`extensions.Known`) has Kode and Presenter, both `Managed`: Meko installs and
+- The catalog (`extensions.Known`) has Kode and Present, both `Managed`: Meko installs and
   updates them from their own releases, and neither ships an installer. Their programs are
   `me_kode` and `me_present`, so a process list and the services say they're Meko's extensions (a
   release's Node is `node/bin/me_kode` or `node/bin/me_present` too); the extensions, their folders
@@ -445,9 +533,13 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   program with what follows, `MEKO_HOME` set, on the terminal, and exits as it does. One command
   works for every extension and data folder (a leading `--data-dir` picks another), and nothing in
   `~/.local/bin` can run another data folder's release by mistake.
-- Presenter was the extension `presenter` (program `me_presenter`), and nothing moves an install
+- An older Present release still prints "Presenter" in its own output, and an older Kode release
+  "AgentK": Meko's status row drops that old title from its headline as it does the new one
+  (`Catalog.OldTitles`), and the `meko start` and `meko stop` rows such a release prints keep its
+  old title until it updates.
+- Present was the extension `presenter` (program `me_presenter`), and nothing moves an install
   from then: its `extensions.json` entry stays, a name Meko no longer knows, which `meko start`
-  still starts (and fails to) and `meko extension delete presenter` only forgets. Presenter's
+  still starts (and fails to) and `meko extension delete presenter` only forgets. Present's
   `docs/design.md` says how to clear it.
 - Kode's program's old names (`Catalog.OldCommands`: `me_koder`, `agentk`, `agent-k-local`)
   stay in its releases' `bin/` as links, for the services and older Mekos that run them. A version
@@ -477,15 +569,16 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   `<program> install --meko-url <url> --meko-key <client token>` on the terminal, with
   `--non-interactive` without one, and whatever followed `--` on the command line (Kode's
   `--agent claude|opencode|kiro`, `--install-deps`, `--no-install-deps`). Kode's install checks
-  its prerequisites (git, curl, gh, a coding agent, Meko's setup for the agents) with the
-  `deps.sh` its release carries, asking before it installs any, and sets up its services. A Kode
+  its prerequisites (git, curl, a coding agent, Meko's setup for the agents; gh is offered, not
+  required) with the `deps.sh` its release carries, asking before it installs any, and sets up
+  its services. A Kode
   from before `--meko-url` is refused with a message, rather than failing on the flag. Then it
   registers the extension's `app/current/bin/<program>`. Uninstalls are
   `me_kode uninstall --purge --delete-worktrees --non-interactive` and
   `me_present uninstall --purge --non-interactive`, which remove the extension's folder,
   releases and all (`meko destroy --with-extensions` then removes any `~/.local/bin` link an older
   Meko made):
-  Presenter's decks stay in their Meko datapacks.
+  Present's decks stay in their Meko datapacks.
 - `meko extension update <name>` (and the Extensions page's **Update**) moves a release install Meko
   made to the newest release, and `--all` does so for every installed extension, going on past one
   that fails (the exit code says whether any did). `--check` only looks, and with no release for
@@ -500,7 +593,7 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   - With the catalog's `RestartArgs` (Kode's `me_kode restart`, which restarts only its server, so
     its session host and every session in it keep running), it switches `app/current` while the
     extension runs, with `update-pending.json` written (`App.Switch`), then runs them; they return
-    once the extension answers. Without (Presenter), it stops the extension, switches, and starts
+    once the extension answers. Without (Present), it stops the extension, switches, and starts
     it again, up to four times; a switch that fails starts the old version again.
   - If `app/current` then names the old version, `meko _launch` rolled the new one back, and the
     update fails saying so, and whether the old version started.
@@ -537,7 +630,7 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   missing is on, unless Kode's own `config.toml` still has its old `[update] channel = "off"`,
   which Meko then saves as off: `Catalog.LegacyUpdatesOff`) and that has a newer release is updated as its Extensions-page job, marked
   `auto`. One whose last update is still on probation waits, and so does one that says it's busy:
-  the catalog's `BusyArgs` (Presenter's `me_present _busy`, true while a talk is live) exit 0,
+  the catalog's `BusyArgs` (Present's `me_present _busy`, true while a talk is live) exit 0,
   within 15 s. It's tried again at the next check. Updates someone asks for never wait. When Meko
   installs its own update, it restarts first, and the new Meko's first check, a minute later,
   updates the extensions (a Meko on probation still checks; it only installs no update of its
@@ -549,20 +642,20 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   which `meko update`, `extension update` and `extension install` take in their own processes. A
   second update while one runs is refused (the Status page's `UPDATE_BUSY`, "another update is
   running" on the command line), and a scheduled check skips its turn.
-- A command npm installed (`npm link`, `npm install -g`: Presenter from source) is a
+- A command npm installed (`npm link`, `npm install -g`: Present from source) is a
   `#!/usr/bin/env node` script in the bin folder of the Node that installed it, and the login
   service's PATH has no such Node (launchd's is `/usr/bin:/bin:/usr/sbin:/sbin`), or an older one.
   So when an extension's command sits in a folder that holds a `node`, Meko runs it (`start`,
   `stop`, `status`, `_handoff`, its uninstall, and its `install` from `extension install` or the
   Extensions page) with that folder first on PATH (`extensions.CommandEnv`).
-- An extension whose catalog entry has `WebUI` (Kode, Presenter) is served to browsers by the web listener at
+- An extension whose catalog entry has `WebUI` (Kode, Present) is served to browsers by Meko at
   `/ext/<name>/`, on the unix socket `<command> _handoff --json` names; at every start, that handoff
-  also brings over the web settings and certificate the extension had when it served browsers
-  itself (its old login is ignored) ([web.md](web.md#the-handoff-from-kode)). Kode listens only on its socket.
+  also brings over the access and certificate the extension had when it served browsers
+  itself (never its port; its old login is ignored) ([web.md](web.md#the-handoff-from-kode)). Kode listens only on its socket.
 - `meko start` starts the extensions after Meko; `meko stop` stops them first (`me_kode stop`
   ends Kode's sessions too; they resume on start), unless given `--keep-extensions`. An
   extension that fails is reported, and the rest go on. `meko restart`, Meko's updates and crashes
-  never touch them: they have their own services (Kode) or processes (Presenter), and an
+  never touch them: they have their own services (Kode) or processes (Present), and an
   extension restarts only for its own update.
 - `meko extension delete <name>` removes an extension (`runDeleteExtension`). After asking (unless
   `--force`), and holding the update lock (which keeps updates and release downloads out, not an
@@ -603,6 +696,7 @@ A release install's app folder:
   current -> <version>       what the service runs
   service/meko               what the launchd service runs: execs current/bin/meko
   update-pending.json        an update on probation
+  setup-pending              meko install's setup of this version, until its server answers
   bad-versions               versions rolled back; never offered again
 ```
 
@@ -689,12 +783,19 @@ Changing the store doesn't move secrets: the client token is made again.
 - `scripts/install_test.go`: the installer with a fake curl: unpacking and running `meko install`
   with the `MEKO_INSTALL_*` variables, the header, "up to date", `--reinstall`, an upgrade, curl
   alone (a signed-in `gh` never run, `GITHUB_TOKEN` never sent), failed downloads, plain output off
-  a terminal, a bad checksum, Kode's flags refused, and Intel Macs and macOS 13 refused.
+  a terminal, a bad checksum, Kode's flags refused, Intel Macs and macOS 13 refused, too little
+  disk space, an unpacked release reused, and a pending setup finished.
 - `internal/cli/install_run_test.go` and `pick_linux_test.go`: the PATH line added once and
-  removed, a held API port failing before the service is written, the headline's elapsed time and
+  removed, a port the user chose failing before the service is written, the headline's elapsed time and
   the picker's line off a terminal, an upgrade's rows, the context engine's wait and its timeout, and
-  the extension picker on a pseudo-terminal (skip, Ctrl+C, a failed install, an installed Kode
-  left out).
+  the extension picker on a pseudo-terminal (the coming-soon rows skipped, skip, Ctrl+C, a number
+  ignored, a failed install, a detail cut at 80 columns, an installed Kode left out);
+  `cloud_test.go`: the picker's keys and rows (`pickKeyPress`, `pickLines`).
+- `internal/cli/install_fail_test.go`: a taken port moved to the next free one in `config.toml`, a
+  server that can't start (its error and log, the service stopped, the setup left to finish, call
+  home's report without the error's text), an upgrade on probation rolled back, a finished setup,
+  and the service manager's check; `agent_test.go`: agents following a change of port.
+  `config_test.go`: `SetPickedPort` on each shape of `config.toml`, and a chosen port refused.
 - The context engine: offline loading never downloads, for the embedder and the reranker.
 - Each release build runs `scripts/smoke-release.sh` on its own platform.
 

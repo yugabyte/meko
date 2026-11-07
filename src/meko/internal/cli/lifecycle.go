@@ -43,21 +43,29 @@ var serviceStartTimeout = time.Minute
 // pid notPID (a server being replaced). It returns its status.
 func waitAnswering(l paths.Layout, d time.Duration, notPID int) (server.StatusReply, bool) {
 	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
-		if up, err := running(l.Lock); err != nil || !up {
-			continue
-		}
-		c, err := newClient(l)
-		if err != nil {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		st, err := c.status(ctx)
-		cancel()
-		if err == nil && st.PID != notPID {
+		if st, ok := answering(l, notPID); ok {
 			return st, true
 		}
 	}
 	return server.StatusReply{}, false
+}
+
+// answering is the status of the server that holds the lock, when it answers and isn't notPID's.
+func answering(l paths.Layout, notPID int) (server.StatusReply, bool) {
+	if up, err := running(l.Lock); err != nil || !up {
+		return server.StatusReply{}, false
+	}
+	c, err := newClient(l)
+	if err != nil {
+		return server.StatusReply{}, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	st, err := c.status(ctx)
+	if err != nil || st.PID == notPID {
+		return server.StatusReply{}, false
+	}
+	return st, true
 }
 
 // currentPID is the running server's pid, or 0.
@@ -81,11 +89,11 @@ func runStart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 	return code
 }
 
-// webWait is how long start and install wait for the web listener, which binds a moment after the
-// API listener answers (after the extensions' handoff), before they print its link.
+// webWait is how long start, install and meko ui wait for the port to be listening, when it's being
+// taken again (remote access turned on or off), before they print its link.
 var webWait = 10 * time.Second
 
-// waitWebListening reads the server's status, and while the web listener is still starting (not
+// waitWebListening reads the server's status, and while the port is being taken again (not
 // listening, and not saying why) reads it again until ctx ends. It returns the last status it read.
 func waitWebListening(ctx context.Context, c *client) (server.StatusReply, error) {
 	st, err := c.status(ctx)
@@ -129,7 +137,7 @@ type runningOptions struct {
 }
 
 // printRunning is the end of start's and install's summary: the context engine's row, which shows
-// the dots until it's ready (at most engineWait); the web listener's row, when it isn't listening;
+// the dots until it's ready (at most engineWait); the web UI's row, when it's off or not listening;
 // a ● headline with the version, the links, and the commands to run next (nextSteps).
 func printRunning(l paths.Layout, o runningOptions, stdout io.Writer) {
 	r := newReport(stdout)
@@ -153,6 +161,8 @@ func printRunning(l paths.Layout, o runningOptions, stdout io.Writer) {
 		switch {
 		case !w.Enabled:
 			r.step(stepWarn, "Web UI", webOffNote)
+		case w.Listening && w.Error != "":
+			r.step(stepFail, "Web UI", w.Error)
 		case w.Listening:
 		case w.Error != "":
 			r.step(stepFail, "Web UI", "not listening: "+w.Error)

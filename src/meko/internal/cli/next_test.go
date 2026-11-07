@@ -21,7 +21,7 @@ func TestNextSteps(t *testing.T) {
 	share := [2]string{"meko cloud-link", "share with your team through Meko Cloud"}
 	addAgentK := [2]string{"meko extension install kode", "add Kode, which runs coding agents from task to merged PR"}
 	openAgentK := [2]string{"meko kode ui", "open Kode"}
-	openPresent := [2]string{"meko ui", "open the web UI, then Presenter in its sidebar"}
+	openPresent := [2]string{"meko ui", "open the web UI, then Present in its sidebar"}
 	status := [2]string{"meko status", "check on Meko at any time"}
 	statusInstall := [2]string{"meko status", "check on Meko at any time · meko uninstall removes it"}
 	for _, c := range []struct {
@@ -37,12 +37,12 @@ func TestNextSteps(t *testing.T) {
 			s.kode, s.added = true, "kode"
 			return s
 		}(), nextInstall, [][2]string{openAgentK, connect, learn, share, statusInstall}},
-		{"install, Presenter just added", func() nextState {
+		{"install, Present just added", func() nextState {
 			s := done
 			s.added = "present"
 			return s
 		}(), nextInstall, [][2]string{openPresent, openAgentK, statusInstall}},
-		{"install, Presenter just added, Kode not installed", func() nextState {
+		{"install, Present just added, Kode not installed", func() nextState {
 			s := fresh
 			s.added = "present"
 			return s
@@ -102,8 +102,22 @@ func TestExtensionState(t *testing.T) {
 		{stepOK, "running", "Kode 0.2", " (%s)", stepOK, "running (Kode 0.2)"},
 		{stepFail, "not running", "", ", %s", stepFail, "not running"},
 	} {
-		if k, got := extensionState("Kode", c.k, c.state, c.line, c.format); k != c.wantK || got != c.want {
+		if k, got := extensionState("kode", c.k, c.state, c.line, c.format); k != c.wantK || got != c.want {
 			t.Errorf("%q: got %v %q, want %v %q", c.line, k, got, c.wantK, c.want)
+		}
+	}
+}
+
+// An extension's row drops its title from the headline, and its old title, which a release from
+// before the rename still prints (Present's Presenter, Kode's AgentK).
+func TestExtensionStateOldTitle(t *testing.T) {
+	for name, title := range map[string]string{"present": "Presenter", "kode": "AgentK"} {
+		for _, line := range []string{"✓ " + extensionTitle(name) + " 0.2 is running (pid 7, up 2h)",
+			"✓ " + title + " 0.2 is running (pid 7, up 2h)"} {
+			k, got := extensionState(name, stepOK, "running", line, ", %s")
+			if k != stepOK || got != "0.2 is running (pid 7, up 2h)" {
+				t.Errorf("%q: got %v %q", line, k, got)
+			}
 		}
 	}
 }

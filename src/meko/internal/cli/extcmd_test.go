@@ -18,7 +18,7 @@ func TestExtensionCommandRunsItsProgram(t *testing.T) {
 	dir := shortDir(t)
 	code, _, errs := run("present", "--data-dir", dir, "status")
 	want(t, "present, not installed", code, exitError, errs,
-		"Presenter isn't installed: add it with meko extension install present")
+		"Present isn't installed: add it with meko extension install present")
 
 	prog := filepath.Join(t.TempDir(), "me_kode")
 	//nolint:gosec // G306: a test's fake program

@@ -172,6 +172,9 @@ export function submitButton(root: ParentNode, focused: Element | null): HTMLBut
   return root.querySelector<HTMLButtonElement>('.dialog-ft button.primary') ?? root.querySelector<HTMLButtonElement>('button.primary[data-submit]');
 }
 
+/** The dialogs open, the last on top: only it answers Escape and keeps Tab (the GitHub dialog opens over another). */
+const openDialogs: object[] = [];
+
 export function Dialog({
   title,
   onClose,
@@ -199,7 +202,10 @@ export function Dialog({
   // field would bring up the keyboard before you've tapped it, so only an enabled main button takes
   // focus. With none, the dialog itself does, so focus never stays behind it (on the terminal).
   useEffect(() => {
+    const me = {};
+    openDialogs.push(me);
     const onKey = (e: KeyboardEvent) => {
+      if (openDialogs[openDialogs.length - 1] !== me) return;
       if (e.key === 'Escape') {
         e.stopPropagation();
         closeRef.current();
@@ -214,7 +220,10 @@ export function Dialog({
       );
       (first ?? root).focus();
     }
-    return () => window.removeEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      openDialogs.splice(openDialogs.indexOf(me), 1);
+    };
   }, []);
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

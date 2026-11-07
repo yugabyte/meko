@@ -1,16 +1,21 @@
 #!/bin/sh
-# Kode's prerequisites: git, curl, gh and a coding agent (Claude Code, OpenCode or Kiro CLI; one is
-# enough), each agent signed in, and gh signed in to GitHub. `meko kode install` runs it first, on the
-# terminal Meko's `meko extension install kode` attached (a release has it as lib/scripts/deps.sh),
-# and passes its options on:
+# Kode's prerequisites: git, curl and a coding agent (Claude Code, OpenCode or Kiro CLI; one is
+# enough), each agent signed in. gh, GitHub's command-line tool, is optional: Kode needs it for PRs
+# and reviews, and asks for it when one of those needs it. Here it's offered in a question of its own
+# once the rest is there, installed with --install-deps, and skipped with a warning otherwise; when
+# it's there, it's offered a sign-in. `meko kode install` runs it first, on the terminal Meko's
+# `meko extension install kode` attached (a release has it as lib/scripts/deps.sh), and passes its
+# options on:
 #
-#   --install-deps      install missing tools without asking
-#   --no-install-deps   never install tools; stop and say what's missing instead
+#   --install-deps      install missing tools, gh included, without asking
+#   --no-install-deps   never install tools; stop and say what's missing instead (gh: warn)
 #   --agent <claude|opencode|kiro>
 #                       the coding agent to install when none of Claude Code, OpenCode and Kiro CLI
 #                       is there (default: ask; Claude Code with --install-deps or when there's no one
 #                       to ask)
 #   --non-interactive   ask nothing: install only with --install-deps
+#   --only gh           check and install gh alone (no root), under the options above: Kode's
+#                       GitHub dialog runs it with --install-deps --non-interactive
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux (with
 # sudo), gh on Linux from its GitHub release (checksum-verified) into ~/.local/bin, and a coding agent
@@ -22,6 +27,7 @@
 set -eu
 
 agent=""
+only=""
 install_deps=ask
 interactive=true
 
@@ -48,10 +54,13 @@ while [ $# -gt 0 ]; do
     --install-deps) install_deps=yes; shift ;;
     --no-install-deps) install_deps=no; shift ;;
     --non-interactive) interactive=false; shift ;;
-    *) die "unknown option $1 (deps.sh takes --install-deps, --no-install-deps, --agent and --non-interactive)" ;;
+    --only) [ $# -ge 2 ] || die "--only needs a value: gh"; only=$2; shift 2 ;;
+    --only=*) only=${1#--only=}; shift ;;
+    *) die "unknown option $1 (deps.sh takes --install-deps, --no-install-deps, --agent, --non-interactive and --only gh)" ;;
   esac
 done
 case $agent in ''|claude|opencode|kiro) ;; *) die "--agent takes claude, opencode or kiro (got $agent)" ;; esac
+case $only in ''|gh) ;; *) die "--only takes gh (got $only)" ;; esac
 
 # ---- platform ----
 case $(uname -s) in
@@ -109,20 +118,81 @@ git_ok() {
   [ "$platform" != darwin ] || xcode-select -p >/dev/null 2>&1 || [ -x "$(brew --prefix 2>/dev/null)/bin/git" ]
 }
 
+# gh from its own GitHub release (the distro's repos often lack it), checksum-verified.
+install_gh() {
+  case $arch in x64) gh_arch=amd64 ;; *) gh_arch=$arch ;; esac
+  latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/cli/cli/releases/latest) || return 1
+  gh_ver=${latest##*/v}
+  [ -n "$gh_ver" ] && [ "$gh_ver" != "$latest" ] || return 1
+  gh_tmp=$(mktemp -d)
+  gh_name="gh_${gh_ver}_linux_${gh_arch}"
+  gh_base="https://github.com/cli/cli/releases/download/v$gh_ver"
+  curl -fsSL -o "$gh_tmp/$gh_name.tar.gz" "$gh_base/$gh_name.tar.gz" &&
+    curl -fsSL -o "$gh_tmp/checksums.txt" "$gh_base/gh_${gh_ver}_checksums.txt" &&
+    (cd "$gh_tmp" && grep " $gh_name.tar.gz\$" checksums.txt | sha256_check >/dev/null) &&
+    tar -xzf "$gh_tmp/$gh_name.tar.gz" -C "$gh_tmp" &&
+    mkdir -p "$HOME/.local/bin" &&
+    cp "$gh_tmp/$gh_name/bin/gh" "$HOME/.local/bin/gh.tmp" &&
+    chmod 755 "$HOME/.local/bin/gh.tmp" &&
+    mv "$HOME/.local/bin/gh.tmp" "$HOME/.local/bin/gh"
+  rc=$?
+  rm -rf "$gh_tmp"
+  return $rc
+}
+
+# What installing gh alone runs, shown before it's asked for.
+gh_plan() {
+  if [ "$platform" = darwin ]; then say "    To install it, Kode's setup will run:
+      brew install gh"
+  else say "    To install it, Kode's setup will:
+      download gh from github.com/cli/cli releases into ~/.local/bin (checksum-checked, no root needed)"
+  fi
+}
+
+# gh alone, with no root: Homebrew on macOS, its release on Linux. Judged by gh being there after.
+install_gh_alone() {
+  if [ "$platform" = darwin ]; then
+    command -v brew >/dev/null 2>&1 || { say "    gh is installed with Homebrew (https://brew.sh), which isn't here."; return 1; }
+    brew install gh </dev/null || true
+  else
+    install_gh || return 1
+  fi
+  hash -r 2>/dev/null || true
+  command -v gh >/dev/null 2>&1
+}
+
+# --only gh: gh alone, as Kode's GitHub dialog asks for it.
+if [ "$only" = gh ]; then
+  if command -v gh >/dev/null 2>&1; then ok "gh" "installed"; exit 0; fi
+  case $install_deps in
+    yes) ;;
+    no) die "gh isn't installed. Install it from https://cli.github.com, or drop --no-install-deps." ;;
+    ask)
+      $interactive || die "gh isn't installed. Run with --install-deps to install it, or install it from https://cli.github.com."
+      gh_plan
+      ask "Install gh, GitHub's command-line tool?" || die "gh isn't installed. Install it from https://cli.github.com."
+      ;;
+  esac
+  install_gh_alone || die "couldn't install gh. Install it yourself from https://cli.github.com."
+  ok "Installed" "gh"
+  exit 0
+fi
+
 # What's missing, and the plan to install it: `plan` is shown to the user, `pkgs` goes to the
 # package manager, `gh_download` fetches gh from its GitHub release (Linux).
 missing="" pkgs="" plan="" gh_download=false claude_install=false opencode_install=false kiro_install=false
 add_missing() { missing="${missing:+$missing, }$1"; }
 git_ok || { add_missing git; pkgs="$pkgs git"; }
 command -v curl >/dev/null 2>&1 || { add_missing curl; pkgs="$pkgs curl"; }
-gh_skipped=false
+# gh is optional (Kode asks for it when a PR or a review needs it): --install-deps installs it with
+# the rest, an install that can ask offers it on its own once the rest is there, and any other skips it.
+gh_skipped=false gh_offer=false
 if ! command -v gh >/dev/null 2>&1; then
-  # With GITHUB_TOKEN, Meko downloads with the token, so an unattended install can go on without gh
-  # (Kode then can't open PRs or follow reviews until it's installed).
-  if [ -n "${GITHUB_TOKEN:-}" ] && [ "$install_deps" != yes ]; then gh_skipped=true
-  else
+  if [ "$install_deps" = yes ]; then
     add_missing "gh (GitHub CLI)"
     if [ "$platform" = darwin ]; then pkgs="$pkgs gh"; else gh_download=true; fi
+  elif $interactive && [ "$install_deps" = ask ]; then gh_offer=true
+  else gh_skipped=true
   fi
 fi
 # OpenCode's installer puts it in ~/.opencode/bin, and adds that to a shell's rc file only.
@@ -236,28 +306,6 @@ first_missing() {
   done
 }
 
-# gh from its own GitHub release (the distro's repos often lack it), checksum-verified.
-install_gh() {
-  case $arch in x64) gh_arch=amd64 ;; *) gh_arch=$arch ;; esac
-  latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/cli/cli/releases/latest) || return 1
-  gh_ver=${latest##*/v}
-  [ -n "$gh_ver" ] && [ "$gh_ver" != "$latest" ] || return 1
-  gh_tmp=$(mktemp -d)
-  gh_name="gh_${gh_ver}_linux_${gh_arch}"
-  gh_base="https://github.com/cli/cli/releases/download/v$gh_ver"
-  curl -fsSL -o "$gh_tmp/$gh_name.tar.gz" "$gh_base/$gh_name.tar.gz" &&
-    curl -fsSL -o "$gh_tmp/checksums.txt" "$gh_base/gh_${gh_ver}_checksums.txt" &&
-    (cd "$gh_tmp" && grep " $gh_name.tar.gz\$" checksums.txt | sha256_check >/dev/null) &&
-    tar -xzf "$gh_tmp/$gh_name.tar.gz" -C "$gh_tmp" &&
-    mkdir -p "$HOME/.local/bin" &&
-    cp "$gh_tmp/$gh_name/bin/gh" "$HOME/.local/bin/gh.tmp" &&
-    chmod 755 "$HOME/.local/bin/gh.tmp" &&
-    mv "$HOME/.local/bin/gh.tmp" "$HOME/.local/bin/gh"
-  rc=$?
-  rm -rf "$gh_tmp"
-  return $rc
-}
-
 if [ -n "$plan" ]; then
   say "${b}Tools${n}"
   warn "Missing" "$missing"
@@ -328,6 +376,18 @@ if [ -n "$plan" ]; then
   ok "Installed" "$missing"
 fi
 
+# gh, offered on its own once the required tools are there.
+if $gh_offer; then
+  say "${b}GitHub${n}"
+  gh_plan
+  if ask "  Install gh, GitHub's command-line tool, to open PRs and follow reviews?"; then
+    if install_gh_alone; then ok "Installed" "gh"
+    else warn "GitHub" "couldn't install gh (see above)"; gh_skipped=true
+    fi
+  else gh_skipped=true
+  fi
+fi
+
 # Each agent there has to be signed in before Kode can run sessions on it.
 agents=""
 if command -v claude >/dev/null 2>&1; then
@@ -369,14 +429,14 @@ if command -v kiro-cli >/dev/null 2>&1; then
   fi
 fi
 
-# gh signs in to GitHub for PRs and reviews, and Meko downloads Kode's releases with its token.
+# gh signs in to GitHub for PRs and reviews.
 if $gh_skipped; then
-  warn "GitHub" "gh isn't installed: install gh for PRs and reviews"
+  warn "GitHub" "gh isn't installed: Kode asks for it when you open a PR"
 elif ! gh auth status >/dev/null 2>&1; then
-  if $interactive && ask "  gh isn't signed in to GitHub. Kode needs it for PRs and reviews, and Meko for Kode's updates. Sign in now (gh auth login)?"; then
+  if $interactive && ask "  gh isn't signed in to GitHub. Kode needs it for PRs and reviews. Sign in now (gh auth login)?"; then
     gh auth login <"$term" || warn "GitHub" "sign-in didn't finish; run 'gh auth login' later"
   else
-    warn "GitHub" "gh isn't signed in: run 'gh auth login' (needed for PRs, reviews and updates)"
+    warn "GitHub" "gh isn't signed in: run 'gh auth login' (needed for PRs and reviews)"
   fi
 fi
 

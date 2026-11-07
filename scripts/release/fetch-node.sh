@@ -1,7 +1,7 @@
 #!/bin/sh
 # Downloads the Node builds a release bundles from nodejs.org, checks them against SHASUMS256.txt,
 # unpacks each into <dir> and prints each unpacked folder, <dir>/node-v<version>-<platform>, one a
-# line. Kode's, Meko's and Presenter's release workflows use it.
+# line. Kode's, Meko's and Present's release workflows use it.
 #
 #   scripts/release/fetch-node.sh <version> <dir> <linux|darwin>-<arch>...
 #

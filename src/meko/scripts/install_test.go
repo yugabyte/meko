@@ -330,3 +330,77 @@ func TestInstallRefusesUnsupportedMacs(t *testing.T) {
 		t.Errorf("macOS 13: exit %d:\n%s", code, out)
 	}
 }
+
+// Without the room a release needs, the installer says so before it downloads anything.
+func TestInstallChecksTheDiskSpace(t *testing.T) {
+	e := setup(t, goodSums)
+	code, out := e.run(t, []string{"MEKO_TEST_FREE_KB=1500"})
+	if code == 0 || !strings.Contains(out, "  ✗ Disk            needs ") || !strings.Contains(out, " MB free in ") ||
+		!strings.HasSuffix(out, ", has 1 MB\n") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	log, _ := os.ReadFile(e.curlLog) //nolint:gosec // G304: test file
+	if strings.Contains(string(log), "/releases/download/") {
+		t.Errorf("downloaded without the room for it:\n%s", log)
+	}
+}
+
+// A release an earlier run unpacked (one whose meko install then stopped at its checks) isn't
+// downloaded again.
+func TestInstallReusesAnUnpackedRelease(t *testing.T) {
+	e := setup(t, goodSums)
+	if code, out := e.run(t, nil, "--no-service"); code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if err := os.Remove(e.curlLog); err != nil {
+		t.Fatal(err)
+	}
+	code, out := e.run(t, nil, "--no-service")
+	if code != 0 || !strings.Contains(out, "  ✓ Download        meko "+version+" · already downloaded\n") {
+		t.Fatalf("again: exit %d:\n%s", code, out)
+	}
+	log, _ := os.ReadFile(e.curlLog) //nolint:gosec // G304: test file
+	if strings.Contains(string(log), "/releases/download/") {
+		t.Errorf("downloaded again:\n%s", log)
+	}
+	if b, _ := os.ReadFile(e.args); string(b) != "install --no-service\n" { //nolint:gosec // G304: test file
+		t.Errorf("meko ran with %q", b)
+	}
+}
+
+// When meko install's setup of the installed version didn't finish (setup-pending names it), the
+// installer runs it again, as a first install if it was one, instead of saying it's up to date.
+func TestInstallFinishesAPendingSetup(t *testing.T) {
+	e := setup(t, goodSums)
+	if code, out := e.run(t, nil); code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	// As meko install would, before its server failed to start.
+	if err := os.Symlink(version, filepath.Join(e.app, "current")); err != nil {
+		t.Fatal(err)
+	}
+	pending := filepath.Join(e.app, "setup-pending")
+	if err := os.WriteFile(pending, []byte(version+"\nfirst\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(e.args); err != nil {
+		t.Fatal(err)
+	}
+	code, out := e.run(t, nil)
+	if code != 0 || !strings.Contains(out, "  ◆ meko  "+version+" · Linux · x64\n    Finishing the setup of meko "+
+		version+"\n") || !strings.Contains(out, "already downloaded") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	told, _ := os.ReadFile(e.args + ".env") //nolint:gosec // G304: test file
+	if !strings.Contains(string(told), "MEKO_INSTALL_FIRST=1\n") ||
+		!strings.Contains(string(told), "MEKO_INSTALL_FROM=\n") {
+		t.Errorf("meko install wasn't told it's a first install:\n%s", told)
+	}
+	// Once it has finished, the installer says it's up to date again.
+	if err := os.Remove(pending); err != nil {
+		t.Fatal(err)
+	}
+	if code, out = e.run(t, nil); code != 0 || !strings.Contains(out, "is up to date") {
+		t.Errorf("finished: exit %d:\n%s", code, out)
+	}
+}

@@ -1,4 +1,4 @@
-# REVIEW.md: Presenter
+# REVIEW.md: Present
 
 What to check in a change to `src/extensions/present`, beyond the repo's rules.
 
@@ -11,7 +11,7 @@ What to check in a change to `src/extensions/present`, beyond the repo's rules.
    read only from the deck's folder? Is Meko's key kept off its command line? Does a new kind of job
    say what it's doing (activity) and end with a message a person can act on?
 4. **Hand edits.** Can anything Claude does overwrite a hand-edited slide without a change set?
-5. **Storage.** Is every artifact Presenter writes at most `PART_BYTES`? Is `deck.json` still the
+5. **Storage.** Is every artifact Present writes at most `PART_BYTES`? Is `deck.json` still the
    last thing a save writes? Is every fetched piece checked against its hash? A change to the stored
    form needs a new `STORE_VERSION` and a way to read the old one.
 6. **Rendering.** Is everything that comes from a deck rendered as structured blocks, with Markdown

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
 
-// The repo root's scripts/release/*.sh release Kode, Meko and Presenter from one history: each
+// The repo root's scripts/release/*.sh release Kode, Meko and Present from one history: each
 // product has its own tags, versions, notes and pruning (--product, scripts/release/product.sh). The rules
 // about which types release are tested in check-title.test.ts.
 const DIR = fileURLToPath(new URL('../../../../../scripts/release/', import.meta.url));
@@ -53,21 +53,21 @@ describe('release-notes.sh', () => {
     git('tag', 'meko-v0.20260101.0');
   });
 
-  it('gives Kode every releasing subject but Meko’s and Presenter’s, since Kode’s last tag of either prefix', () => {
+  it('gives Kode every releasing subject but Meko’s and Present’s, since Kode’s last tag of either prefix', () => {
     commit('fix(agentk): before the switch');
     git('tag', 'agentk-v0.20260102.0');
     commit('fix(agentk/web): stop clipping the rail');
     commit('fix(repo): a release script');
     commit('feat(meko/cli)!: a Meko command');
-    commit('feat(present/web): a Presenter page');
+    commit('feat(present/web): a Present page');
     commit('fix(meko): a Meko fix');
-    commit('feat(meko,present): a Meko and Presenter change');
-    commit('fix(presenter/web): a Presenter fix under its old component');
+    commit('feat(meko,present): a Meko and Present change');
+    commit('fix(presenter/web): a Present fix under its old component');
     const r = run('release-notes.sh', ['--product', 'agentk']);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('- agentk/web: stop clipping the rail');
     expect(r.stdout).toContain('- repo: a release script');
-    expect(r.stdout).not.toMatch(/meko|present|Presenter|first|before the switch|Breaking/);
+    expect(r.stdout).not.toMatch(/meko|present|Present|first|before the switch|Breaking/);
   });
 
   it('gives Meko only its own subjects, since Meko’s last tag, and exits 3 with none', () => {
@@ -81,23 +81,23 @@ describe('release-notes.sh', () => {
     expect(r.stdout).not.toMatch(/Kode feature|first/);
   });
 
-  it('gives Presenter only the subjects naming present, alone or in a list, and from the first commit before its first tag', () => {
+  it('gives Present only the subjects naming present, alone or in a list, and from the first commit before its first tag', () => {
     commit('feat(agentk): a Kode feature');
     commit('fix(meko): a Meko fix');
     commit('feat(presentish): a lookalike');
     expect(run('release-notes.sh', ['--product', 'present']).status).toBe(3);
-    commit('feat(present/web): a Presenter page');
-    commit('feat(present,meko): install Presenter from its releases');
+    commit('feat(present/web): a Present page');
+    commit('feat(present,meko): install Present from its releases');
     commit('fix(agentk,present/server): a shared fix');
     const r = run('release-notes.sh', ['--product', 'present']);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain('### Features\n\n- present,meko: install Presenter from its releases');
-    expect(r.stdout).toContain('- present/web: a Presenter page');
+    expect(r.stdout).toContain('### Features\n\n- present,meko: install Present from its releases');
+    expect(r.stdout).toContain('- present/web: a Present page');
     expect(r.stdout).toContain('### Fixes\n\n- agentk,present/server: a shared fix');
     expect(r.stdout).not.toMatch(/Kode feature|Meko fix|lookalike|first/);
-    // Presenter's subjects stay out of Kode's notes; the one naming meko is Meko's too.
-    expect(run('release-notes.sh', ['--product', 'agentk']).stdout).not.toMatch(/Presenter page|its releases/);
-    expect(run('release-notes.sh', ['--product', 'meko']).stdout).toContain('- present,meko: install Presenter from its releases');
+    // Present's subjects stay out of Kode's notes; the one naming meko is Meko's too.
+    expect(run('release-notes.sh', ['--product', 'agentk']).stdout).not.toMatch(/Present page|its releases/);
+    expect(run('release-notes.sh', ['--product', 'meko']).stdout).toContain('- present,meko: install Present from its releases');
   });
 
   it('releases a subject that names both components on both trains', () => {
@@ -230,17 +230,17 @@ describe('present-release.yml’s hand-run rebuild', () => {
     for (const t of ['present-v0.20261024.0', 'agentk-v0.20261024.0', 'meko-v0.20261024.0']) git('tag', t);
   });
 
-  it('rebuilds a Presenter tag', () => {
+  it('rebuilds a Present tag', () => {
     const r = rebuild('present-v0.20261024.0');
     expect(r.status).toBe(0);
     expect(r.output).toBe('release=true\nrebuild=true\ntag=present-v0.20261024.0\nversion=0.20261024.0\nref=present-v0.20261024.0\n');
   });
 
   it.each([
-    ['agentk-v0.20261024.0', "isn't a Presenter release tag"],
-    ['meko-v0.20261024.0', "isn't a Presenter release tag"],
+    ['agentk-v0.20261024.0', "isn't a Present release tag"],
+    ['meko-v0.20261024.0', "isn't a Present release tag"],
     ['present-v0.20261099.0', 'no such tag'],
-    ['present-v0.20261020.0', 'from before Presenter moved to src/extensions/present'],
+    ['present-v0.20261020.0', 'from before Present moved to src/extensions/present'],
   ])('refuses %s', (tag, why) => {
     const r = rebuild(tag);
     expect(r.status).toBe(1);

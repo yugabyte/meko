@@ -611,6 +611,7 @@ export class SessionManager {
     // Run to merge from the start is for a task at Code; at Design it's turned on beside Approve.
     const autoRun = !!req.autoRun;
     if (autoRun) checkOpensPr(this.db, { project_id: projectId });
+    if (kind === 'review-pr' || req.pr != null || autoRun) await this.core.gh.require(kind === 'review-pr' ? 'Review a PR' : req.pr != null ? 'A task on a PR' : 'Run to merge');
     if (autoRun && (kind !== 'task' || learn || start !== 'code')) {
       throw new HttpError(400, 'Run to merge can only be picked for a task that starts at Code. For one at Design, turn it on when you approve the design.');
     }

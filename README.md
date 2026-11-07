@@ -65,7 +65,7 @@ meko agent connect             # the MCP URL and token, for any other MCP client
 The REST API takes the same token:
 
 ```sh
-curl -s http://127.0.0.1:7778/api/v1/datapacks -H "Authorization: Bearer $(meko token)"
+curl -s http://127.0.0.1:7777/api/v1/datapacks -H "Authorization: Bearer $(meko token)"
 ```
 
 ## Link to Meko Cloud
@@ -138,7 +138,7 @@ for the context engine and the web UI.
 ```sh
 cd src/meko
 make build context_engine web_ui  # bin/meko (and bin/meko-cli, a link to it), the context engine and the web UI
-./bin/meko start                  # runs in the background: 127.0.0.1:7778, and the web UI on :7777
+./bin/meko start                  # runs in the background on 127.0.0.1:7777: MCP, the API and the web UI
 ```
 
 The first start downloads the embedding model (23 MB), and `meko-cli` calls fail with

@@ -265,7 +265,7 @@ func TestStartMovesAgentKOntoItsNewCommand(t *testing.T) {
 	wantRenamed(t, dir, old)
 }
 
-// extension install kode installs Kode's newest release as it does Presenter's (no installer of
+// extension install kode installs Kode's newest release as it does Present's (no installer of
 // Kode's), then runs its install with this Meko's URL and key and what followed --. --version
 // installs another release, under either tag prefix: one from before the program was me_kode gets
 // that name too. The links of its old names into this data folder go.
@@ -475,19 +475,19 @@ func TestUpdateExtensionAllAndAuto(t *testing.T) {
 	noRealExtensions(t)
 	dir := shortDir(t)
 	installedAgentK(t, dir, installedVersion)
-	installedPresenter(t, dir)
+	installedPresent(t, dir)
 	serveReleases(t, kodeRelease(t, "kode-v"+next, next),
 		fakeRelease{tag: "present-v" + next, pkg: "present", version: next,
 			tgz: presentTarball(t, next, "")})
 	code, out, errs := run("extension", "update", "--all", "--check", "--data-dir", dir)
 	want(t, "--all --check", code, 0, out+errs, "Kode "+next+" is available")
-	want(t, "--all --check", code, 0, out, "Presenter "+next+" is available")
+	want(t, "--all --check", code, 0, out, "Present "+next+" is available")
 	code, out, errs = run("extension", "update", "--all", "--data-dir", dir)
-	want(t, "--all", code, 0, out+errs, "Installed Presenter "+next)
+	want(t, "--all", code, 0, out+errs, "Installed Present "+next)
 	want(t, "--all", code, 0, out, "Installed Kode "+next)
 
 	code, out, errs = run("extension", "update", "present", "--auto=off", "--data-dir", dir)
-	want(t, "--auto=off", code, 0, out+errs, "only reports Presenter's updates")
+	want(t, "--auto=off", code, 0, out+errs, "only reports Present's updates")
 	reg, _ := extensions.Load(dir)
 	if reg.Entries["present"].Auto() || !reg.Entries["kode"].Auto() {
 		t.Errorf("auto %+v", reg.Entries)
@@ -503,7 +503,7 @@ func TestAutoUpdate(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	noRealExtensions(t)
 	dir := shortDir(t)
-	app := installedPresenter(t, dir)
+	app := installedPresent(t, dir)
 	serveReleases(t, fakeRelease{tag: "present-v" + next, pkg: "present", version: next,
 		tgz: presentTarball(t, next, "")})
 	w := testListener(t, dir)

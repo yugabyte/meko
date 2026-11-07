@@ -160,7 +160,7 @@ func (a App) Unpack(tarball, version string) error {
 }
 
 // CheckBinary runs `<exe> version --json` and checks it names version: a binary that can't run on
-// this machine never becomes current. Meko's, Kode's and Presenter's answer {"version":
+// this machine never becomes current. Meko's, Kode's and Present's answer {"version":
 // "<version>"}; a Kode release from before --json prints the bare version, which counts too.
 func CheckBinary(exe, version string) error {
 	name := filepath.Base(exe)

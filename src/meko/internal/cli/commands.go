@@ -251,6 +251,8 @@ func printStatusShort(l paths.Layout, c *client, st server.StatusReply, exts fun
 		r.step(stepWarn, "Web UI", webOffNote)
 	case !st.Web.Listening && st.Web.Error != "":
 		r.step(stepFail, "Web UI", "not listening: "+st.Web.Error)
+	case st.Web.Error != "":
+		r.step(stepFail, "Web UI", st.Web.Error)
 	}
 	if st.Auth == config.AuthNone {
 		r.step(stepWarn, "Auth", "none: every user and program on this machine can read and write your memories")
@@ -294,7 +296,7 @@ func printStatusShort(l paths.Layout, c *client, st server.StatusReply, exts fun
 				k, state = stepFail, "not running"
 			}
 			if !s.TimedOut {
-				k, state = extensionState(extensionTitle(n), k, state, s.Line, ", %s")
+				k, state = extensionState(n, k, state, s.Line, ", %s")
 			}
 			r.step(k, extensionTitle(n), state)
 		}
@@ -344,16 +346,21 @@ func extensionTitle(name string) string {
 	return name
 }
 
-// extensionState is an extension's row in status, its mark and state, from its status command's
+// extensionState is extension name's row in status, its mark and state, from its status command's
 // first line. A line that starts with a mark, as the extensions' own headline does ("✓ Kode 0.2
 // is running (pid 7, up 2h)"), gives the row its mark (a server that runs but doesn't answer is
-// "!" though it exits 0) and its state: the line without the mark and the extension's title. Any
-// other line is added to state (running or not running) through format, and k (from the exit
-// code) stays.
-func extensionState(title string, k stepKind, state, line, format string) (stepKind, string) {
+// "!" though it exits 0) and its state: the line without the mark and the extension's title, or
+// one of its old titles, which an older release still prints. Any other line is added to state
+// (running or not running) through format, and k (from the exit code) stays.
+func extensionState(name string, k stepKind, state, line, format string) (stepKind, string) {
 	for mark, kind := range map[string]stepKind{"✓ ": stepOK, "! ": stepWarn, "✗ ": stepFail} {
 		if rest, ok := strings.CutPrefix(line, mark); ok {
-			return kind, strings.TrimPrefix(rest, title+" ")
+			for _, t := range append([]string{extensionTitle(name)}, extensions.Known[name].OldTitles...) {
+				if after, ok := strings.CutPrefix(rest, t+" "); ok {
+					return kind, after
+				}
+			}
+			return kind, rest
 		}
 	}
 	if line == "" {
@@ -487,7 +494,7 @@ func printSetup(l paths.Layout, exts func() extensionResults, stdout io.Writer) 
 			state = "not running"
 		}
 		if !s.TimedOut {
-			_, state = extensionState(extensionTitle(n), stepOK, state, s.Line, " (%s)")
+			_, state = extensionState(n, stepOK, state, s.Line, " (%s)")
 		}
 		fmt.Fprintf(stdout, "  Extension:      %s, %s\n", n, state)
 	}
@@ -594,7 +601,7 @@ func runToken(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 	}
 	// web_url is where browsers find Meko's web UI and its extensions' (Kode's at /ext/kode/):
 	// "" while it's off ([web] enabled), when web_off says so.
-	web, off := webURL(cfg.Web), !cfg.Web.Enabled
+	web, off := webURL(cfg.Web, cfg.Server.Port), !cfg.Web.Enabled
 	if a.running {
 		if c, cerr := newClient(l); cerr == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -234,7 +234,7 @@ type cloudToken struct {
 	// Account names the linked account without its key (AccountOf), so an extension knows a new key
 	// is another account; "" while unlinked.
 	Account string `json:"account"`
-	// DatapackRouting is always true. Only Kode and Presenter releases from before every datapack
+	// DatapackRouting is always true. Only Kode and Present releases from before every datapack
 	// was routed by id read it: without it they call /api/v1/cloud, which this Meko doesn't have.
 	// Current releases ignore it; it stays until those older ones are gone.
 	DatapackRouting bool `json:"datapack_routing,omitempty"`

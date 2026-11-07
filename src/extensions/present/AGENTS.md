@@ -1,12 +1,12 @@
-# AGENTS.md: Presenter
+# AGENTS.md: Present
 
-Guide for coding agents working on **Presenter**, the Meko extension that builds interactive,
+Guide for coding agents working on **Present**, the Meko extension that builds interactive,
 branching presentations from datapacks. The repo's own rules are in the root
 [AGENTS.md](../../../AGENTS.md); the design as built is [docs/design.md](docs/design.md). Run the
 commands below from `src/extensions/present`.
 
-Presenter is a server on a unix socket in its home, `<Meko's data folder>/extensions/present`.
-Meko's web listener shows its pages at `/ext/present/`, behind Meko's one login, as it shows
+Present is a server on a unix socket in its home, `<Meko's data folder>/extensions/present`.
+Meko shows its pages at `/ext/present/` on its one port, with Meko's access check, as it shows
 Kode at `/ext/kode/`. The server runs Claude Code headless for each deck (one persisted session
 per deck), keeps each deck's draft, saves decks to their Meko datapacks in pieces, and holds the
 rooms of live talks.
@@ -30,7 +30,7 @@ Under `npm run dev` the pages are at `http://127.0.0.1:5179/` with no `<base>`; 
 listener isn't involved, but the server still asks `meko token --json` which Meko to use: a Meko
 on this computer (`meko start`), and through it the Meko Cloud link it keeps (`meko cloud-link`). To try it behind Meko: `npm run build`, put `dist/server/cli.js` on PATH as
 `me_present` (`npm link`: only for Meko to find a build from source; people run `meko present
-<command>`), and run `meko extension install present`, then `meko ui` (Presenter is in its sidebar).
+<command>`), and run `meko extension install present`, then `meko ui` (Present is in its sidebar).
 
 ## Map
 
@@ -40,11 +40,11 @@ on this computer (`meko start`), and through it the Meko Cloud link it keeps (`m
 | `src/shared/ops.ts` | Every change to a deck as typed operations; `applyOps` (checked, never mutates its input), `describeOp` and `defaultTicks` for change sets. |
 | `src/shared/run.ts` | A live run's position and how each console action moves it (`navigate`, `fitRun`). |
 | `src/shared/manifest.ts` | The stored form: the `deck.json` manifest, scene pieces, 4 MiB parts, and turning a deck into them and back. |
-| `src/shared/datapacks.ts` | Presenter's datapack prefixes (`present/template/`, `present/anim/`, `present/deck/`) and deck datapack names. |
+| `src/shared/datapacks.ts` | Present's datapack prefixes (`present/template/`, `present/anim/`, `present/deck/`) and deck datapack names. |
 | `src/shared/types.ts` | The API contract: every route's request and reply and every WebSocket message. Change it first. |
-| `src/server/cli.ts` | The `me_present` program, which Meko runs (people run it as `meko present <command>`; the extension is `present`: its folder, tags, tarballs and `/ext/present/`): `serve`, and what Meko runs (`start`, `stop`, `status`, `install`, `uninstall`, `_handoff`, and `_busy`, which exits 0 while a talk is live so Meko's automatic update waits). The pid file counts only when its process is a Presenter server (`isServer`). Run by `meko start` and `meko stop` (`MEKO_SUMMARY=1`), `start` and `stop` print one row of Meko's summary. |
+| `src/server/cli.ts` | The `me_present` program, which Meko runs (people run it as `meko present <command>`; the extension is `present`: its folder, tags, tarballs and `/ext/present/`): `serve`, and what Meko runs (`start`, `stop`, `status`, `install`, `uninstall`, `_handoff`, and `_busy`, which exits 0 while a talk is live so Meko's automatic update waits). The pid file counts only when its process is a Present server (`isServer`). Run by `meko start` and `meko stop` (`MEKO_SUMMARY=1`), `start` and `stop` print one row of Meko's summary. |
 | `src/server/status.ts` | `meko present status`'s output (`statusLines`), shaped like `meko status`: a headline always marked ✓ or ✗ (Meko shows it in its own row without the mark and the title), the server and Claude Code rows, then the pages and the home; the uptime from the pid file's time. |
-| `src/server/summary.ts` | That row: Meko's format (`  ✓ Presenter       started`), colored (bold yellow for `!`) only on a terminal without `NO_COLOR` and with `TERM` not `dumb` (Meko's `docs/install.md`, "The summary rows"). |
+| `src/server/summary.ts` | That row: Meko's format (`  ✓ Present         started`), colored (bold yellow for `!`) only on a terminal without `NO_COLOR` and with `TERM` not `dumb` (Meko's `docs/install.md`, "The summary rows"). |
 | `src/server/server.ts` | Fastify on the socket: pages (`<base href="/ext/present/">`, no framing), API, WebSockets, the same-origin check, `POST /_meko/changed` (Meko's notice that its Meko Cloud link changed, or that its server started) and `GET /_meko/busy` (whether a talk is live, for `_busy`). |
 | `src/server/paths.ts` | The home by Meko's rule (`resolve-cases.json`), the socket path (under `/tmp` for a long home, not `$TMPDIR`), `refuseOtherMeko`. |
 | `src/server/meko.ts` | `MekoPort` and its MCP + REST client (`datapack_create` never sent twice, `mayRetry`). Which Meko is Meko's to say, from `meko token --json` and never stored (`probeMeko`, `mekoFinder`): always the Meko on this computer, which passes calls on to Meko Cloud while it links it (Meko Cloud named by the link's `web_url`): REST at its `/api/v1`, serving its own datapacks too (`localIds`), or Meko Cloud itself when an older Meko hands out the link's key (REST on the link's own `api_url`, another host); a link Meko couldn't read keeps the last one, or finds no Meko before one was read. One connection at a time; `current()` (Claude's runs) reads Meko afresh. `reset()` (forgetting the link too) when Meko posts `/_meko/changed` (a link change, or its server's start). |
@@ -83,7 +83,7 @@ on this computer (`meko start`), and through it the Meko Cloud link it keeps (`m
 - Tests: new behavior gets one test, in an `it.each` table when it's cases of one rule. Tests never
   touch the real Meko, Claude Code or home (`test/setup.ts`).
 - Commits and PR titles name the `present` component (`feat(present/web): …`). A `feat`, `fix`,
-  `perf` or `deps` subject naming it cuts a Presenter release (`.github/workflows/present-release.yml`,
+  `perf` or `deps` subject naming it cuts a Present release (`.github/workflows/present-release.yml`,
   tags `present-v<version>`), which Meko installs and updates.
 - Keep this file, `README.md` and `docs/design.md` current in the same commit as the code, and
   check changes against [REVIEW.md](REVIEW.md).

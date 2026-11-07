@@ -1,16 +1,16 @@
-name: Presenter release
+name: Present release
 
-# Presenter (src/extensions/present) releases on its own train, beside Kode's and Meko's.
+# Present (src/extensions/present) releases on its own train, beside Kode's and Meko's.
 # Versions are 0.<UTC date YYYYMMDD>.<n>, tagged present-v<version>. A push to main that changes
 # src/extensions/present cuts a release when it contains present feat/fix/perf/deps commits
-# (naming present, alone or in a list such as present,meko) since the last Presenter tag and the
+# (naming present, alone or in a list such as present,meko) since the last Present tag and the
 # tests pass. The release scripts are the repo root's scripts/release/*.sh --product present.
 # A release carries present-<version>-<os>-<arch>.tar.gz and SHA256SUMS, no installer: Meko
 # installs and updates them itself (meko extension install present, meko extension update
 # present). Run the workflow by hand to force a release, or to rebuild the assets of an existing
 # present-v tag.
 #
-# Presenter has no native modules, so one Linux job builds it once and packages every platform,
+# Present has no native modules, so one Linux job builds it once and packages every platform,
 # each with its own Node; a macOS runner smoke-tests the darwin tarball.
 
 on:
@@ -66,16 +66,16 @@ jobs:
         run: |
           set -eu
           if [ -n "${DISPATCH_TAG:-}" ]; then
-            # Only Presenter's own tags: another product's would get Presenter's tarballs and checksums.
+            # Only Present's own tags: another product's would get Present's tarballs and checksums.
             case $DISPATCH_TAG in
               present-v[0-9]*) ;;
-              *) echo "$DISPATCH_TAG isn't a Presenter release tag (present-v<version>)"; exit 1 ;;
+              *) echo "$DISPATCH_TAG isn't a Present release tag (present-v<version>)"; exit 1 ;;
             esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
-            # This workflow builds from src/extensions/present; older tags have Presenter in
+            # This workflow builds from src/extensions/present; older tags have Present in
             # extensions/present.
             git cat-file -e "$DISPATCH_TAG:src/extensions/present/package.json" 2>/dev/null ||
-              { echo "$DISPATCH_TAG is from before Presenter moved to src/extensions/present and can't be rebuilt"; exit 1; }
+              { echo "$DISPATCH_TAG is from before Present moved to src/extensions/present and can't be rebuilt"; exit 1; }
             version=${DISPATCH_TAG#present-v}
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=$version"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
             exit 0
@@ -290,7 +290,7 @@ jobs:
           set -eu
           sh scripts/release/release-notes.sh --product present > notes.md || echo "Maintenance release." > notes.md
           # Not "latest": the repo's latest release is Meko's (meko-release.yml), whose installer is
-          # the one-line install. Meko finds Presenter's newest release by its tag.
+          # the one-line install. Meko finds Present's newest release by its tag.
           gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY" \
             dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/SHA256SUMS.sig
 
@@ -308,7 +308,7 @@ jobs:
         with:
           subject-path: dist-release/*.tar.gz
 
-      - name: Delete Presenter releases beyond the newest 5
+      - name: Delete Present releases beyond the newest 5
         if: needs.plan.outputs.rebuild == 'false'
         # A failed prune never fails the release; the next one tries again.
         continue-on-error: true

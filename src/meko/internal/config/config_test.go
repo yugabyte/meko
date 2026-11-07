@@ -21,7 +21,7 @@ func TestLoadPrecedence(t *testing.T) {
 		wantPort  int
 		wantLevel string
 	}{
-		{name: "defaults", wantPort: 7778, wantLevel: "info"},
+		{name: "defaults", wantPort: 7777, wantLevel: "info"},
 		{name: "file", file: "[server]\nport = 9001\n[log]\nlevel = \"debug\"\n", wantPort: 9001, wantLevel: "debug"},
 		{
 			name: "env over file", file: "[server]\nport = 9001\n",
@@ -71,8 +71,11 @@ func TestLoadErrors(t *testing.T) {
 		{name: "unknown auth mode", file: "[server]\nauth = \"nnone\"\n", want: []string{`server.auth "nnone"`}},
 		{name: "unknown auth mode in env", env: map[string]string{"MEKO_AUTH": "off"}, want: []string{`"off"`}},
 		{name: "unknown web access", file: "[web]\naccess = \"public\"\n", want: []string{`web.access "public"`}},
-		{name: "web port out of range", env: map[string]string{"MEKO_WEB_PORT": "0"}, want: []string{"web.port 0"}},
-		{name: "both listeners on one port", file: "[web]\nport = 7778\n", want: []string{"both 7778"}},
+		// Meko has one port: the web listener's old setting is refused, saying where it went.
+		{name: "web port in the file", file: "[web]\nport = 8443\n",
+			want: []string{"config.toml", "[web] port is gone", "[server] port"}},
+		{name: "web port in env", env: map[string]string{"MEKO_WEB_PORT": "9443"},
+			want: []string{"MEKO_WEB_PORT", "[server] port"}},
 		{name: "a cert without its key", file: "[tls]\ncert = \"/c.pem\"\n", want: []string{"tls.cert and tls.key"}},
 	}
 	for _, tc := range cases {
@@ -292,21 +295,41 @@ func TestCallHomeSettings(t *testing.T) {
 func TestWebSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	c, err := Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.Web != (Web{Port: 7777, Access: AccessLocal, Enabled: true}) {
-		t.Fatalf("defaults: %+v %v", c.Web, err)
+	if err != nil || c.Web != (Web{Access: AccessLocal, Enabled: true}) || c.Server.Port != 7777 {
+		t.Fatalf("defaults: %+v %d %v", c.Web, c.Server.Port, err)
 	}
-	file := "[web]\nport = 8443\naccess = \"remote\"\nname = \"dev.example.com\"\n"
+	file := "[web]\naccess = \"remote\"\nname = \"dev.example.com\"\n"
 	if err = os.WriteFile(path, []byte(file), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, err = Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.Web != (Web{Port: 8443, Access: AccessRemote, Name: "dev.example.com", Enabled: true}) {
+	if err != nil || c.Web != (Web{Access: AccessRemote, Name: "dev.example.com", Enabled: true}) {
 		t.Fatalf("from the file: %+v %v", c.Web, err)
 	}
-	env := map[string]string{"MEKO_WEB_PORT": "9443", "MEKO_WEB_ACCESS": "local"}
+	env := map[string]string{"MEKO_WEB_ACCESS": "local"}
 	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
-	if err != nil || c.Web.Port != 9443 || c.Web.Access != AccessLocal {
+	if err != nil || c.Web.Access != AccessLocal {
 		t.Fatalf("env over the file: %+v %v", c.Web, err)
+	}
+}
+
+// A port an older Meko wrote to web.toml (from install or the handoff) is ignored, not refused:
+// the user never chose it there, and Meko's port is [server] port. The next write drops it.
+func TestWebFileOldPort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(WebFile(path), []byte("[web]\nport = 8443\naccess = \"remote\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Server.Port != 7777 || c.Web.Access != AccessRemote {
+		t.Fatalf("with web.toml's old port: %d %+v %v", c.Server.Port, c.Web, err)
+	}
+	if err = SetWebEnabled(path, false); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(WebFile(path))
+	if strings.Contains(string(b), "port") || !strings.Contains(string(b), `access = "remote"`) {
+		t.Fatalf("web.toml after a write: %q", b)
 	}
 }
 
@@ -317,7 +340,7 @@ func TestAddWeb(t *testing.T) {
 	if err := os.WriteFile(path, []byte(mine), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wrote, err := AddWeb(path, Web{Port: 7777, Access: AccessRemote}, TLS{Cert: "/a/c.pem", Key: "/a/k.pem"})
+	wrote, err := AddWeb(path, Web{Access: AccessRemote}, TLS{Cert: "/a/c.pem", Key: "/a/k.pem"})
 	if err != nil || !wrote {
 		t.Fatalf("first add: %v %v", wrote, err)
 	}
@@ -341,12 +364,11 @@ func TestAddWeb(t *testing.T) {
 	if err = os.WriteFile(path, []byte(mine+"[web]\naccess = \"local\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if c, err = Load(path, func(string) string { return "" }, Overrides{}); err != nil || c.Web.Access != AccessLocal ||
-		c.Web.Port != 7777 {
+	if c, err = Load(path, func(string) string { return "" }, Overrides{}); err != nil || c.Web.Access != AccessLocal {
 		t.Fatalf("config.toml over web.toml: %+v %v", c.Web, err)
 	}
 	fresh := filepath.Join(t.TempDir(), "config.toml")
-	if err = os.WriteFile(fresh, []byte("[web]\nport = 8000\n"), 0o600); err != nil {
+	if err = os.WriteFile(fresh, []byte("[web]\nname = \"dev.example.com\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if wrote, err = AddWeb(fresh, Web{Access: AccessRemote}, TLS{}); err != nil || wrote {
@@ -402,5 +424,98 @@ func TestSetWebEnabled(t *testing.T) {
 	}
 	if err := SetWebEnabled(path, false); !errors.Is(err, ErrWebEnabledSet) {
 		t.Fatalf("with config.toml's own enabled: %v", err)
+	}
+}
+
+// Install's pick of a port goes in config.toml's [server] under its mark: added with the table, at
+// the top of a [server] the user wrote, or in place of an earlier pick, with the rest of the file
+// kept. A port the user chose isn't moved.
+func TestSetPickedPort(t *testing.T) {
+	noEnv := func(string) string { return "" }
+	cases := []struct{ name, before, after string }{
+		{"no file", "", "[server]\n" + pickedPortMark + "\nport = 7778\n"},
+		{"no [server]", "# mine\n[log]\nlevel = \"debug\"",
+			"# mine\n[log]\nlevel = \"debug\"\n\n[server]\n" + pickedPortMark + "\nport = 7778\n"},
+		{"[server] without a port", "[server]  # the port\nauth = \"token\"\n[log]\nlevel = \"info\"\n",
+			"[server]  # the port\n" + pickedPortMark + "\nport = 7778\nauth = \"token\"\n[log]\nlevel = \"info\"\n"},
+		{"an earlier pick", "[server]\n" + pickedPortMark + "\nport = 7790\nauth = \"token\"\n",
+			"[server]\n" + pickedPortMark + "\nport = 7778\nauth = \"token\"\n"},
+	}
+	for _, c := range cases {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if c.before != "" {
+			if err := os.WriteFile(path, []byte(c.before), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if chosen, err := PortChosen(path, noEnv); err != nil || chosen {
+				t.Errorf("%s: chosen before = %v, %v", c.name, chosen, err)
+			}
+		}
+		if err := SetPickedPort(path, 7778); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		b, _ := os.ReadFile(path) //nolint:gosec // G304: the test's own file
+		if string(b) != c.after {
+			t.Errorf("%s:\n%s\nwant:\n%s", c.name, b, c.after)
+		}
+		cfg, err := Load(path, noEnv, Overrides{})
+		if err != nil || cfg.Server.Port != 7778 {
+			t.Errorf("%s: loads port %d, %v", c.name, cfg.Server.Port, err)
+		}
+		if chosen, err := PortChosen(path, noEnv); err != nil || chosen {
+			t.Errorf("%s: install's pick counted as chosen: %v, %v", c.name, chosen, err)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	mine := "[server]\nport = 9001\n"
+	if err := os.WriteFile(path, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if chosen, err := PortChosen(path, noEnv); err != nil || !chosen {
+		t.Errorf("the user's port: chosen = %v, %v", chosen, err)
+	}
+	if err := SetPickedPort(path, 7778); !errors.Is(err, ErrPortChosen) {
+		t.Errorf("moved the user's port: %v", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != mine { //nolint:gosec // G304: the test's own file
+		t.Errorf("the user's config.toml changed: %s", b)
+	}
+	other := filepath.Join(t.TempDir(), "config.toml")
+	withPort := func(k string) string { return map[string]string{"MEKO_PORT": "9002"}[k] }
+	if chosen, _ := PortChosen(other, withPort); !chosen {
+		t.Error("MEKO_PORT isn't a chosen port")
+	}
+}
+
+// Install's pick goes back out of config.toml, its comment with it, once the default port is free
+// again; the rest of the file, and a port the user chose, stay.
+func TestClearPickedPort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := ClearPickedPort(path); err != nil {
+		t.Errorf("no file: %v", err)
+	}
+	before := "[server]\nauth = \"token\"\n[log]\nlevel = \"info\"\n"
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPickedPort(path, 7778); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearPickedPort(path); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != before { //nolint:gosec // G304: the test's own file
+		t.Errorf("after: %q, want %q", b, before)
+	}
+	mine := "[server]\nport = 9001\n"
+	if err := os.WriteFile(path, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearPickedPort(path); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != mine { //nolint:gosec // G304: the test's own file
+		t.Errorf("the user's port was removed: %q", b)
 	}
 }

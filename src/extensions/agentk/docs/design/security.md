@@ -11,7 +11,7 @@ own copy.
   Its server listens only on a unix socket (`Paths.webSock`, `web.sock` in its home, or in its
   private socket folder in the temp dir when that path is too long), in a folder only you can open,
   and lets in every request that arrives there. The Meko on this computer serves it to browsers at
-  `/ext/kode/` on its web listener (`:7777`), with the path stripped, after its own access
+  `/ext/kode/` on its port (`:7777`), with the path stripped, after its own access
   check ([Meko's web.md](../../../../meko/docs/web.md)):
   - **Local access** (Meko's `[web] access = "local"`): Meko listens on 127.0.0.1 over plain HTTP,
     and a request from this computer needs no login: a loopback peer, a `Host` of `localhost`,

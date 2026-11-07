@@ -14,6 +14,12 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   what Meko couldn't answer shows on Meko's Context Gaps until Kode's learn step teaches it, so
   the next session answers that from Meko too. Take it any time from **Take the Kode tour** on the
   empty screen or **Start the Kode tour** in the command palette. More levels follow.
+- **gh when you need it.** Kode installs without gh, GitHub's command-line tool (setup offers it,
+  and installs it with `--install-deps`). The first time you do something that works on GitHub
+  (Open PR, Run to merge, a move to Pull Request, Merge, Review a PR, a task on a PR, a GitHub
+  link, the work queue's GitHub source) while gh isn't installed or signed in, the **GitHub**
+  dialog installs it, without root, and signs it in with GitHub's one-time code, from any browser,
+  a phone's too. Then try again.
 
 ## Projects and sessions
 

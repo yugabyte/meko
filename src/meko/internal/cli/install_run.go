@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/service"
@@ -228,32 +229,13 @@ func removePathLines(home string) ([]string, error) {
 	return changed, nil
 }
 
-// checkAPIPort fails install, before anything is written, when another program holds the API port:
-// the service would be written and then fail to start. A port a Meko server holds is fine: this
-// data folder's (install restarts it), or the installed service's other data folder's (installing
-// the service moves it to this one). The web port isn't checked, since Meko takes it over from an
-// Kode on this computer.
-func checkAPIPort(l paths.Layout, m service.Manager, home string, r report, stderr io.Writer) int {
-	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
-	if err != nil {
-		return fail(stderr, err)
-	}
-	port := cfg.Server.Port
-	if mekoHolds(l, m, port) {
-		return exitOK
-	}
-	if err := portFree(port); err != nil {
-		portInUse(r, port, homeRel(l.Config, home))
-		return fail(stderr, fmt.Errorf("port %d is in use: %w", port, err))
-	}
-	return exitOK
-}
-
 // mekoHolds reports whether a Meko server that install replaces listens on port: this data
-// folder's, or the one the installed service runs.
+// folder's, or the one the installed service runs. Its port file names the port agents use; a Meko
+// from before one port listened on its web UI's too (7777, beside 7778 in the port file), which
+// its status reports.
 func mekoHolds(l paths.Layout, m service.Manager, port int) bool {
 	dirs := []string{l.Root}
-	if m.Installed() && m.DataDir() != "" {
+	if m != nil && m.Installed() && m.DataDir() != "" {
 		dirs = append(dirs, m.DataDir())
 	}
 	for _, d := range dirs {
@@ -264,8 +246,31 @@ func mekoHolds(l paths.Layout, m service.Manager, port int) bool {
 		if p, err := readInt(dl.Port); err == nil && p == port {
 			return true
 		}
+		if webPort(dl) == port {
+			return true
+		}
 	}
 	return false
+}
+
+// webPort is the port a running server's status says its web UI is on, or 0.
+func webPort(l paths.Layout) int {
+	c, err := newClient(l)
+	if err != nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	st, err := c.status(ctx)
+	if err != nil || st.Web == nil {
+		return 0
+	}
+	u, err := url.Parse(st.Web.URL)
+	if err != nil {
+		return 0
+	}
+	p, _ := strconv.Atoi(u.Port())
+	return p
 }
 
 // portFree reports, as an error, another program listening on port on this computer; tests replace it.
@@ -277,41 +282,53 @@ var portFree = func(port int) error {
 	return ln.Close()
 }
 
-// portInUse prints install's failed Server row for a port another program holds, how to find it
-// or move Meko, and that running the installer again is safe.
-func portInUse(r report, port int, config string) {
-	r.step(stepFail, "Server", fmt.Sprintf("port %d is in use by another program", port))
+// portInUse prints install's failed Server row for a port other programs hold, with how to find
+// the one on port, and how to move Meko.
+func portInUse(r report, msg string, port int, move string) {
+	r.step(stepFail, "Server", msg)
 	find := fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port)
 	if runtime.GOOS == "linux" {
 		find = fmt.Sprintf("ss -ltnp 'sport = :%d'", port)
 	}
 	fmt.Fprintf(r.w, "\n    %s%s\n", spin.Dim("See what holds it    ", r.color), spin.Blue(find, r.color))
-	fmt.Fprintf(r.w, "    %sset [server] port in %s\n", spin.Dim("Or move Meko         ", r.color), config)
-	fmt.Fprintf(r.w, "  %s\n", spin.Dim("Nothing was left half-done: running the installer again is safe", r.color))
+	fmt.Fprintf(r.w, "    %s%s\n", spin.Dim("Or move Meko         ", r.color), move)
 }
 
 // addLater is what a first install says in place of the picker, where it can't ask.
 const addLater = "Add an extension at any time: meko extension install kode"
 
-// pickExtension is a first install's last question, asked after the links: which of the known
-// extensions not installed yet to add, or none. The one picked is installed as meko extension
-// install does, on the terminal, where it asks its own questions; it returns its name, or "" for
-// none. Where it can't (no terminal) or mayn't (--non-interactive) ask, it says how to add one
-// later. A failed extension install is a ✗ row and its error, and Meko stays installed.
+// upcoming are the experiences a first install's picker lists as coming soon. They aren't
+// extensions yet (nothing in extensions.Known), so they can't be picked or installed.
+var upcoming = []pickRow{
+	{label: "migrate", detail: "database migrations with a safety net", soon: true},
+	{label: "scribe", detail: "briefs, decks, docs and posts from your context", soon: true},
+}
+
+// skipRow is the picker's last row, which adds none.
+var skipRow = pickRow{label: "skip for now", detail: "explore the base platform — add an experience anytime"}
+
+// pickExtension is a first install's last question, asked after the links: "Choose your agentic
+// experience", which of the known extensions not installed yet to add (each by its Verb, the meko
+// command that runs it, with its Summary), or none; the upcoming ones are listed too, dim, and
+// can't be picked. The one picked is installed as meko extension install does, on the terminal,
+// where it asks its own questions; it returns its name, or "" for none. Where it can't (no
+// terminal) or mayn't (--non-interactive) ask, it says how to add one later. A failed extension
+// install is a ✗ row and its error, and Meko stays installed.
 func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r report) string {
 	return func(r report) string {
 		reg, err := extensions.Load(l.Root)
 		if err != nil {
 			return ""
 		}
-		var names, choices, details []string
+		var names []string
+		var rows []pickRow
 		for _, n := range extensions.KnownNames() {
 			if _, ok := reg.Entries[n]; ok {
 				continue
 			}
+			c := extensions.Known[n]
 			names = append(names, n)
-			choices = append(choices, extensions.Known[n].Title)
-			details = append(details, extensions.Known[n].Summary)
+			rows = append(rows, pickRow{label: cmp.Or(c.Verb, n), detail: c.Summary})
 		}
 		if len(names) == 0 {
 			return ""
@@ -320,8 +337,7 @@ func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r re
 		for i, n := range names {
 			if n == "kode" && i > 0 {
 				names[0], names[i] = names[i], names[0]
-				choices[0], choices[i] = choices[i], choices[0]
-				details[0], details[i] = details[i], details[0]
+				rows[0], rows[i] = rows[i], rows[0]
 			}
 		}
 		var tty *os.File
@@ -334,12 +350,13 @@ func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r re
 		}
 		defer func() { _ = tty.Close() }()
 		fmt.Fprintln(stdout)
-		i, err := pickKey(tty, stdout, "Add an extension?", append(choices, "Skip for now"), details)
+		rows = append(append(rows, upcoming...), skipRow)
+		i, err := pickRows(tty, stdout, "Choose your agentic experience", rows, false)
 		if errors.Is(err, errNoKeyMode) {
 			fmt.Fprintf(stdout, "  %s\n", addLater)
 			return ""
 		}
-		if err != nil || i == len(names) {
+		if err != nil || i >= len(names) {
 			return ""
 		}
 		name := names[i]
@@ -347,7 +364,7 @@ func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r re
 			spin.Dim("   · adds an extension at any time", r.color))
 		err = installExtension(context.Background(), l, name, extInstallOptions{}, true, tty, stdout, stderr)
 		if err != nil {
-			r.step(stepFail, choices[i], "not added: "+err.Error())
+			r.step(stepFail, rows[i].label, "not added: "+err.Error())
 			return ""
 		}
 		return name

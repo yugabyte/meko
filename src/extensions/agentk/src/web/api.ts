@@ -78,7 +78,9 @@ import type {
   UpdateStatus,
 } from '../shared/types';
 import type { HarnessId } from '../shared/harnesses';
+import { GH_NEEDED, type GhStatus } from '../shared/types';
 import { appUrl } from './base';
+import { openGhDialog } from './ghdialog';
 import { checkSignIn } from './signin';
 
 export class ApiError extends Error {
@@ -136,6 +138,8 @@ async function request<T>(
             : `Request failed (${res.status}).`;
     // Kode has no login of its own: a 401 is Meko's, whose sign-in has gone.
     if (res.status === 401) void checkSignIn();
+    // An action that works on GitHub, while gh isn't installed or signed in: the GitHub dialog offers both.
+    if (obj.code === GH_NEEDED) openGhDialog(msg);
     throw new ApiError(res.status, msg, obj);
   }
   return data as T;
@@ -272,6 +276,10 @@ export const api = {
   mekoClaudeSetup: () => post<Settings>('/api/settings/meko/claude-setup'),
   mekoKiroSetup: () => post<Settings>('/api/settings/meko/kiro-setup'),
   updateClaude: () => post<ClaudeCodeStatus>('/api/claude/update'),
+  ghCheck: () => post<GhStatus>('/api/gh/check'),
+  ghInstall: () => post<GhStatus>('/api/gh/install'),
+  ghLogin: () => post<GhStatus>('/api/gh/login'),
+  ghForget: () => request<GhStatus>('DELETE', '/api/gh/job'),
   refreshHarnesses: () => post<HarnessStatus[]>('/api/harnesses/refresh'),
   claimAutoConnect: (id: HarnessId) => post<AutoConnectClaim>(`/api/harnesses/${id}/auto-connect`),
   updateHarness: (id: HarnessId) => post<HarnessStatus>(`/api/harnesses/${id}/update`),

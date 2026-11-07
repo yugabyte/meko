@@ -31,11 +31,11 @@ async function request<T>(method: string, path: string, body?: unknown, init: Re
   const type = res.headers.get('content-type') ?? '';
   if (!type.includes('application/json')) {
     if (res.ok) return undefined as T;
-    throw new RequestError(res.status === 502 ? 'Presenter isn\'t running. Start it with meko start.' : `The request failed (${res.status}).`, res.status);
+    throw new RequestError(res.status === 502 ? 'Present isn\'t running. Start it with meko start.' : `The request failed (${res.status}).`, res.status);
   }
   const data = (await res.json()) as unknown;
   if (!res.ok) {
-    // Presenter's errors are {error: text}; Meko's own (its proxy's when Presenter isn't answering) {error: {code, message}}.
+    // Present's errors are {error: text}; Meko's own (its proxy's when Present isn't answering) {error: {code, message}}.
     const e = data as Partial<ApiError> | { error?: { message?: unknown }; problems?: undefined };
     const message = typeof e.error === 'string' ? e.error : typeof e.error?.message === 'string' ? e.error.message : `The request failed (${res.status}).`;
     throw new RequestError(message, res.status, Array.isArray(e.problems) ? e.problems : []);

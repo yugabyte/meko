@@ -50,7 +50,7 @@ const patchOf = <T>(p: unknown, i: number): T => {
 };
 
 function applyOne(d: Deck, o: Op, i: number): void {
-  if (!o || typeof o !== 'object' || !OP_NAMES.includes((o as { op: OpName }).op)) throw new OpError(i, `"${String((o as { op?: unknown })?.op)}" isn't a change Presenter knows.`);
+  if (!o || typeof o !== 'object' || !OP_NAMES.includes((o as { op: OpName }).op)) throw new OpError(i, `"${String((o as { op?: unknown })?.op)}" isn't a change Present knows.`);
   switch (o.op) {
     case 'addScene': {
       const id = freshId(o.scene?.id, i, 'scene');

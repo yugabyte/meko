@@ -6,6 +6,7 @@ import type { Core } from './core.js';
 import { kvGet, kvSet } from './db.js';
 import { githubRepo, readRemotes } from './git.js';
 import * as github from './github.js';
+import { ghNeededMessage } from './ghstatus.js';
 import { errMsg } from './log.js';
 import { repoKey } from './paths.js';
 import { HttpError } from './projects.js';
@@ -45,6 +46,12 @@ export class PrReviewService {
    */
   async reviewable(projectId: string, q: { pr?: unknown; repoPath?: unknown }): Promise<ReviewablePrs> {
     const p = this.core.projects.row(projectId);
+    // The list alone is also read for a project just opened, to pick where New session starts: no
+    // GitHub dialog for that, just no PRs. A PR asked for by name is the user's ask.
+    if (q.pr == null || q.pr === '') {
+      const gh = await this.core.gh.ready();
+      if (gh !== 'ok') return { prs: [], error: ghNeededMessage('Review a PR', gh) };
+    } else await this.core.gh.require('Review a PR');
     const clones = await this.clones(projectId);
     const local = (repo: string) => localClone(clones, repo);
     if (q.pr != null && q.pr !== '') {

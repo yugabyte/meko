@@ -5,7 +5,7 @@ name: Kode release
 # tagged by product).
 # A push to main cuts a release when it contains Kode's feat/fix/perf/deps commits (component
 # agentk or repo, alone or in a list such as agentk,meko; commits naming only meko release Meko, in
-# meko-release.yml, only present release Presenter, in present-release.yml, and only meko and present
+# meko-release.yml, only present release Present, in present-release.yml, and only meko and present
 # both of those, never Kode) since the last
 # release tag and the tests pass. The release scripts are the repo
 # root's scripts/release/*.sh --product agentk.

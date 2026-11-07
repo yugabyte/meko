@@ -90,7 +90,7 @@ on Claude Code. The no-agent banner's **Settings** opens this tab.
 Meko owns the agents' connections: it lists the agents on this computer and whether each one's `meko`
 MCP server reaches it (`GET /api/v1/agents`, `meko agent list`), and connects or disconnects them
 (`meko agent connect <id>`, its web UI's Agents card). Kode's server reads that list
-(`MekoAgents` in `src/server/mekoagents.ts`) on Meko's API listener, the origin of the local Meko's
+(`MekoAgents` in `src/server/mekoagents.ts`) from the local Meko, at the origin of its
 MCP URL, with its client token (`localMeko()`), at startup, when Settings opens, on **Check again**,
 after an agent's Meko setup, when the local Meko or its Meko Cloud link changes, before a page's
 claim to connect Kiro or OpenCode by itself (below), and before a new

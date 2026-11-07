@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install or upgrade Meko for the current user; no root needed. It installs Meko alone: a first
-# install ends by offering the extensions (Kode, Presenter), which meko extension install adds.
+# install ends by offering the extensions (Kode, Present), which meko extension install adds.
 #
 #   curl -fsSL https://mekodata.ai/install.sh | sh
 #
@@ -178,8 +178,16 @@ if [ -z "$version" ]; then
   version=${tag#meko-v}
 fi
 
-# ---- already installed: nothing to do ----
-if ! $reinstall && [ "$installed" = "$version" ]; then
+# ---- already installed: nothing to do, unless its setup didn't finish ----
+# meko install writes setup-pending (the version, and "first" for a first install) once its checks
+# pass and removes it once the server answers: a setup that failed partway is finished, not skipped.
+finishing=false
+pending_first=""
+if [ -f "$app/setup-pending" ] && [ "$(sed -n 1p "$app/setup-pending")" = "$version" ]; then
+  finishing=true
+  [ "$(sed -n 2p "$app/setup-pending")" = first ] && pending_first=1
+fi
+if ! $reinstall && ! $finishing && [ "$installed" = "$version" ]; then
   if [ -n "$asked" ]; then
     say "  ${g}✓$n ${b}Meko $version is installed$n$d · --reinstall sets it up again$n"
   else
@@ -194,9 +202,43 @@ if [ -n "$installed" ] && [ "$installed" != "$version" ]; then
   say "  ${bl}◆$n ${b}meko$n  $d$installed → $version · $where$n"
 else
   say "  ${bl}◆$n ${b}meko$n  $d$version · $where$n"
-  [ -n "$installed" ] || say "    ${d}Installs into your home folder, no sudo$n"
+  if $finishing && [ "$installed" = "$version" ]; then
+    say "    ${d}Finishing the setup of meko $version$n"
+  elif [ -z "$installed" ]; then
+    say "    ${d}Installs into your home folder, no sudo$n"
+  fi
 fi
 say ""
+
+# ---- disk space ----
+# A release is about 150 MB to download into the temporary folder and 400 MB unpacked; a full disk
+# would otherwise stop tar partway. Both on one file system need the two together.
+dir_of() { d=$1; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; printf '%s' "$d"; }
+free_kb() { [ -n "${MEKO_TEST_FREE_KB:-}" ] && { echo "$MEKO_TEST_FREE_KB"; return; }; df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
+fs_of() { df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $1 }'; }
+need_disk() {
+  where_dir=$(dir_of "$1")
+  have=$(free_kb "$where_dir")
+  case $have in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$have" -lt "$2" ]; then
+    shown=$where_dir
+    case $shown in "$HOME"/*) shown="~/${shown#"$HOME"/}" ;; esac
+    row "${r}✗$n" Disk "needs $(($2 / 1000)) MB free in $shown, has $((have / 1000)) MB"
+    exit 1
+  fi
+}
+if ! $reinstall && [ -x "$app/$version/bin/meko" ]; then
+  reuse=true
+else
+  reuse=false
+  tmp_dir=${TMPDIR:-/tmp}
+  if [ "$(fs_of "$(dir_of "$app")")" = "$(fs_of "$(dir_of "$tmp_dir")")" ]; then
+    need_disk "$app" 800000
+  else
+    need_disk "$tmp_dir" 200000
+    need_disk "$app" 600000
+  fi
+fi
 
 tag="meko-v$version"
 tarball="meko-$version-$platform-$arch.tar.gz"
@@ -204,6 +246,12 @@ base="https://github.com/$repo/releases/download/$tag"
 
 # ---- download and verify ----
 safe=1
+dest="$app/$version"
+if $reuse; then
+  # Unpacked by an earlier run that stopped after it: it's moved into place whole, so it's complete.
+  row "${g}✓$n" Download "meko $version" "already downloaded"
+else
+# (Download, check and unpack, up to the fi after the unpack.)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 began=$(date +%s)
@@ -236,7 +284,6 @@ row "${g}✓$n" Download "meko $version" "$((size / 1000000)) MB in $(($(date +%
 # It takes seconds (some 400 MB, more in a container's home folder), so on a terminal the Install
 # row shows its dots meanwhile; meko install then prints that row in their place.
 staging="$app/.staging.$$"
-dest="$app/$version"
 unpack() {
   mkdir -p "$app" && rm -rf "$staging" && mkdir -p "$staging" || return 1
   tar -xzf "$tmp/$tarball" -C "$staging" || return 1
@@ -272,6 +319,7 @@ case $unpacked in
   3) safe=""; die "unpacking $tarball into $app failed and left $dest missing: run the installer again with --reinstall" ;;
   *) die "unpacking $tarball into $app failed" ;;
 esac
+fi
 
 # ---- set up: app/current, the meko command, the client token and the service ----
 # meko install prints the rest of the run: when it began, the version it replaces, whether it's the
@@ -282,6 +330,7 @@ MEKO_INSTALL_FIRST=""
 MEKO_INSTALL_ASK=1
 if [ -n "$installed" ] && [ "$installed" != "$version" ]; then MEKO_INSTALL_FROM=$installed; fi
 [ -n "$installed" ] || MEKO_INSTALL_FIRST=1
+[ -z "$pending_first" ] || MEKO_INSTALL_FIRST=1
 ! $non_interactive || MEKO_INSTALL_ASK=0
 export MEKO_INSTALL_STARTED MEKO_INSTALL_FROM MEKO_INSTALL_FIRST MEKO_INSTALL_ASK
 set -- install

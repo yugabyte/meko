@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yugabyte/meko/src/meko/internal/auth"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 )
@@ -95,8 +98,9 @@ func TestPathLinesComeAndGo(t *testing.T) {
 	}
 }
 
-// Another program on the API port fails the install before the service is written, saying how to
-// find it or move Meko, and that running the installer again is safe.
+// Another program on a port the user chose (MEKO_PORT, as setup sets it) fails the install before
+// the service is written, saying how to find it or move Meko, and that running the installer
+// again is safe.
 func TestInstallRefusesAPortInUse(t *testing.T) {
 	dir, port := setup(t)
 	noRealExtensions(t)
@@ -108,7 +112,11 @@ func TestInstallRefusesAPortInUse(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+" is in use by another program\n")
+	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+
+		" is in use by another program (a Kode from before Meko served it, or another)\n")
+	want(t, "install's way to find it", code, exitError, out, "    See what holds it    ")
+	// MEKO_PORT overrides config.toml, so the way out is the variable.
+	want(t, "install's way to move it", code, exitError, out, "    Or move Meko         change or unset MEKO_PORT\n")
 	// Nothing was written before the check: no rows of the steps before it, no web.toml, no token.
 	if strings.Contains(out, "✓ Data") {
 		t.Errorf("install wrote the data folder before the port check:\n%s", out)
@@ -117,7 +125,9 @@ func TestInstallRefusesAPortInUse(t *testing.T) {
 		t.Errorf("web.toml was written: %v", err)
 	}
 	want(t, "install's way out", code, exitError, out, "Nothing was left half-done: running the installer again is safe\n")
-	want(t, "install's error", code, exitError, errs, "meko: port "+port+" is in use")
+	if errs != "" || strings.Contains(out, "Report a bug") {
+		t.Errorf("a port the user chose: stderr %q, output %q", errs, out)
+	}
 	if f.spec.DataDir != "" || len(f.calls) != 0 {
 		t.Errorf("the service was touched: %+v %v", f.spec, f.calls)
 	}
@@ -214,5 +224,47 @@ func TestMekoHoldsItsOwnPort(t *testing.T) {
 	other := &fakeService{file: filepath.Join(t.TempDir(), "none")}
 	if mekoHolds(paths.New(dirB), other, p) {
 		t.Error("a port counted as Meko's with no service and no server for this folder")
+	}
+}
+
+// A Meko from before one port wrote its agents' port (7778) to its port file, while its web UI held
+// 7777: installing over it counts 7777 as its own, from its status, and restarts it rather than
+// refusing the port.
+func TestMekoHoldsItsOldWebPort(t *testing.T) {
+	dir, _ := setup(t)
+	l := paths.New(dir)
+	if err := l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireServeLock(l.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { releaseLock(lock) })
+	const webPortNow = 47777
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/status" || r.Header.Get("Authorization") != "Bearer admin-test-token" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"data":{"version":"old","web":{"url":"http://127.0.0.1:%d","listening":true}}}`, webPortNow)
+	}))
+	t.Cleanup(old.Close)
+	u, _ := url.Parse(old.URL)
+	if err = paths.WriteFile(l.Port, []byte(u.Port()+"\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err = auth.WriteToken(l.Token, "admin-test-token"); err != nil {
+		t.Fatal(err)
+	}
+	none := &fakeService{file: filepath.Join(t.TempDir(), "none")}
+	if !mekoHolds(l, none, webPortNow) {
+		t.Error("the old server's web port isn't counted as Meko's")
+	}
+	if p, _ := strconv.Atoi(u.Port()); !mekoHolds(l, none, p) {
+		t.Error("the old server's port file isn't counted as Meko's")
+	}
+	if mekoHolds(l, none, webPortNow+1) {
+		t.Error("another port counted as Meko's")
 	}
 }

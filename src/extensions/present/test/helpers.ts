@@ -42,7 +42,7 @@ export class FakeMeko implements MekoPort {
   where: MekoAt | null = { kind: 'local', host: '127.0.0.1:7778' };
   /**
    * The datapacks the Meko on this computer serves itself while it links Meko Cloud;
-   * null while Presenter doesn't reach Meko Cloud through it.
+   * null while Present doesn't reach Meko Cloud through it.
    */
   here: Set<string> | null = null;
   private clock = Date.parse('2026-11-01T10:00:00Z');

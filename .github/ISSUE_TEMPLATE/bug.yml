@@ -1,7 +1,7 @@
 # The issue skill (.claude/skills/issue/SKILL.md) writes agents' bug reports with these headings:
 # change both together.
 name: Bug report
-description: Something in Meko, Kode or Presenter doesn't work as it should.
+description: Something in Meko, Kode or Present doesn't work as it should.
 type: Bug
 labels: [bug]
 body:
@@ -17,7 +17,7 @@ body:
       options:
         - Meko
         - Kode
-        - Presenter
+        - Present
         - Not sure
     validations:
       required: true

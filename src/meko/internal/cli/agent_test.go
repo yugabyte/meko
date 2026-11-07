@@ -1,18 +1,22 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/yugabyte/meko/src/meko/internal/agents"
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
+	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
+	"github.com/yugabyte/meko/src/meko/internal/store"
 )
 
 // fakeAgents puts fake agent commands first on PATH (claude, codex and kiro-cli unless named). Each
@@ -134,7 +138,7 @@ func TestAgentList(t *testing.T) {
 	_, tok, _ := run("token", "--data-dir", dir)
 	tok = strings.TrimSpace(tok)
 	home := os.Getenv("HOME")
-	kiroAt(t, "http://127.0.0.1:7778/mcp", tok)
+	kiroAt(t, "http://127.0.0.1:"+port+"/mcp", tok)
 	writeFile(t, filepath.Join(home, ".codex", "config.toml"),
 		"[mcp_servers.meko]\nurl = \"https://meko.example.com/mcp\"\n")
 	writeFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers": {"meko": {"url": "http://localhost:7790/mcp"}}}`)
@@ -143,7 +147,7 @@ func TestAgentList(t *testing.T) {
 		"Claude Code   needs reconnecting   meko agent connect claude\n" +
 		"Codex         elsewhere: https://meko.example.com/mcp\n" +
 		"Kiro CLI      connected\n" +
-		"Agents connect to http://127.0.0.1:7778/mcp (Meko on this computer)\n"; code != 0 || errs != "" || out != w {
+		"Agents connect to http://127.0.0.1:" + port + "/mcp (Meko on this computer)\n"; code != 0 || errs != "" || out != w {
 		t.Fatalf("agent list: %d\n%s%s\nwant:\n%s", code, out, errs, w)
 	}
 	writeFile(t, filepath.Join(home, ".claude.json"), `{}`)
@@ -176,13 +180,13 @@ func TestAgentList(t *testing.T) {
 // meko agent connect connects an agent to Meko in a line, and alone prints what any MCP client
 // needs; disconnect takes it out again. Neither needs a server.
 func TestAgentConnect(t *testing.T) {
-	dir, _ := setup(t)
+	dir, port := setup(t)
 	fakeAgents(t, false, "claude", "kiro-cli")
 	_, tok, _ := run("token", "--data-dir", dir)
 	tok = strings.TrimSpace(tok)
 	code, out, errs := run("agent", "connect", "--data-dir", dir)
 	want(t, "agent connect alone", code, 0, out+errs, "Add Meko to any MCP client as a Streamable HTTP server:\n")
-	for _, s := range []string{"http://127.0.0.1:7778/mcp\n", "Authorization: Bearer " + tok + "\n", tok + "\n",
+	for _, s := range []string{"http://127.0.0.1:" + port + "/mcp\n", "Authorization: Bearer " + tok + "\n", tok + "\n",
 		"  meko agent connect claude  Claude Code\n  meko agent connect kiro    Kiro CLI\n",
 		"Meko isn't running: start it with meko start"} {
 		want(t, "agent connect alone", code, 0, out, s)
@@ -226,7 +230,7 @@ func TestAgentConnect(t *testing.T) {
 	fakeAgents(t, true, "claude")
 	code, out, errs = run("agent", "connect", "--data-dir", dir, "claude")
 	want(t, "agent connect claude when it fails", code, 1, errs, "meko agent connect: Couldn't connect Claude Code: "+
-		"claude mcp failed: refused: mcp add --scope user --transport http meko http://127.0.0.1:7778/mcp "+
+		"claude mcp failed: refused: mcp add --scope user --transport http meko http://127.0.0.1:"+port+"/mcp "+
 		"--header Authorization: Bearer <token>. Run meko agent connect for the URL to add it by hand\n")
 	if strings.Contains(out+errs, tok) {
 		t.Errorf("the error shows the token: %s", out+errs)
@@ -239,12 +243,12 @@ func TestAgentConnect(t *testing.T) {
 	code, out, errs = run("cloud-link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "cloud-link", code, 0, out+errs, "Linked to")
 	code, out, _ = run("agent", "connect", "--data-dir", dir)
-	want(t, "agent connect alone, linked", code, 0, out, "  URL      http://127.0.0.1:7778/mcp\n")
+	want(t, "agent connect alone, linked", code, 0, out, "  URL      http://127.0.0.1:"+port+"/mcp\n")
 	if strings.Contains(out, testCloudKey) || strings.Contains(out, cloud) {
 		t.Errorf("agent connect alone, linked:\n%s", out)
 	}
 	_, out, _ = run("agent", "list", "--data-dir", dir)
-	want(t, "agent list, linked", 0, 0, out, "Kiro CLI   connected\nAgents connect to http://127.0.0.1:7778/mcp "+
+	want(t, "agent list, linked", 0, 0, out, "Kiro CLI   connected\nAgents connect to http://127.0.0.1:"+port+"/mcp "+
 		"(Meko on this computer)\n")
 }
 
@@ -382,4 +386,69 @@ func TestCloudLinkWaitsForTheMove(t *testing.T) {
 	if cloudTimeout <= 2*cloudlink.CheckTimeout+agents.MoveTimeout {
 		t.Errorf("cloudTimeout %s is shorter than a link change can take", cloudTimeout)
 	}
+}
+
+// At its first start on one port, Meko connects the agents a Meko before it connected to its old
+// API listener (127.0.0.1:7778) to the one port; once: an agent pointed there later is left as it
+// is, and meko agent list says to reconnect it.
+func TestAgentsMoveToOnePort(t *testing.T) {
+	dir, port := setup(t)
+	fakeAgents(t, false, "kiro-cli")
+	_, tok, _ := run("token", "--data-dir", dir)
+	tok = strings.TrimSpace(tok)
+	kiroAt(t, oldAgentsURL, tok)
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	waitFor(t, "Kiro CLI on the one port", func() bool {
+		return strings.Contains(readFile(t, kiroFile(t)), `"http://127.0.0.1:`+port+`/mcp"`)
+	})
+	if !strings.Contains(readFile(t, kiroFile(t)), "Bearer "+tok) {
+		t.Errorf("mcp.json after the move: %s", readFile(t, kiroFile(t)))
+	}
+	waitFor(t, "the move recorded", func() bool {
+		return strings.Contains(readFile(t, paths.New(dir).Log), "agent moved to Meko's new target")
+	})
+	code, out, errs = run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out+errs, "stopped")
+
+	kiroAt(t, oldAgentsURL, tok)
+	code, out, errs = run("start", "--data-dir", dir, "--port", port)
+	want(t, "start again", code, 0, out+errs, "is running")
+	time.Sleep(time.Second)
+	if !strings.Contains(readFile(t, kiroFile(t)), oldAgentsURL) {
+		t.Errorf("moved again at the second start: %s", readFile(t, kiroFile(t)))
+	}
+	_, out, _ = run("agent", "list", "--data-dir", dir)
+	want(t, "agent list", 0, 0, out, "Kiro CLI   needs reconnecting   meko agent connect kiro\n")
+}
+
+// Agents follow Meko to another port: at a start on a port other than the one they were connected
+// to (meko install moved it, or someone changed [server] port), an agent at exactly the old port's
+// URL is connected to the new one. With none recorded yet, the old port is the default: install
+// may have moved Meko off it in the run that brought this release.
+func TestAgentsFollowThePort(t *testing.T) {
+	dir, port := setup(t)
+	fakeAgents(t, false, "kiro-cli")
+	_, tok, _ := run("token", "--data-dir", dir)
+	tok = strings.TrimSpace(tok)
+	kiroAt(t, "http://127.0.0.1:"+strconv.Itoa(config.DefaultPort)+"/mcp", tok)
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	waitFor(t, "Kiro CLI moved off the default port", func() bool {
+		return strings.Contains(readFile(t, kiroFile(t)), `"http://127.0.0.1:`+port+`/mcp"`)
+	})
+	waitFor(t, "the port recorded", func() bool {
+		_, v, _ := store.Peek(context.Background(), paths.New(dir).DB, keyAgentsPort)
+		return v[keyAgentsPort] == port
+	})
+	code, out, errs = run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out+errs, "stopped")
+
+	kiroAt(t, "http://127.0.0.1:"+port+"/mcp", tok)
+	next := strconv.Itoa(freePort(t))
+	code, out, errs = run("start", "--data-dir", dir, "--port", next)
+	want(t, "start on another port", code, 0, out+errs, "is running")
+	waitFor(t, "Kiro CLI on the new port", func() bool {
+		return strings.Contains(readFile(t, kiroFile(t)), `"http://127.0.0.1:`+next+`/mcp"`)
+	})
 }

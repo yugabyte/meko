@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
-import type { CreateSessionRequest, MoveSessionRequest } from '../../src/shared/types.js';
+import { GH_NEEDED, type CreateSessionRequest, type MoveSessionRequest } from '../../src/shared/types.js';
 
 // GitHub is mocked; git, the session host and the (fake) claude process are real.
 const gh = vi.hoisted(() => ({
@@ -32,6 +32,8 @@ function tip(dir: string): string {
 
 const { makeEnv, waitFor } = await import('../helpers.js');
 const { all, get: dbGet } = await import('../../src/server/db.js');
+const { taskPrs } = await import('../../src/server/taskprs.js');
+const { runActions } = await import('../../src/server/actions.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 const PR = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' as const };
@@ -111,6 +113,35 @@ describe('moves: moving a task session between stages', () => {
     const u = await noTask('Nothing yet');
     expect(await move(u.id, { stage: 'code' })).toMatchObject({ stage: 'code', hasTask: false });
     expect(sent().at(-1)).toContain('Implement what this session has worked out so far');
+  });
+
+  it("refuses what works on GitHub while gh isn't usable, starting nothing, and goes on once it is", async () => {
+    const s = await session({ start: 'code', prompt: 'Fix it.' });
+    env.gh.state = 'missing';
+    await env.core.gh.check();
+    const needed = { status: 409, code: GH_NEEDED };
+    await expect(env.core.lifecycle.openPr(row(s.id))).rejects.toMatchObject(needed);
+    // Do all says which step wants gh, with the code, so the page opens the dialog too.
+    const [step] = await runActions(env.core, [{ type: 'openPr', sessionId: s.id, instructions: '' }], { session: null });
+    expect(step).toMatchObject({ ok: false, code: GH_NEEDED });
+    await expect(env.core.lifecycle.setAutoRun(row(s.id), true)).rejects.toMatchObject(needed);
+    await expect(move(s.id, { stage: 'review' })).rejects.toMatchObject(needed);
+    await expect(env.core.sessions.create(projectId!, { name: 'Review it', kind: 'review-pr', pr: { repo: 'acme/demo', number: 7 } })).rejects.toMatchObject(needed);
+    await expect(env.core.prReview.reviewable(projectId!, { pr: '7' })).rejects.toMatchObject(needed);
+    // The list alone is read for a project just opened too: no PRs, and why, but no dialog.
+    expect(await env.core.prReview.reviewable(projectId!, {})).toEqual({ prs: [], error: expect.stringMatching(/^Review a PR needs gh/) });
+    await expect(taskPrs(env.core, projectId!, {})).rejects.toMatchObject(needed);
+    await expect(env.core.githubLinks.start({ ref: 'acme/demo#7' })).rejects.toMatchObject(needed);
+    // The palette reads a link's plan as typing pauses: the reason, but no code, so no dialog.
+    const plan = await env.core.githubLinks.plan('acme/demo#7').catch((e: unknown) => e);
+    expect(plan).toMatchObject({ status: 409, message: expect.stringMatching(/^Starting from a GitHub link needs gh/) });
+    expect((plan as { code?: string }).code).toBeUndefined();
+    expect(get(s.id)).toMatchObject({ stage: 'code', autoRun: false });
+    expect(env.core.sessions.listForProject(projectId!).length).toBe(1);
+
+    env.gh.state = 'ok';
+    await env.core.lifecycle.openPr(row(s.id));
+    await waitFor(() => transcript(s.id), (t) => t.includes('gh pr create'), 10000, 'the PR prompt');
   });
 
   it('opens a PR from Explore in one move, then picks the PR up with one Pull Request line', async () => {

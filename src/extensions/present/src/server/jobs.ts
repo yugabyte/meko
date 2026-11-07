@@ -26,10 +26,10 @@ const ACTIVITY_MAX = 200;
 export interface JobsDeps {
   decks: DeckStore;
   meko: MekoPort;
-  /** The Claude Code command, with any arguments before Presenter's (tests run a stub with node). */
+  /** The Claude Code command, with any arguments before Present's (tests run a stub with node). */
   claude: string[];
   run: ClaudeRunner;
-  /** The MCP URL and key of the Meko Presenter uses, for Claude's config, or null when there's none. */
+  /** The MCP URL and key of the Meko Present uses, for Claude's config, or null when there's none. */
   mekoCreds: () => Promise<Pick<MekoCreds, 'url' | 'key'> | null>;
   emit: (e: ServerEvent) => void;
 }
@@ -69,7 +69,7 @@ export class Jobs {
 
   /** Queues a job on the deck's session: it runs after the deck's earlier jobs. */
   async start(deckId: string, req: JobRequest): Promise<Job> {
-    // state(), not deck(): a deck of another Meko than the one Presenter uses now isn't Claude's to change.
+    // state(), not deck(): a deck of another Meko than the one Present uses now isn't Claude's to change.
     const { deck } = await this.d.decks.state(deckId);
     if (req.kind === 'ask' && !req.instruction.trim()) throw new HttpError(400, 'Say what to change.');
     const title = req.kind === 'map' ? (req.note ? 'Redraw the story map' : 'Draft the story map')
@@ -234,8 +234,8 @@ export class Jobs {
       let problems: string[];
       if (typeof a === 'string') problems = [a];
       else if (a.ops.some((o) => (o as { op?: unknown } | null)?.op === 'addAsset')) {
-        // An asset needs its bytes here: Presenter adds the files Claude lists, and only those.
-        problems = ['Don\'t use addAsset: list the files you made in "files", and Presenter adds them.'];
+        // An asset needs its bytes here: Present adds the files Claude lists, and only those.
+        problems = ['Don\'t use addAsset: list the files you made in "files", and Present adds them.'];
       } else {
         try {
           const deck = await this.d.decks.deck(j.deckId);

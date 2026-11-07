@@ -2,7 +2,7 @@
 //
 //	<root>/            0700
 //	  config.toml      optional
-//	  web.toml, cloud.toml  settings Meko chose itself: the web listener's, the Meko Cloud link's URLs
+//	  web.toml, cloud.toml  settings Meko chose itself: the web UI's, the Meko Cloud link's URLs
 //	  meko.db          the only database (0600)
 //	  client.token     the token MCP and REST clients send, kept across restarts (0600)
 //	  run/             pid, port, lock, admin token, unix sockets
@@ -52,7 +52,7 @@ type Layout struct {
 	KnowledgeFiles string
 	// Extensions holds each extension's own folder (extensions.Dir); it's the extensions' data, not Meko's.
 	Extensions string
-	// Certs holds the web listener's self-signed certificate (internal/tlscert).
+	// Certs holds the self-signed certificate browsers get with remote access (internal/tlscert).
 	Certs string
 }
 
@@ -117,22 +117,47 @@ func (l Layout) Ensure() error {
 // rolled back before then must still find its files under their old names. A failed move isn't an
 // error, since the context engine just starts a new log and state folder.
 func (l Layout) MoveRenamed() {
-	for _, m := range [][2]string{
+	for _, m := range l.renames() {
+		if movable(m[0], m[1]) {
+			_ = os.Rename(m[0], m[1])
+		}
+	}
+}
+
+// renames are the files MoveRenamed moves: each one's old name and new name.
+func (l Layout) renames() [][2]string {
+	return [][2]string{
 		{filepath.Join(l.LogDir, "memory_engine.log"), l.ContextEngineLog},
 		{filepath.Join(l.Root, "memory_engine"), l.ContextEngineDir},
-	} {
-		if _, err := os.Lstat(m[0]); err != nil {
-			continue
-		}
-		if fi, err := os.Lstat(m[1]); err == nil {
-			if !fi.IsDir() || os.Remove(m[1]) != nil { // Remove takes only an empty folder
-				continue
-			}
-		} else if !os.IsNotExist(err) {
-			continue
-		}
-		_ = os.Rename(m[0], m[1])
 	}
+}
+
+// movable reports whether MoveRenamed would move from to to: from is there, and to is free (missing,
+// or an empty folder, which it removes).
+func movable(from, to string) bool {
+	if _, err := os.Lstat(from); err != nil {
+		return false
+	}
+	if fi, err := os.Lstat(to); err == nil {
+		return fi.IsDir() && os.Remove(to) == nil // Remove takes only an empty folder
+	} else if !os.IsNotExist(err) {
+		return false
+	}
+	return true
+}
+
+// BeforeRenames is l with the context engine's log and state folder at their old names while
+// MoveRenamed hasn't moved them yet: what a start on probation uses. It mayn't move them (a Meko
+// rolled back must find them), and starting the engine under the new names would leave them taken,
+// so MoveRenamed, at the first start past probation, could never move the old ones.
+func (l Layout) BeforeRenames() Layout {
+	if m := l.renames(); movable(m[0][0], m[0][1]) {
+		l.ContextEngineLog = m[0][0]
+	}
+	if m := l.renames(); movable(m[1][0], m[1][1]) {
+		l.ContextEngineDir = m[1][0]
+	}
+	return l
 }
 
 // HomeEnv names the environment variable that sets the data folder.

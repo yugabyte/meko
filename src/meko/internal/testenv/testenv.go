@@ -69,7 +69,7 @@ type Options struct {
 	// MaxContentBytes, if set, is the storage limit instead of the default ([storage] max_content_mb).
 	MaxContentBytes int64
 	// Credential, if set, is the REST routes' credential check instead of the server's, for a
-	// request with credentials the API listener doesn't give (a session, local access).
+	// request with credentials the server's check doesn't give.
 	Credential func(echo.Context) string
 }
 

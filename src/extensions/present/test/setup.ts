@@ -1,5 +1,5 @@
 // Runs before every test file. Tests must never touch the developer's real state: their Meko, their
-// Claude Code, or an installed Presenter. Scrub what a developer's shell carries, and point HOME at
+// Claude Code, or an installed Present. Scrub what a developer's shell carries, and point HOME at
 // an empty folder.
 import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';

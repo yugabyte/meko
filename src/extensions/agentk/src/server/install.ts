@@ -3,7 +3,6 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync,
 import { hostname, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { HARNESS_CAPS, HARNESS_IDS, versionAtLeast, type HarnessId } from '../shared/harnesses.js';
 import { claudeUserDir } from './claude.js';
@@ -28,6 +27,7 @@ import { removeKiroAgent } from './kiro.js';
 import { ensurePrivateDir, fsType, isNetworkFs, PrivateDirError } from './fstype.js';
 import { checkMove, makeHomeParent, mekoDirOf, tmpHomeWarning } from './movehome.js';
 import { kiroMekoGaps } from './mekokiro.js';
+import { depsScript } from './ghstatus.js';
 
 class InstallError extends Error {}
 
@@ -242,14 +242,6 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
   return found;
 }
 
-/**
- * Kode's prerequisites check (git, curl, gh, a coding agent and their sign-ins; it installs what's
- * missing after asking): scripts/deps.sh, which a release has as lib/scripts/deps.sh beside lib/dist.
- */
-export function depsScript(here = dirname(fileURLToPath(import.meta.url))): string {
-  return join(here, '..', '..', 'scripts', 'deps.sh');
-}
-
 /** Runs the prerequisites check on this terminal; a check that fails has said why. */
 function checkTools(args: string[]): void {
   const script = depsScript();
@@ -335,7 +327,7 @@ export async function runInstall(args: string[]): Promise<void> {
     if (inMeko) cfg.meko.home = inMeko;
     else if (process.env.MEKO_HOME) cfg.meko.home = resolve(process.env.MEKO_HOME);
 
-    // 1. The tools: git, curl, gh and a coding agent, installed after asking when missing.
+    // 1. The tools: git, curl and a coding agent, installed after asking when missing, and gh, offered.
     ui.title('Kode setup');
     checkTools([
       ...(interactive ? [] : ['--non-interactive']),
