@@ -935,10 +935,11 @@ function busyWithTurn(session: Session): boolean {
 
 /**
  * A session in Design whose first design isn't written yet (`ProjectView` opens the design panel
- * for it, to show AgentK at work on it): its id, or null.
+ * for it, to show AgentK at work on it): its id, or null. Null while it starts, so the panel leaves
+ * the terminal's startup steps on screen and opens as the first turn begins.
  */
-export function designPending(s: Pick<Session, 'id' | 'stage' | 'desired' | 'hasDesign'> | null | undefined): string | null {
-  return s && s.stage === 'design' && s.desired === 'running' && !s.hasDesign ? s.id : null;
+export function designPending(s: Pick<Session, 'id' | 'stage' | 'desired' | 'hasDesign' | 'status'> | null | undefined): string | null {
+  return s && s.stage === 'design' && s.desired === 'running' && !s.hasDesign && s.status !== 'starting' ? s.id : null;
 }
 
 /**

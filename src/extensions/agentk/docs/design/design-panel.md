@@ -3,7 +3,8 @@
 Part of the [AgentK design](../design.md).
 
 During Design the panel opens as the session comes on screen or enters Design, before the design
-exists (`designPending()` in `src/web/util.ts`), as soon as the design is written, and again whenever
+exists (`designPending()` in `src/web/util.ts`; not while Claude starts, so the terminal's startup
+steps stay on screen, but as its first turn begins), as soon as the design is written, and again whenever
 it's revised, at about 60% of the work area. Until the first design is written, the panel shows
 AgentK at work on it (the header's working line, below, and a placeholder page whose blocks shimmer)
 while it works, and a plain line while it doesn't. An Artifact design is shown in a sandboxed frame (scripts allowed, no
