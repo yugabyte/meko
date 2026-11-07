@@ -5,15 +5,15 @@ import type { TokenTry } from './meko.js';
 import { claudeSettingsToken, mekoClaudeGaps, mekoUrlHost, type ClaudeMeko } from './mekosetup.js';
 
 /**
- * Whether Meko's capture in Claude Code's sessions reaches the Meko AgentK uses (the capture part of
+ * Whether Meko's capture in Claude Code's sessions reaches the Meko Kode uses (the capture part of
  * MekoStatus.claude; its `meko` MCP server is Meko's to report, `mekoagents.ts`). Claude Code keeps
  * its own copy of the server and token in its settings, where the Meko hooks read them, and it can
- * drift from AgentK's. Its token may differ from AgentK's; it must work on AgentK's server: accepted,
- * and seeing the project datapacks AgentK's own token sees. Nothing here changes Claude Code's setup:
+ * drift from Kode's. Its token may differ from Kode's; it must work on Kode's server: accepted,
+ * and seeing the project datapacks Kode's own token sees. Nothing here changes Claude Code's setup:
  * that's only done when the user asks.
  */
 
-/** How long a token's result and AgentK's own datapack list are reused. */
+/** How long a token's result and Kode's own datapack list are reused. */
 export const CLAUDE_MEKO_TTL_MS = 10 * 60 * 1000;
 
 const PLACE = "the token in Claude Code's settings";
@@ -49,7 +49,7 @@ export function tokenOutcomeText(o: TokenOutcome, url: string): string | null {
     case 'missing': {
       const what = o.names.length === 1
         ? `the datapack ${o.names[0]}`
-        : `${o.names.length} of AgentK's project datapacks (${o.names.slice(0, 2).join(', ')}${o.names.length > 2 ? ', …' : ''})`;
+        : `${o.names.length} of Kode's project datapacks (${o.names.slice(0, 2).join(', ')}${o.names.length > 2 ? ', …' : ''})`;
       return `${upper(PLACE)} can't see ${what} on ${host}.`;
     }
     case 'unchecked':
@@ -58,8 +58,8 @@ export function tokenOutcomeText(o: TokenOutcome, url: string): string | null {
 }
 
 /**
- * The installer's token check: Claude Code's token, unless it's AgentK's, must be accepted by
- * AgentK's server. It deliberately stops there, even on a reinstall whose projects already have
+ * The installer's token check: Claude Code's token, unless it's Kode's, must be accepted by
+ * Kode's server. It deliberately stops there, even on a reinstall whose projects already have
  * datapacks: whether it sees them is the server's check (MekoClaudeWatch), which runs once it
  * starts. One that couldn't be checked isn't a gap: the install goes on.
  */
@@ -75,7 +75,7 @@ function hash(s: string): string {
 }
 
 export interface MekoClaudeWatchDeps {
-  /** AgentK's Meko (`resolveMeko`): its MCP URL and token, empty with no Meko. */
+  /** Kode's Meko (`resolveMeko`): its MCP URL and token, empty with no Meko. */
   meko: () => { url: string; apiKey: string };
   /** Claude Code is available for sessions (turned on and installed): nothing to check without it. */
   available: () => boolean;
@@ -83,7 +83,7 @@ export interface MekoClaudeWatchDeps {
   read: () => ClaudeMeko;
   /** Every open project's datapacks. */
   projectDatapacks: () => { id: string; name: string }[];
-  /** The datapacks AgentK's own token sees. */
+  /** The datapacks Kode's own token sees. */
   ownDatapacks: () => Promise<string[]>;
   tryToken: (url: string, token: string) => Promise<TokenTry>;
   /** MekoClaudeWatch.status changed. */
@@ -94,7 +94,7 @@ export interface MekoClaudeWatchDeps {
 
 /**
  * Keeps the capture part of MekoStatus.claude current. A refresh reads Claude Code's settings (cheap)
- * and tries its token, unless it's AgentK's own, on AgentK's server, reusing a token's result for
+ * and tries its token, unless it's Kode's own, on Kode's server, reusing a token's result for
  * CLAUDE_MEKO_TTL_MS. Refreshes run one at a time; one asked for while another runs follows it.
  * Empty while Meko is off or Claude Code isn't available (Core refreshes it when that changes).
  */
@@ -161,7 +161,7 @@ export class MekoClaudeWatch {
     this.set({ gaps, capture: gaps, unchecked, checking: false });
   }
 
-  /** One token on AgentK's server, held to the project datapacks AgentK's own token sees. */
+  /** One token on Kode's server, held to the project datapacks Kode's own token sees. */
   private async check(
     url: string, apiKey: string, token: string, required: { id: string; name: string }[], now: number, force: boolean,
   ): Promise<TokenOutcome> {
@@ -171,11 +171,11 @@ export class MekoClaudeWatch {
         this.own = { key: ownKey, at: now, ids: new Set(await this.o.ownDatapacks()) };
       } catch (e) {
         this.own = null;
-        return { kind: 'unchecked', error: `AgentK couldn't list its own datapacks (${errMsg(e)})` };
+        return { kind: 'unchecked', error: `Kode couldn't list its own datapacks (${errMsg(e)})` };
       }
     }
     const own = this.own.ids;
-    // A datapack AgentK's own token can't see either (deleted in Meko, say) isn't held against Claude Code's.
+    // A datapack Kode's own token can't see either (deleted in Meko, say) isn't held against Claude Code's.
     return tokenOutcome(await this.o.tryToken(url, token), required.filter((d) => own.has(d.id)));
   }
 }

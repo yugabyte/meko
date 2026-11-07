@@ -78,7 +78,7 @@ var mekoCommands = []command{
 		}},
 	{name: "ui stop", group: "Run", summary: "Turn the web UI off, and keep it off",
 		usage: "meko ui stop", examples: []example{
-			{"meko ui stop", "close the web UI's port, AgentK's page with it, until meko ui start"},
+			{"meko ui stop", "close the web UI's port, Kode's page with it, until meko ui start"},
 		}},
 	{name: "stop", group: "Run", summary: "Stop Meko and its extensions",
 		usage: "meko stop [flags]", examples: []example{
@@ -157,7 +157,7 @@ var mekoCommands = []command{
 	{name: groupExtension, subcommands: true, summary: "List, install, update and delete Meko's extensions",
 		usage: "meko extension list|install|update|delete [<name>] [flags]", examples: []example{
 			{"meko extension list", "the extensions, installed or not: running, their version and updates"},
-			{"meko extension install agentk", "install AgentK from its newest release, and run it with Meko"},
+			{"meko extension install kode", "install Kode from its newest release, and run it with Meko"},
 		}},
 	{name: "extension list", group: "Extensions",
 		summary: "Show the extensions: installed or not, running, their version and updates",
@@ -165,29 +165,29 @@ var mekoCommands = []command{
 			{"meko extension list", "a row each: its state, the release installed and its updates"},
 			{"meko extension list --json", "the same, for scripts"},
 		}},
-	{name: "extension install", group: "Extensions", summary: "Add an extension (agentk, present)",
-		usage: "meko extension install agentk|present [flags] [-- <its install's options>]", examples: []example{
-			{"meko extension install agentk", "install AgentK from its newest release, and run it with Meko"},
-			{"meko extension install agentk -- --agent opencode", "pass options on to AgentK's own install"},
+	{name: "extension install", group: "Extensions", summary: "Add an extension (kode, present)",
+		usage: "meko extension install kode|present [flags] [-- <its install's options>]", examples: []example{
+			{"meko extension install kode", "install Kode from its newest release, and run it with Meko"},
+			{"meko extension install kode -- --agent opencode", "pass options on to Kode's own install"},
 		}},
 	{name: "extension update", group: "Extensions", summary: "Update an extension now, or turn its automatic updates off",
-		usage: "meko extension update agentk|present|--all [flags]", examples: []example{
+		usage: "meko extension update kode|present|--all [flags]", examples: []example{
 			{"meko extension update --all", "update every extension now"},
-			{"meko extension update agentk --check", "only look"},
-			{"meko extension update agentk --auto=off", "stop Meko installing its updates on its own"},
+			{"meko extension update kode --check", "only look"},
+			{"meko extension update kode --auto=off", "stop Meko installing its updates on its own"},
 		}},
 	{name: "extension delete", group: "Extensions", summary: "Remove an extension (--purge also deletes its data)",
-		usage: "meko extension delete agentk|present [flags]", examples: []example{
+		usage: "meko extension delete kode|present [flags]", examples: []example{
 			{"meko extension delete present", "stop it and remove it, after asking; its data stays"},
-			{"meko extension delete agentk --purge", "also delete its data: AgentK's sessions and worktrees"},
-			{"meko extension delete agentk --force", "don't ask"},
+			{"meko extension delete kode --purge", "also delete its data: Kode's sessions and worktrees"},
+			{"meko extension delete kode --force", "don't ask"},
 		}},
-	{name: "kode", group: "Extensions", summary: "Run one of AgentK's commands",
+	{name: "kode", group: "Extensions", summary: "Run one of Kode's commands",
 		usage: "meko kode <command> [args]", examples: []example{
-			{"meko kode ui", "open AgentK in your browser"},
-			{"meko kode status", "whether AgentK is running, and its address"},
+			{"meko kode ui", "open Kode in your browser"},
+			{"meko kode status", "whether Kode is running, and its address"},
 			{"meko kode attach <session>", "show a session's terminal in yours (Ctrl+\\ detaches)"},
-			{"meko kode --help", "AgentK's commands"},
+			{"meko kode --help", "Kode's commands"},
 		}},
 	{name: "present", group: "Extensions", summary: "Run one of Present's commands",
 		usage: "meko present <command> [args]", examples: []example{

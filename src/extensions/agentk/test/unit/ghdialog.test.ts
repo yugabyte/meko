@@ -18,7 +18,7 @@ describe('the GitHub dialog', () => {
     answer(409, { error: 'Open project failed.' });
     await expect(api.ghCheck()).rejects.toThrow('Open project failed.');
     expect(ghDialogReason()).toBeNull();
-    const why = "Open PR needs gh, GitHub's command-line tool, which isn't installed: install it from AgentK, or from https://cli.github.com.";
+    const why = "Open PR needs gh, GitHub's command-line tool, which isn't installed: install it from Kode, or from https://cli.github.com.";
     answer(409, { error: why, code: GH_NEEDED });
     await expect(api.sessionAction('s1', 'open-pr')).rejects.toThrow(why);
     expect(ghDialogReason()).toBe(why);

@@ -1,4 +1,4 @@
-// Which open AgentK page shows browser notifications.
+// Which open Kode page shows browser notifications.
 //
 // Every open page gets each notify event. If each one showed it, the notifications would share a
 // tag, only the last page's would survive, and clicking it would focus and navigate that page (a

@@ -88,14 +88,15 @@ func (r *rig) sender(release bool) *Sender {
 		Facts: func(context.Context) Install {
 			return Install{Version: "0.20261109.1", Commit: "abc1234", Platform: "linux", Arch: "amd64", Go: "go1.26.0",
 				Service: "systemd", Auth: "token", Secrets: "file", Update: Update{Channel: "stable", Auto: true},
-				ContextEngine: "ready", Extensions: map[string]bool{"agentk": true}}
+				ContextEngine: "ready", Extensions: map[string]bool{"kode": true}}
 		}})
 }
 
 func TestClient(t *testing.T) {
 	for in, want := range map[string]string{
-		"claude_code:secret-repo": "claude_code", "Claude_Code": "claude_code", "agent-k-local": "agentk",
-		"agentk": "agentk", "meko_cli": "meko_cli", "meko_web_ui": "meko_web_ui", "meko_agent": "none", "": "none",
+		"claude_code:secret-repo": "claude_code", "Claude_Code": "claude_code", "agent-k-local": "kode",
+		"agentk": "kode", "kode": "kode", "meko_cli": "meko_cli", "meko_web_ui": "meko_web_ui",
+		"meko_agent": "none", "": "none",
 		"kiro:x": "kiro", "my-own-bot": "other", "cursor:repo": "cursor",
 	} {
 		if got := Client(in); got != want {
@@ -153,7 +154,7 @@ func TestSendsCountsOnly(t *testing.T) {
 	}
 	p := e.Payload
 	if p.Schema != 3 || p.Install.FirstDay != "2026-11-09" || p.Install.Commit != "abc1234" ||
-		!p.Install.Extensions["agentk"] {
+		!p.Install.Extensions["kode"] {
 		t.Errorf("install: %+v", p.Install)
 	}
 	if p.Totals.Datapacks != 2 || p.Totals.DBBytes <= 0 {
@@ -167,7 +168,7 @@ func TestSendsCountsOnly(t *testing.T) {
 		t.Errorf("today: %+v", today)
 	}
 	wantTools := map[string]int{"context_search": 2, "memory_add": 1, "other": 1}
-	wantClients := map[string]int{"claude_code": 2, "agentk": 1, "other": 1}
+	wantClients := map[string]int{"claude_code": 2, "kode": 1, "other": 1}
 	for k, v := range wantTools {
 		if today.ByTool[k] != v {
 			t.Errorf("byTool: %v, want %v", today.ByTool, wantTools)

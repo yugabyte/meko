@@ -1,20 +1,20 @@
-# AgentK's mod in Claude
+# Kode's mod in Claude
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 Claude Code runs *mods*: plugins of TypeScript function hooks that run inside the Claude process
-(early access). AgentK ships one, `agentk` (`src/mod/agentk`, a couple of hundred lines), that
+(early access). Kode ships one, `kode` (`src/mod/agentk`, a couple of hundred lines), that
 gives the server a way into each session besides the terminal, and a second one beside it,
-`agentk-view` (`src/mod/agentk-view`), that only draws AgentK's prompts (see *How AgentK's prompts
-look* below). The server copies them to `run/mod/agentk` and `run/mod/agentk-view` at startup, writing only files that changed, each through a temp file renamed into
+`agentk-view` (`src/mod/agentk-view`), that only draws Kode's prompts (see *How Kode's prompts
+look* below). The server copies them to `run/mod/kode` and `run/mod/kode-view` at startup, writing only files that changed, each through a temp file renamed into
 place; when a source file is missing or a write fails, it removes the run copy, so sessions start
 without the mod rather than with an old or half-updated one. Claude reloads a `--plugin-dir` mod whenever its files change, so an update reaches running
 sessions without a relaunch, and a plain restart reloads nothing. Every launch adds
-`--plugin-dir run/mod/agentk`, `--plugin-dir run/mod/agentk-view` (when its copy is there) and
+`--plugin-dir run/mod/kode`, `--plugin-dir run/mod/kode-view` (when its copy is there) and
 `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, since hooks modules of
 installed plugins are otherwise off unless Claude Code's own rollout turns them on. That variable
 only helps while the rollout hasn't decided: when its switch serves off, Claude loads no plugin's
-hooks module whatever the variable says, and AgentK types prompts as before. It does this when:
+hooks module whatever the variable says, and Kode types prompts as before. It does this when:
 
 - `[claude] mod` is on (the default);
 - the mod's files are there;
@@ -23,12 +23,12 @@ hooks module whatever the variable says, and AgentK types prompts as before. It 
   as the plugin's message, not the person's (before 2.1.286), or may lack what the learn step
   uses (`$.model.fork`, `$.model.complete`, `$.command.register` and `command.run`, all in 2.1.287's declarations; 2.1.286's couldn't be checked).
 
-**Claude Code's version.** AgentK's setup installs Claude Code with Anthropic's installer (`scripts/deps.sh`) and
+**Claude Code's version.** Kode's setup installs Claude Code with Anthropic's installer (`scripts/deps.sh`) and
 never updates it; Claude Code updates itself, unless that's turned off or it hasn't run for a while.
 `ClaudeCode` (`claudecode.ts`) keeps the version read above and puts it in `AppState.claudeCode`,
 with whether it runs the mod. A running session keeps the version it started with until Claude
 restarts in it, so what matters is the version the next launch gets. While `[claude] mod` is on and
-that version is older than 2.1.287, a banner says so, and that AgentK types its prompts instead:
+that version is older than 2.1.287, a banner says so, and that Kode types its prompts instead:
 
 - **Update Claude Code** runs `claude update`, Claude Code's own updater (`POST /api/claude/update`,
   one at a time, stopped after 5 minutes), then reads the version again; Settings › Harness's Claude
@@ -43,8 +43,8 @@ that version is older than 2.1.287, a banner says so, and that AgentK types its 
 When Claude Code's rollout switch keeps mods off despite a new enough version, nothing shows: an
 update can't fix it, and the switch flips back on by itself.
 
-The mod reaches the server on the hook socket, with the session's `AK_HOOK_SOCK` and
-`AK_HOOK_TOKEN`, like the hook scripts. Its routes answer with `Connection: close`, so a mod that
+The mod reaches the server on the hook socket, with the session's `KODE_HOOK_SOCK` and
+`KODE_HOOK_TOKEN`, like the hook scripts. Its routes answer with `Connection: close`, so a mod that
 keeps polling on one connection can't hold the socket open. Before the socket closes (a stop, or a
 rebind after its file went missing) the server answers every held poll and holds none until it's
 bound again, so no hook is kept out for the 20 seconds a held poll would take:
@@ -57,11 +57,11 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 | `/mod/measure` | From `session.measure` after each turn: the context window's fill, and the plan limits. |
 | `/mod/held` | `{ held: [...] }`, as on a poll, as soon as it changes: a held prompt's `$.prompt.submit` resolved (its turn started) or another plugin refused it. |
 | `/mod/ask` | From a `tool.call` hook on Claude's `AskUserQuestion`: `{ id, questions }` (the call's `tool_use_id` and its questions). The server holds it up to 20 seconds and answers the user's answers by question index (`{ answers: { 0: "Blue" } }`), or 204, and the mod asks again; 410 when it dropped the ask, 400 (`{ error }`) for questions it can't show. Either way the mod then leaves the question to the terminal's dialog. |
-| `/mod/ask/done` | `{ id }`: the call has its answer, from AgentK or the terminal, or ended. |
-| `/mod/questions` | From the `design_questions` tool the mod gives Claude: the design's questions and AgentK's own decisions, checked and saved (`{ text }` for Claude: how many questions, how many open, how many decisions and how many cite Meko), or what's wrong (400, `{ error }`). |
-| `/mod/learn` | A [learn step](recall-and-learn.md#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`, for a `learn` part of kind `extract`), then the duplicate check's reply (`step: "decisions"`, kind `check`). Answered at once, 204, so no request is held while AgentK works with Meko: what comes next arrives on a poll. 410 for a step AgentK gave up on; its usage is still recorded. |
-| `/mod/learn/start` | From `/agentk_learn`, a slash command the mod registers: starts a learn step, answered `{ text }` (the command's output: started, or why not). |
-| `/mod/meko` | From a `tool.call` hook on every tool that goes straight on unless the tool is Meko's (`/^mcp__(?:[\w-]+_)?meko__/`, a plugin's Meko too, checked in the hook: the oldest Claude Code the mod runs in may not take a RegExp matcher): `{ id, state: "start" }` before the call runs, awaited so it always comes before its end, then `{ id, state: "end" }` from a `finally`, so a failed or interrupted call ends too (the hook's `.catch` replays what `next(e)` settled to, so a failed call never runs twice). `id` is the call's `tool_use_id`; an `end` that comes after a reset is dropped without bringing the link back. See *Meko in the dot* under [The app](app.md). Both are answered 204, and the mod doesn't wait for the answer to an `end`. AgentK keeps no record of what each call sent and got back ([Project home](project-home.md)); a mod from before that still sends the call on an `end` answered `{ log: true }`, which the server no longer answers, so it doesn't. |
+| `/mod/ask/done` | `{ id }`: the call has its answer, from Kode or the terminal, or ended. |
+| `/mod/questions` | From the `design_questions` tool the mod gives Claude: the design's questions and Kode's own decisions, checked and saved (`{ text }` for Claude: how many questions, how many open, how many decisions and how many cite Meko), or what's wrong (400, `{ error }`). |
+| `/mod/learn` | A [learn step](recall-and-learn.md#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`, for a `learn` part of kind `extract`), then the duplicate check's reply (`step: "decisions"`, kind `check`). Answered at once, 204, so no request is held while Kode works with Meko: what comes next arrives on a poll. 410 for a step Kode gave up on; its usage is still recorded. |
+| `/mod/learn/start` | From `/kode_learn`, a slash command the mod registers: starts a learn step, answered `{ text }` (the command's output: started, or why not). |
+| `/mod/meko` | From a `tool.call` hook on every tool that goes straight on unless the tool is Meko's (`/^mcp__(?:[\w-]+_)?meko__/`, a plugin's Meko too, checked in the hook: the oldest Claude Code the mod runs in may not take a RegExp matcher): `{ id, state: "start" }` before the call runs, awaited so it always comes before its end, then `{ id, state: "end" }` from a `finally`, so a failed or interrupted call ends too (the hook's `.catch` replays what `next(e)` settled to, so a failed call never runs twice). `id` is the call's `tool_use_id`; an `end` that comes after a reset is dropped without bringing the link back. See *Meko in the dot* under [The app](app.md). Both are answered 204, and the mod doesn't wait for the answer to an `end`. Kode keeps no record of what each call sent and got back ([Project home](project-home.md)); a mod from before that still sends the call on an `end` answered `{ log: true }`, which the server no longer answers, so it doesn't. |
 | `/mod/turn` | From a `turn.complete` hook: `{ turnId, reason: "aborted" }` for a main-loop turn you interrupted (`isAborted`, checked on Claude Code 2.1.287, 2.1.290 and 2.1.296), which fires no `Stop` hook; every other turn goes straight on. Awaited before `next(e)`, so it reaches the server before the engine goes idle and runs a prompt it holds. Answered 204; the server ends the turn (see *Interrupted turns* under the status path in [Architecture](architecture.md)) when one is running, and ignores it otherwise. |
 
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
@@ -105,42 +105,42 @@ paste, then Enter). A prompt is never sent both ways:
 - a `dropped` ack comes after the send resolved, so the caller already counts the prompt as sent.
   The session goes to **Needs you**, naming the prompt (its first line) and the plugin's reason.
   When Claude's prompt box was empty, the mod put the prompt's text there, and the detail says to
-  press Enter in the terminal to send it; otherwise it says to ask AgentK for it in the terminal.
+  press Enter in the terminal to send it; otherwise it says to ask Kode for it in the terminal.
 
 The links are in memory only. After a server restart the mod's next poll brings its link back
-within seconds, and the prompts AgentK queues are in the database anyway. Whether a session's link
+within seconds, and the prompts Kode queues are in the database anyway. Whether a session's link
 is live is in `Session.modLive`: the server pushes a change when the mod is first heard from, on a
 reset, and when a sweep every 2 seconds finds a link gone stale. The UI offers what needs the mod
 (below) only while it's live, and the server checks again on every request.
 
-**How AgentK's prompts look.** AgentK's prompts are long (a stage's steps, Meko's lines), so the
+**How Kode's prompts look.** Kode's prompts are long (a stage's steps, Meko's lines), so the
 terminal draws each as its first line, `<first line> … (+N lines, ctrl+o to expand)`, cut at 200
 characters; the full transcript (ctrl+o) shows it whole, and Claude reads it whole: only the row's
 drawing changes. The view mod does it, with a `ui.render` hook on `UserMessage` rows that hands the
 row on with that text, for:
 
-- a prompt AgentK's mod submitted: the row's origin is `{ kind: "plugin", name: "agentk" }`, which
+- a prompt Kode's mod submitted: the row's origin is `{ kind: "plugin", name: "agentk" }`, which
   the transcript keeps, so a resumed session draws it the same way;
-- the session's first prompt. AgentK passes it on claude's command line, and Claude Code draws that
+- the session's first prompt. Kode passes it on claude's command line, and Claude Code draws that
   like typed text (origin `composer`), so the server keeps its first line (`sessions.first_prompt`,
   set at each launch that starts a conversation, NULL when it starts with none) and passes it to
-  every launch, a resume's too, as `AK_FIRST_PROMPT`; a row whose first line is that one is folded.
+  every launch, a resume's too, as `KODE_FIRST_PROMPT`; a row whose first line is that one is folded.
 
-A prompt whose first line is `AK_HIDDEN_PROMPT` (a workshop host's `AgentK events:`, the first line
+A prompt whose first line is `KODE_HIDDEN_PROMPT` (a workshop host's `Kode events:`, the first line
 of its `guide-event` prompt; empty for other sessions) draws as nothing
-([Workshops](workshops.md)). Prompts AgentK types into the terminal (no live mod) draw in full.
+([Workshops](workshops.md)). Prompts Kode types into the terminal (no live mod) draw in full.
 Both mods compare a prompt's first line as `firstLine()` in `prompts.ts` reads it: its first line
 with text, trimmed.
 
 It's a mod of its own because Claude Code never raises a plugin's `ui.render` hook for the rows of
-prompts that plugin submitted (measured on 2.1.317): AgentK's mod can't draw its own prompts. A hook
+prompts that plugin submitted (measured on 2.1.317): Kode's mod can't draw its own prompts. A hook
 in a second plugin sees them. A view mod that's missing, or a Claude Code without the hook, leaves
 every row as Claude Code draws it.
 
 **Claude's questions.** The mod's `tool.call` hook on `AskUserQuestion` lets Claude's own dialog
 open in the terminal as always (`next(e)`), and sends the questions to the server too
 (`/mod/ask`, asked again after each hold). Whichever is answered first wins: the terminal's answer
-is returned as it is; AgentK's comes back as the tool's result,
+is returned as it is; Kode's comes back as the tool's result,
 `{ questions, answers: { "<question>": "<answer>" } }`, which closes the terminal's dialog (checked
 on Claude Code 2.1.286, and on 2.1.287 (the oldest that loads the mod now) and 2.1.291; so is the
 `design_questions` tool below). The hook's `.catch` falls back to `next(e)`, and any failure
@@ -155,12 +155,12 @@ Code's `text` and `number` questions) is left to the terminal. Text is capped fo
 question 1,000 characters, a label 200, a description 1,000, a preview 8,000); labels are kept
 whole, since the answer names them.
 
-The session goes to **Needs you** with *AgentK asks: <first question>*, and you're notified once;
+The session goes to **Needs you** with *Kode asks: <first question>*, and you're notified once;
 the classic `PermissionRequest` hook for `AskUserQuestion`, which Claude raises as well, uses the
 same words (without the mod too). The questions show:
 
-- in the design's **Questions** view, under **AgentK is asking**, at the top (its tab counts them);
-- in any stage, in a bar above the terminal, *AgentK asks: …* with **Answer**, and on a phone also
+- in the design's **Questions** view, under **Kode is asking**, at the top (its tab counts them);
+- in any stage, in a bar above the terminal, *Kode asks: …* with **Answer**, and on a phone also
   as the ⋯ sheet's first row (with a dot on ⋯). **Answer** opens the questions in a dialog that
   fills the window (a full-height sheet from the bottom on a phone): the questions scroll and
   **Answer** stays at the bottom. Nothing opens by itself: you may be answering in the terminal.
@@ -173,10 +173,10 @@ first on a phone; in the dialog a preview grows to 60% of the window's height be
 text box, which is the dialog's "Other". `POST /api/sessions/:id/ask/:askId` checks the answers
 against the questions (labels must be the question's, one unless it's multi-select, the text
 within 10,000 characters) and hands them to the mod: the labels comma-joined, then the text, as the
-dialog gives them. A 409 means AgentK has moved on: the terminal answered first, or the turn ended.
+dialog gives them. A 409 means Kode has moved on: the terminal answered first, or the turn ended.
 
 **Answers and approvals mid-turn.** Mid-turn means a turn is running (`Session.midTurn`): from its
-`UserPromptSubmit` to its `Stop` (or its interruption, or Claude's end), while AgentK works or
+`UserPromptSubmit` to its `Stop` (or its interruption, or Claude's end), while Kode works or
 Claude waits on a permission prompt or a question during it. A Needs you with no turn behind it (a
 parked recovery, a prompt another plugin refused) isn't, and nor is a design waiting for
 approval; after a server restart only a session showing as working counts. While the mod is live,
@@ -187,9 +187,9 @@ still holds comes from the mod
 (`held` on each poll, and `/mod/held`), so one another plugin refused, or one still held after a
 server restart, counts right; a mod too old to report it (until it reloads) has one taken off at
 each `UserPromptSubmit`. They're in `Session.promptsHeld`. While Claude holds any, the *Design
-ready* notification at a turn end is skipped, since AgentK revises the design again right away, and
+ready* notification at a turn end is skipped, since Kode revises the design again right away, and
 an approval is refused, mid-turn or not: the held answers run first, and the approval would move
-the session to Code while AgentK revises the design.
+the session to Code while Kode revises the design.
 
 **Approve design** works mid-turn too, but waits on the server instead: a turn in Design may still
 change the design (often it's the revision you asked for), and moving to Code at once would lift
@@ -206,7 +206,7 @@ drafts again when the approval was dropped. Without the mod, approving and sendi
 refused mid-turn, as before.
 
 **The design's questions tool.** The mod registers a `design_questions` tool at `session.start`
-(`mcp__agentk__design_questions`; Claude Code may defer it, so the prompt says to load it with
+(`mcp__kode__design_questions`; Claude Code may defer it, so the prompt says to load it with
 ToolSearch). Its input is the questions file's list. The server checks it strictly
 (`checkToolQuestions()` in `design.ts`: each question an object with an id and a question, ids not
 repeated, options with labels, a recommendation that points at an option, a status of open or

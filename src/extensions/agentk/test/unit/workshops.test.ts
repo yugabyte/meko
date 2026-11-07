@@ -31,7 +31,7 @@ interface DemoGame {
 describe('the bundled workshops', () => {
   const bundles = listBundles();
 
-  it('includes the AgentK tour, and each one reads, with its files where workshop.json says', () => {
+  it('includes the Kode tour, and each one reads, with its files where workshop.json says', () => {
     expect(bundles.map((b) => b.id)).toContain(AGENTK_TOUR);
     for (const b of bundles) {
       expect(readWorkshop(b.id)).toEqual(b);
@@ -41,7 +41,7 @@ describe('the bundled workshops', () => {
       for (const br of b.repo.branches) expect(statSync(join(b.root, br.patch)).isFile()).toBe(true);
       if (b.gotchas) expect(statSync(join(b.root, b.gotchas.file)).isFile()).toBe(true);
       // The game opens from disk (file://), where browsers refuse module scripts and fetch; no dot-file
-      // in it could apply to AgentK's own repo.
+      // in it could apply to Kode's own repo.
       for (const f of files(join(b.root, b.repo.dir))) {
         expect(f, f).not.toMatch(/(^|\/)\./);
         if (/\.(js|html)$/.test(f)) expect(readFileSync(join(b.root, b.repo.dir, f), 'utf8'), f).not.toMatch(/type="module"|^\s*(import|export)\s|\bfetch\(/m);
@@ -99,7 +99,7 @@ describe('the bundled workshops', () => {
     const b = readWorkshop(AGENTK_TOUR);
     const parent = tmp();
     const dest = freeFolder(parent, b.repo.folder);
-    const dps = [{ name: 'adlc/repo/agentk-demo/gotchas', id: '0f6b1c1e-0000-4000-8000-00000000a001', about: 'gotchas' }];
+    const dps = [{ name: 'adlc/repo/kode-demo/gotchas', id: '0f6b1c1e-0000-4000-8000-00000000a001', about: 'gotchas' }];
     await buildDemoRepo(b, dest, demoMekoMd(dps));
     // A second one goes beside it.
     mkdirSync(join(parent, `${b.repo.folder}-2`));

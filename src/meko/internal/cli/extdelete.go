@@ -16,7 +16,7 @@ import (
 type extDeleteOptions struct{ purge, force bool }
 
 // runDeleteExtension is meko extension delete <name> [--purge] [--force]. It runs the extension's
-// own uninstall (Catalog.RemoveArgs: it stops and removes its services, so AgentK's sessions end),
+// own uninstall (Catalog.RemoveArgs: it stops and removes its services, so Kode's sessions end),
 // removes the releases Meko installed and the command Meko linked to them, and unregisters it. Its
 // data in its folder stays; with purge, its uninstall is UninstallArgs, which deletes its data, and
 // the folder goes too. It asks first unless force. A damaged extension (its command is missing) has
@@ -118,7 +118,7 @@ func removeExtension(l paths.Layout, ext extensionData, purge bool, stdout, stde
 	if err := uninstallExtensions(l, []extensionData{ext}, purge, stdout, stderr); err != nil {
 		return err
 	}
-	// A version a live process still runs from (AgentK's session host, when its stop failed) keeps
+	// A version a live process still runs from (Kode's session host, when its stop failed) keeps
 	// its release, which removing the app folder would pull out from under it.
 	if live := app.Live(); cat.Managed && len(live) > 0 {
 		return fmt.Errorf("%s's uninstall ran, but something still runs from %s %s, so its releases "+
@@ -131,16 +131,17 @@ func removeExtension(l paths.Layout, ext extensionData, purge bool, stdout, stde
 		}
 	}
 	// Only a known extension's folders: a registered name Meko doesn't know is only forgotten.
-	removed := ""
+	var removed []string
 	switch {
 	case known && purge:
-		removed = extensions.Dir(l.Root, name)
+		// With the link its folder's move left under an old name (Kode's extensions/agentk).
+		removed = append([]string{extensions.Dir(l.Root, name)}, extensions.OldDirs(l.Root, name)...)
 	case cat.Managed:
-		removed = app.Root
+		removed = []string{app.Root}
 	}
-	if removed != "" {
-		// G703: a known extension's folder (extensions.Known), never a path from the command line.
-		if err := os.RemoveAll(removed); err != nil { //nolint:gosec
+	for _, p := range removed {
+		// G703: a known extension's folders (extensions.Known), never a path from the command line.
+		if err := os.RemoveAll(p); err != nil { //nolint:gosec
 			return err
 		}
 	}
@@ -171,9 +172,9 @@ func deleteCommand(l paths.Layout, name string, ext extensionData) string {
 	return cat.Find(name, home, l.Root)
 }
 
-// sessionsEnd is what else stops with an extension: AgentK's sessions.
+// sessionsEnd is what else stops with an extension: Kode's sessions.
 func sessionsEnd(name string) string {
-	if name == "agentk" {
+	if name == "kode" {
 		return " (every session it runs ends)"
 	}
 	return ""
@@ -181,8 +182,8 @@ func sessionsEnd(name string) string {
 
 // purgedWork is what of an extension's data --purge deletes that people would miss.
 func purgedWork(name string) string {
-	if name == "agentk" {
-		return ": AgentK's sessions and worktrees, with any uncommitted work in them"
+	if name == "kode" {
+		return ": Kode's sessions and worktrees, with any uncommitted work in them"
 	}
 	return ""
 }

@@ -117,7 +117,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     await env.cleanup();
   });
 
-  it("checks out the PR's head on a review branch with nowhere to push, and tells AgentK to get ready and wait", async () => {
+  it("checks out the PR's head on a review branch with nowhere to push, and tells Kode to get ready and wait", async () => {
     const p = await project();
     const head = pushToPr(7, 'widget.ts');
     pr(7);
@@ -173,7 +173,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     ['private', false],
   ] as const)("on a %s repo, leaves the PR's own config out of the review: %s", async (visibility, untrusted) => {
     const p = await project();
-    // The PR brings a status line (which AgentK's relay runs with sh) and a prompt of its own.
+    // The PR brings a status line (which Kode's relay runs with sh) and a prompt of its own.
     mkdirSync(join(author, '.claude'), { recursive: true });
     writeFileSync(join(author, '.claude', 'settings.json'), JSON.stringify({ statusLine: { type: 'command', command: 'echo from-the-pr' } }));
     mkdirSync(join(author, '.agent-k', 'stages'), { recursive: true });
@@ -189,7 +189,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     expect(transcript(s.id).includes('A prompt the PR wrote.')).toBe(!untrusted);
     expect(event(s.id, 'untrusted')).toBe(untrusted
       ? "acme/demo is public, so anyone can have written this PR's code: the session runs without the repo's own config "
-        + '(its .claude settings, hooks, status line and MCP servers, its Kiro agents, and its .agent-k/stages prompts).'
+        + '(its .claude settings, hooks, status line and MCP servers, its Kiro agents, and its .kode/stages prompts).'
       : undefined);
   });
 
@@ -272,7 +272,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     expect(git(env.core.sessions.get(b.id).worktreePath, 'rev-parse', 'HEAD')).toBe(git(otherAuthor, 'rev-parse', 'HEAD'));
     // Discard ends a review too, and takes the PR's head ref with it.
     await env.core.sessions.action(a.id, 'discard', { skipLearn: true });
-    expect(() => git(fork, 'rev-parse', '--verify', '--quiet', 'refs/agentk/pr/7')).toThrow();
+    expect(() => git(fork, 'rev-parse', '--verify', '--quiet', 'refs/kode/pr/7')).toThrow();
     expect(git(fork, 'branch', '--list', 'ak_me/*')).toBe('');
   });
 
@@ -287,7 +287,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     await poll();
     expect(env.core.sessions.get(s.id).reviewingPr).toMatchObject({ newCommits: 0, headSha: first });
 
-    // The author pushes: the session says so once, and sends AgentK nothing.
+    // The author pushes: the session says so once, and sends Kode nothing.
     const second = pushToPr(7, 'more.ts');
     watch(7, { headRefOid: second, commits: [first, second] });
     const before = transcript(s.id);
@@ -328,7 +328,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     const row = env.core.sessions.row(s.id);
     expect(row).toMatchObject({ desired: 'archived', stage: 'done' });
     expect(git(clone, 'branch', '--list', 'ak_me/*')).toBe('');
-    expect(() => git(clone, 'rev-parse', '--verify', '--quiet', 'refs/agentk/pr/7')).toThrow();
+    expect(() => git(clone, 'rev-parse', '--verify', '--quiet', 'refs/kode/pr/7')).toThrow();
     expect(event(s.id, 'review-closed')).toBe('Closed the review of PR #7');
     expect(existsSync(wt)).toBe(true); // idle, for the next session on the repo
     // Someone else's PR, closed: never one of the user's merged PRs.
@@ -357,7 +357,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     await new Promise((r) => setTimeout(r, 100));
     expect(env.meko.calls.some((c) => c.name === 'putArtifact')).toBe(false);
 
-    // The author changes the design and pushes: the copy follows the PR's line, and Update to latest tells AgentK.
+    // The author changes the design and pushes: the copy follows the PR's line, and Update to latest tells Kode.
     const second = pushToPr(7, 'more.ts');
     watch(7, { headRefOid: second, commits: [first, second], body: `Adds the widget.\n\nmeko://${DP}\nmeko_design:design-widget.html;${sha(v2)}` });
     await env.core.lifecycle.pollReviewedPr(env.core.sessions.row(s.id));
@@ -373,7 +373,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     expect(readFileSync(file, 'utf8')).toBe(v2);
   });
 
-  it('starts without a design Meko no longer has, and has AgentK read one that comes later on Update to latest', async () => {
+  it('starts without a design Meko no longer has, and has Kode read one that comes later on Update to latest', async () => {
     const sha = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
     const v1 = '# Widget design\n\n## Questions and decisions\n';
     const asked: string[] = [];
@@ -392,7 +392,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     await poll();
     expect(asked).toEqual(['0'.repeat(64)]);
 
-    // The author's next version is there: the panel has it, and with no new commits Update to latest has AgentK read it.
+    // The author's next version is there: the panel has it, and with no new commits Update to latest has Kode read it.
     watch(7, { body: `meko://${DP}\nmeko_design:design-widget.md;${sha(v1)}` });
     await poll();
     const file = join(env.core.paths.designs, s.id, 'design.md');

@@ -10,8 +10,8 @@ import { projectDatapacks, type SessionRow } from './store.js';
 
 /**
  * A PR's design, for a Review a PR session: the PR's description names it with a `meko_design:`
- * line (its Meko name and the latest version's hash, which its author's AgentK keeps current), and
- * AgentK fetches that version from Meko by its hash. The copy becomes the review session's design,
+ * line (its Meko name and the latest version's hash, which its author's Kode keeps current), and
+ * Kode fetches that version from Meko by its hash. The copy becomes the review session's design,
  * shown in its Design panel and read by Claude from the session's designs folder. It's never sent
  * to Meko again.
  */

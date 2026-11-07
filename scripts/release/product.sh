@@ -1,9 +1,10 @@
 # Sourced by the release scripts in this folder. The repo releases three products from one
 # history, each with its own tags, versions and notes:
 #
-#   agentk  AgentK (src/extensions/agentk): tags agentk-v<version>, and v<version> before
-#           releases were tagged by product (installed AgentKs from before read only those, so
-#           the newest v… release, which reads both, stays: prune-releases.sh never deletes it)
+#   agentk  Kode (src/extensions/agentk): tags kode-v<version>; agentk-v<version> before Meko
+#           called it Kode, and v<version> before releases were tagged by product (installed
+#           AgentKs from before read only those, so the newest v… release, which reads both,
+#           stays: prune-releases.sh never deletes it)
 #   meko    Meko (src/meko): tags meko-v<version>
 #   present
 #           Present (src/extensions/present): tags present-v<version>, whose tarballs Meko
@@ -18,7 +19,7 @@
 #                 release the product, and
 #   exclude       one for those that don't, even though scope matches them. Meko takes the
 #                 subjects that name meko, alone or in a list (feat(agentk,meko): ...), and
-#                 Present those that name present. AgentK takes every subject but those that
+#                 Present those that name present. Kode takes every subject but those that
 #                 name only meko or present (or presenter, Present's component before it was
 #                 present): agentk, repo, lists naming agentk or repo, and old subjects with no
 #                 component or with the free-form one subjects had before 2026-10-20. So a
@@ -40,8 +41,8 @@ unset _args
 
 case $product in
   agentk)
-    tag_prefix=agentk-v
-    tag_prefixes='agentk-v v'
+    tag_prefix=kode-v
+    tag_prefixes='kode-v agentk-v v'
     scope='(\([^)]*\))?'
     exclude='\((meko|present|presenter)(/[^,)]*)?(,(meko|present|presenter)(/[^,)]*)?)*\)'
     ;;

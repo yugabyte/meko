@@ -236,7 +236,7 @@ func Listen(port int) (net.Listener, error) {
 func ListenOn(host string, port int) (net.Listener, error) {
 	ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if errors.Is(err, syscall.EADDRINUSE) {
-		return nil, fmt.Errorf("port %d is in use (an AgentK from before Meko served it, or another program). "+
+		return nil, fmt.Errorf("port %d is in use (a Kode from before Meko served it, or another program). "+
 			"Stop it, or pick another port with --port, MEKO_PORT or [server] port in config.toml", port)
 	}
 	return ln, err
@@ -260,7 +260,7 @@ func (s *Server) accessLog(next echo.HandlerFunc) echo.HandlerFunc {
 // serves may call it from a browser. There are no CORS headers, so no other page can read a reply
 // either. Plain HTTP, which comes only from this computer, must name 127.0.0.1, localhost or [::1]
 // with this port, and an Origin must be http:// one of those. TLS (remote access) has no Host list,
-// as AgentK had none: a rebound page can't pass TLS for another name. Its Origin must be
+// as Kode had none: a rebound page can't pass TLS for another name. Its Origin must be
 // https://<Host>.
 func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 	port := strconv.Itoa(s.opts.Port)

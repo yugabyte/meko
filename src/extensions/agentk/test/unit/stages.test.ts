@@ -58,14 +58,14 @@ describe('stage moves', () => {
 
   it('says what a move does', () => {
     expect(moveEffect({ stage: 'code', prNumber: null }, 'design')).toBe(
-      'AgentK designs what this session has worked out so far, and blocks edits to the repo until you approve a design.');
-    expect(moveEffect({ stage: 'design', prNumber: null }, 'code')).toBe('Skips design approval. AgentK implements what this session has worked out so far.');
-    expect(moveEffect({ stage: 'explore', prNumber: null }, 'code')).toBe('AgentK implements what this session has worked out so far.');
-    expect(moveEffect({ stage: 'explore', prNumber: null }, 'code', true)).toBe('AgentK implements the task you typed.');
+      'Kode designs what this session has worked out so far, and blocks edits to the repo until you approve a design.');
+    expect(moveEffect({ stage: 'design', prNumber: null }, 'code')).toBe('Skips design approval. Kode implements what this session has worked out so far.');
+    expect(moveEffect({ stage: 'explore', prNumber: null }, 'code')).toBe('Kode implements what this session has worked out so far.');
+    expect(moveEffect({ stage: 'explore', prNumber: null }, 'code', true)).toBe('Kode implements the task you typed.');
     expect(moveEffect({ stage: 'review', prNumber: 12 }, 'code')).toBe(
-      'The session keeps its worktree, branch and conversation. PR #12 stays open. AgentK stops handling its reviews and CI until you come back to Pull Request.');
-    expect(moveEffect({ stage: 'code', prNumber: null }, 'explore')).toBe('AgentK runs no design, PR or merge while the session is in Explore.');
-    expect(moveEffect({ stage: 'explore', prNumber: null }, 'review')).toMatch(/^AgentK picks up the branch's open PR/);
+      'The session keeps its worktree, branch and conversation. PR #12 stays open. Kode stops handling its reviews and CI until you come back to Pull Request.');
+    expect(moveEffect({ stage: 'code', prNumber: null }, 'explore')).toBe('Kode runs no design, PR or merge while the session is in Explore.');
+    expect(moveEffect({ stage: 'explore', prNumber: null }, 'review')).toMatch(/^Kode picks up the branch's open PR/);
   });
 
   it('keeps a Review a PR session in its one stage', () => {

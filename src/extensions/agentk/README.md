@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/AgentK-nobg.png" width="120" alt="AgentK logo"></p>
+<p align="center"><img src="assets/Kode-nobg.png" width="120" alt="Kode logo"></p>
 
 <p align="center">
   <a href="https://mekodata.ai">
@@ -9,16 +9,16 @@
   </a>
 </p>
 
-# AgentK
+# Kode
 
-The agentic coder for ADLC. AgentK lets you run parallel coding sessions that take a task from
+The agentic coder for ADLC. Kode lets you run parallel coding sessions that take a task from
 design to merged PR, with [Meko](https://mekodata.ai) as the shared context engine, so designs and
 what each session learned flow into datapacks your whole team and their agents can build on.
 
 It's self-hosted on your devserver (headless), your Mac or a Mac mini, and you use it from a browser or
 your phone.
 
-![AgentK: a session in the Design stage, with the live Claude Code terminal, its design (a Claude Artifact for a world clock widget) in the design panel waiting for approval, and the 5-hour and weekly limits in the rail](docs/screenshots/workbench.png)
+![Kode: a session in the Design stage, with the live Claude Code terminal, its design (a Claude Artifact for a world clock widget) in the design panel waiting for approval, and the 5-hour and weekly limits in the rail](docs/screenshots/workbench.png)
 
 <table>
   <tr>
@@ -45,13 +45,13 @@ your phone.
   you close the page.
 - **From idea to merged PR.** Every task runs on Explore → Design → Code → Pull Request → Merge &
   Close. You approve the design, opening the PR and the merge, or let **Run to merge** do it all.
-- **Code review on your computer.** AgentK reviews each change before the PR opens, and whenever you
-  ask. You check the findings, and AgentK fixes the ones you keep.
-- **Review someone else's PR** with AgentK summing it up, the author's design beside it, and
+- **Code review on your computer.** Kode reviews each change before the PR opens, and whenever you
+  ask. You check the findings, and Kode fixes the ones you keep.
+- **Review someone else's PR** with Kode summing it up, the author's design beside it, and
   answers to your questions. It posts to GitHub only when you say.
 - **Shared memory with Meko.** Each project has a Meko datapack. Designs and what each session
   learned are saved there, so your team and its agents start from the same context.
-- **Ask AgentK** (`⌘K`) in plain words: "start a design task to add dark mode", or paste a GitHub
+- **Ask Kode** (`⌘K`) in plain words: "start a design task to add dark mode", or paste a GitHub
   issue or PR link to start on it.
 - **Works from your phone**, and installs as an app.
 - **Token usage and cost** per session and project, and your Claude plan limits.
@@ -62,20 +62,20 @@ your phone.
 
 You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and
 [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai) or
-[Kiro CLI](https://kiro.dev/cli/). Install [Meko](https://mekodata.ai), then AgentK:
+[Kiro CLI](https://kiro.dev/cli/). Install [Meko](https://mekodata.ai), then Kode:
 
 ```sh
 curl -fsSL https://mekodata.ai/install.sh | sh
-meko extension install agentk
+meko extension install kode
 ```
 
 Setup offers to install anything missing and prints the address to open. A new install opens on
-the AgentK tour. Updates install by themselves.
+the Kode tour. Updates install by themselves.
 
 To share projects with your team, link Meko to Meko Cloud: Settings › Meko Cloud in Meko's web UI,
 or `meko cloud-link`.
 
-AgentK has no login. With Meko's remote access (the default over SSH), anyone who can reach port
+Kode has no login. With Meko's remote access (the default over SSH), anyone who can reach port
 7777 can open it and its terminals.
 
 [Install details](docs/install.md): who can open it, updates, where data lives, and Mac notes.
@@ -84,8 +84,8 @@ AgentK has no login. With Meko's remote access (the default over SSH), anyone wh
 
 | Command | What it does |
 |---|---|
-| `meko kode ui` | Open AgentK in your browser |
-| `meko kode status` | Show whether AgentK is running, and its address |
+| `meko kode ui` | Open Kode in your browser |
+| `meko kode status` | Show whether Kode is running, and its address |
 | `meko kode attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches) |
 | `meko kode logs -f` | Follow the server log |
 
@@ -94,5 +94,5 @@ AgentK has no login. With Meko's remote access (the default over SSH), anyone wh
 ## Docs
 
 - [Features](docs/features.md) and [install details](docs/install.md)
-- [Design](docs/design.md): how AgentK works, one file per area
-- [Contributing](../../../CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for AgentK's commands and map
+- [Design](docs/design.md): how Kode works, one file per area
+- [Contributing](../../../CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for Kode's commands and map

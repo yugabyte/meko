@@ -1,6 +1,6 @@
 # Task lifecycle
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 Every session but a Review a PR is a task that moves through stages, from exploring to a merged PR
 with the branch cleaned up. This first pipeline covers seven stages of the development lifecycle. The pipeline is
@@ -13,7 +13,7 @@ bar maps `pr` to the Pull Request step (`stepOf` in `src/shared/stages.ts`), wit
 pill in its gate until the PR is found. The automatic PR → Review move logs no second stage event,
 since "Opened PR #7" says it. Its reviews are the PR's: its reviewers' comments, CI and conflicts.
 
-AgentK's own [code review](code-review.md), which can gate **Open PR**, is the stage bar's **Code
+Kode's own [code review](code-review.md), which can gate **Open PR**, is the stage bar's **Code
 Review** step, between Code and Pull Request (`reviewing-code` in `KIND_STAGES.task`). It's a step,
 never a task's stage: the task stays in `code` while its review runs, and the bar and the chip show
 it in Code Review meanwhile (`shownStep()` in `src/web/util.ts`). It isn't a move target. So a
@@ -24,7 +24,7 @@ are Off (`Session.openPrReview` `off`), and once the PR prompt went without a fi
 
 There are three **gates** that only you can pass: approving the design, opening the PR, and
 merging. Everything between the gates runs on its own. A task started at Code has only the last two
-gates, and with [Run to merge](#run-to-merge) AgentK passes those two by itself. Explore (step 0) comes before them and is optional: Claude gets the `explore` prompt
+gates, and with [Run to merge](#run-to-merge) Kode passes those two by itself. Explore (step 0) comes before them and is optional: Claude gets the `explore` prompt
 (investigate, build POCs, run experiments, push experimental branches if useful), edits aren't
 guarded, and review comments from the Changes panel still reach Claude. Its gate, **Move on…**,
 opens the move dialog at Design, and you can also click Code or Pull Request in the stage bar; or
@@ -32,8 +32,8 @@ you end the session with Archive or Discard. A Review a PR session doesn't enter
 stays in Reviewing PR, on someone else's PR, until you close the review (see
 [Reviewing a PR](review-pr.md)).
 
-In the UI, the one doing the work in these stages is **AgentK** ("AgentK writes a design…",
-"Wait for AgentK to finish its turn"). "Claude" is kept for the Claude Code process and its
+In the UI, the one doing the work in these stages is **Kode** ("Kode writes a design…",
+"Wait for Kode to finish its turn"). "Claude" is kept for the Claude Code process and its
 terminal: starting it, exits, Resume, and the compose box.
 
 ```mermaid
@@ -55,14 +55,14 @@ stateDiagram-v2
   MergeClose --> [*] : merged and cleaned up
 ```
 
-| Stage | Claude | AgentK | Moves on when |
+| Stage | Claude | Kode | Moves on when |
 |---|---|---|---|
 | 0 · Explore (optional) | Investigates the task: reads the code, answers questions, builds POCs and runs experiments, and may commit and push experimental branches. | Guards nothing. Review comments from the Changes panel reach Claude as in Code. | You click **Move on…** (or a stage in the stage bar) and pick Design, Code or Pull Request. |
-| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `<home>/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You open the design with **Design doc** in the stage bar and click **Approve design** in the design panel (**Approve with answers** under the questions), and the server sends the Code prompt ("The design is approved…"), after your answers, with two lines added in code (so a repo's own `approved.md` gets them): bring the design's *Key Design Decisions* section up to date, adding it near the top, right after the goal, if the design has none (each question and each decision AgentK made itself, who decided it, the answer, what was decided and why, and the Meko items it rests on) before writing any code, and keep the design current while working (see [The design after approval](#the-design-after-approval)). With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
-| 2 · Code | Implements the design and runs the repo's tests and checks, keeping the design current. | Saves each change to the design as a new version in Meko (see [The design after approval](#the-design-after-approval)). Shows the diff size against the base branch in the footer (files, and lines added and removed); clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. Its commit menu shows one of the branch's commits alone instead, without comments. | You click **Open PR**, which reads **Review Changes** when the press starts AgentK's code review first (`Session.openPrReview` `new`: the review settings aren't Off and no review is running, holding the PR or waiting to go out with it; `CodeReviews.openPrReview` mirrors `openPr`). Mid-turn it reads **Open PR after this turn** (**Review Changes after this turn**), and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). With [code review](code-review.md) on (the default), AgentK first reviews the change in a review session joined to the task's tab, has the task fix what it finds, and sends the PR prompt itself when the review is done; a failed or cancelled review holds the PR for **Retry** or **Open anyway**. A review you ran yourself in Code (**Run code review**, [On demand](code-review.md#on-demand)) counts instead: once it's done, Open PR sends the PR with its line at once, even with the review off, and while it runs Open PR takes it over; a failed or cancelled one holds nothing. In a [workshop's](workshops.md) demo project, which has no remote, there's no Open PR, Run to merge or move to Pull Request (409): the gate offers **Run code review** in its place, and tasks end at Code. |
+| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `<home>/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions Kode lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You open the design with **Design doc** in the stage bar and click **Approve design** in the design panel (**Approve with answers** under the questions), and the server sends the Code prompt ("The design is approved…"), after your answers, with two lines added in code (so a repo's own `approved.md` gets them): bring the design's *Key Design Decisions* section up to date, adding it near the top, right after the goal, if the design has none (each question and each decision Kode made itself, who decided it, the answer, what was decided and why, and the Meko items it rests on) before writing any code, and keep the design current while working (see [The design after approval](#the-design-after-approval)). With Kode's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
+| 2 · Code | Implements the design and runs the repo's tests and checks, keeping the design current. | Saves each change to the design as a new version in Meko (see [The design after approval](#the-design-after-approval)). Shows the diff size against the base branch in the footer (files, and lines added and removed); clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. Its commit menu shows one of the branch's commits alone instead, without comments. | You click **Open PR**, which reads **Review Changes** when the press starts Kode's code review first (`Session.openPrReview` `new`: the review settings aren't Off and no review is running, holding the PR or waiting to go out with it; `CodeReviews.openPrReview` mirrors `openPr`). Mid-turn it reads **Open PR after this turn** (**Review Changes after this turn**), and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). With [code review](code-review.md) on (the default), Kode first reviews the change in a review session joined to the task's tab, has the task fix what it finds, and sends the PR prompt itself when the review is done; a failed or cancelled review holds the PR for **Retry** or **Open anyway**. A review you ran yourself in Code (**Run code review**, [On demand](code-review.md#on-demand)) counts instead: once it's done, Open PR sends the PR with its line at once, even with the review off, and while it runs Open PR takes it over; a failed or cancelled one holds nothing. In a [workshop's](workshops.md) demo project, which has no remote, there's no Open PR, Run to merge or move to Pull Request (409): the gate offers **Run code review** in its place, and tasks end at Code. |
 | 3 · Code Review (a step, not a stage) | The [code review](code-review.md) Open PR starts, while the task stays in `code`. | Shown as the current step while the review holds Open PR; skipped (– in a dashed circle) when no review runs before the PR. | The review sends the PR prompt itself when it's done (or **Open anyway** after a stopped one). |
-| 4 · Pull Request: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>`, `meko_design:<name>;<hash>` (when the task has a design in Meko) and `meko_conversation_id:<id>` lines, for the session's Meko conversation. After a [code review](code-review.md), the description has a `me_ak_review:` line too (`me_ak_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_ak_review:LGTM;Sirius1.0`), which AgentK writes in itself once the PR is found if Claude left it out or it differs. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
-| 4 · Pull Request: review (`review`) | When a review arrives, follows the `review-people` prompt (verifies each point, fixes the valid ones, pushes, and replies on each thread), or, for reviews held for you that you send, `review-held`. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused, and only one whose head is where the branch is pushed, never a fork's branch of the same name; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude, or held for you, according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over (also when the third attempt's turn ends without a fix on its head), then once per failing head after that, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours (also when the third attempt ends without a merge pushed); a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then a [code review](code-review.md#on-demand)'s fix or push prompt, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed, no review is held for you, the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. When the only blockers left clear by themselves (AgentK working, CI running), it reads **Merge when ready** and queues the merge (see [Queued gates](#queued-gates)). |
+| 4 · Pull Request: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>`, `meko_design:<name>;<hash>` (when the task has a design in Meko) and `meko_conversation_id:<id>` lines, for the session's Meko conversation. After a [code review](code-review.md), the description has a `me_kode_review:` line too (`me_kode_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_kode_review:LGTM;Sirius1.0`), which Kode writes in itself once the PR is found if Claude left it out or it differs. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
+| 4 · Pull Request: review (`review`) | When a review arrives, follows the `review-people` prompt (verifies each point, fixes the valid ones, pushes, and replies on each thread), or, for reviews held for you that you send, `review-held`. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused, and only one whose head is where the branch is pushed, never a fork's branch of the same name; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude, or held for you, according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over (also when the third attempt's turn ends without a fix on its head), then once per failing head after that, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours (also when the third attempt ends without a merge pushed); a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then a [code review](code-review.md#on-demand)'s fix or push prompt, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed, no review is held for you, the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. When the only blockers left clear by themselves (Kode working, CI running), it reads **Merge when ready** and queues the merge (see [Queued gates](#queued-gates)). |
 | 5 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), first runs the [learn step](recall-and-learn.md#the-learn-step) while Claude is still there (Claude gone or busy: it's skipped; not at all when it was asked for with **Merge & Close without saving learnings**, in the session's ⋯ menu or sheet), then ends the session's pane, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
 - **Reviewer modes.** Each project's reviewer setting says whose reviews go straight to Claude.
@@ -76,12 +76,12 @@ stateDiagram-v2
 
   Your own reviews (gh's login) always go to Claude, and a review from someone with no role on the
   repo is always held (*Whose feedback counts*, below). In every mode, Merge & Close also waits for
-  your decision on each held review. AgentK has no GitHub reviewer of its own (its review is the
+  your decision on each held review. Kode has no GitHub reviewer of its own (its review is the
   [code review](code-review.md) before the PR opens), and nothing waits for one: a GitHub app
   that reviews PRs is a bot like any other, so outside *All reviewers* each of its reviews that
   comments with a body is held, one that reports no findings included, and blocks Merge & Close
   (and Run to merge) until you dismiss it. Migration 47 moved projects off the modes of the
-  AgentK reviewer that was removed (*AgentK only* to *Yours only*, *AgentK + People* and *People
+  Kode reviewer that was removed (*Kode only* to *Yours only*, *Kode + People* and *People
   only* to *People*) and turned its held reviews into a bot's. A review prompt for its findings
   became `review-people` naming it: merged into a people prompt still queued, queued after one
   being addressed, or in place of none, while one already sent was the turn's. Every start runs
@@ -100,7 +100,7 @@ stateDiagram-v2
   no longer has (deleted since the poll) is skipped. It's logged as *Review from alice (held for you)*, and
   you're notified once per poll. The Review gate shows **N reviews for you**, which opens the held
   reviews: each one's text and inline comments with links to GitHub, checked to start. **Send to
-  AgentK** queues the checked ones with `review-held`, whose `{{reviews}}` names each review's
+  Kode** queues the checked ones with `review-held`, whose `{{reviews}}` names each review's
   author, REST id and link, and grows while it waits, and **Dismiss** drops them; only Pull Request sends. A held review blocks Merge & Close
   until you decide on it, and since it doesn't clear by itself, it drops a queued merge. A new PR
   on the session drops the old PR's held reviews and a `review-held` prompt still waiting with
@@ -113,12 +113,12 @@ stateDiagram-v2
   (`dotState()` in `src/web/util.ts`; the tab's tooltip names them). They are a held review; a
   [code review](code-review.md#findings-that-wait-on-you) whose findings wait on you (which shows
   Needs you in Code too); failing
-  CI or merge conflicts AgentK handed over on the PR's head (`ci_fixes`, `conflict_fixes` past their
+  CI or merge conflicts Kode handed over on the PR's head (`ci_fixes`, `conflict_fixes` past their
   maximum mark a head handed over and told) or, for conflicts, while **Resolve merge conflicts on
   PRs** is off (no notification outside Run to merge: the dot and the merge gate say it; turning the
   setting changes the dot at the next look at the PR); and, with [Run to merge](#run-to-merge) on,
   every blocker that doesn't clear by itself but a question in the terminal (already Needs you) and
-  changes requested while AgentK addresses a review.
+  changes requested while Kode addresses a review.
 - **Whose feedback counts.** Anyone with a GitHub account can review a public repo's PR, so a review
   starts a turn by itself only when it comes from someone with a role on the repo (`authorAssociation`
   OWNER, MEMBER or COLLABORATOR), from a bot in *All* (an app installed on the repo),
@@ -139,14 +139,14 @@ stateDiagram-v2
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
   `design-answers`, `approved-answers`, `review-people`, `review-held`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `move-design`, `move-code`, `instructions`, `attached`,
-  `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`, `seed`) with `.agent-k/stages/<name>.md`.
+  `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`, `seed`) with `.kode/stages/<name>.md`.
   A session on a public repo's PR head (a review, or a task on someone's PR) doesn't use them: the PR's author could have
   written them (see [Code from public repos](security.md#code-from-public-repos)).
-  Lines AgentK adds in code (the Meko recall steps, the saving rule appended to `explore` and
+  Lines Kode adds in code (the Meko recall steps, the saving rule appended to `explore` and
   `learn`, the seeding rule appended to `seed` (a learn session's, see
   [Learn sessions](recall-and-learn.md#learn-sessions)), and the design's lines: see [The design after approval](#the-design-after-approval) and
   [Reviewing a PR](review-pr.md)) are added to a repo's own prompt too. This lets a team
-  change how designs are written or PRs described without changing AgentK. Review comments
+  change how designs are written or PRs described without changing Kode. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   answers to the design through `design-answers` (`{{count}}`, `{{answers}}` and `{{questionsFile}}`),
   people's reviews through `review-people` (`{{reviewers}}`, the logins whose reviews started it),
@@ -169,7 +169,7 @@ stateDiagram-v2
 
 ## gh on demand
 
-AgentK does everything on GitHub through gh, GitHub's command-line tool, but doesn't need it to
+Kode does everything on GitHub through gh, GitHub's command-line tool, but doesn't need it to
 install or run: setup only offers it (`scripts/deps.sh`: a question of its own, default yes, once
 git, curl and an agent are there; `--install-deps` installs it with the rest; `--non-interactive`
 and `--no-install-deps` skip it with a warning). Updates don't need it: Meko downloads releases
@@ -197,7 +197,7 @@ without a token. What does need it asks for it then:
   again"). When the login shell gave the server no PATH at its start, a missing gh's words say so
   and point to `meko kode restart` (as `ghMissing` in `github.ts` does), since gh may be installed
   where the server doesn't look. It's read at start, and again by a gate whenever the last read
-  wasn't good or is over 5 minutes old, so gh installed or signed in outside AgentK counts at once
+  wasn't good or is over 5 minutes old, so gh installed or signed in outside Kode counts at once
   (the server's PATH has `~/.local/bin` and Homebrew's folders: `adoptLoginPath`). gh going from
   signed in to signed out or missing, and every sign-in from the dialog, drop the login
   `Core.ghLogin` kept, so the `{login}` prefix and whose reviews count as yours follow the account
@@ -225,7 +225,7 @@ later. The gate then shows a pill (*✓ Open PR queued: goes when the turn ends*
 waiting on CI*) with **Cancel** (`cancel-queued`), and the activity log says when it was queued,
 sent, withdrawn or dropped.
 
-- **Open PR after this turn.** In Code, while AgentK is mid-turn (working, or a question or
+- **Open PR after this turn.** In Code, while Kode is mid-turn (working, or a question or
   permission prompt during a turn) or Claude is starting, Open PR queues the PR prompt instead of
   being refused. It goes when the turn ends (at the `Stop`, or when you interrupt the turn, before
   review comments), or at the next
@@ -235,7 +235,7 @@ sent, withdrawn or dropped.
   startup, a failed restart) or is relaunched, on a move and on archive. A Cancel, a move or an exit
   while the prompt is being prepared (the PR prompt waits on GitHub and Meko first) still stops it. With
   Claude exited, or waiting on you with no turn behind it, Open PR is still refused. It doesn't need
-  AgentK's mod. Instructions given with it (see [Instructions with a move or Open PR](#instructions-with-a-move-or-open-pr))
+  Kode's mod. Instructions given with it (see [Instructions with a move or Open PR](#instructions-with-a-move-or-open-pr))
   wait with it in `sessions.queued_instructions` (`Session.queuedInstructions`), cleared whenever the
   queued gate is. *Instructions for the queued Open PR* in the session's ⋯ menu opens the dialog on them:
   saving replaces them, and an emptied box removes them (a request with `instructions` replaces them,
@@ -243,9 +243,9 @@ sent, withdrawn or dropped.
   turn ended but before the queued one went goes at once, with them unless it gives its own. If the
   queued PR prompt can't be typed, the activity log keeps them, so they can be given again. A
   [code review](code-review.md) that finishes mid-turn queues one too (Run to merge's, when the
-  review was, and only while Run to merge is still on), for its PR prompt with the findings and the `me_ak_review:` line.
+  review was, and only while Run to merge is still on), for its PR prompt with the findings and the `me_kode_review:` line.
 - **A PR prompt Claude exited before taking.** The PR prompt that went but whose turn never started
-  (see [AgentK's mod](mod.md)) isn't a queued gate: it shows no pill and waits for nothing. It's the
+  (see [Kode's mod](mod.md)) isn't a queued gate: it shows no pill and waits for nothing. It's the
   press that sent it (yours, or Run to merge's) carried over to Claude's return. The session goes
   back to where it came from, and the prompt goes only when Claude is back with no prompt of its
   own: after a Resume, or a recovery that sent none. It's dropped, and the activity log says why,
@@ -258,17 +258,17 @@ sent, withdrawn or dropped.
 
   Open PR (or a move to Pull Request) sends it then.
 - **Merge when ready.** In Review, the merge blockers are of two kinds. Some clear by themselves:
-  AgentK working or waiting on you mid-turn, CI running, a review's findings
+  Kode working or waiting on you mid-turn, CI running, a review's findings
   being addressed (while Claude runs), a [code review](code-review.md#on-demand) the user ran in
   Pull Request (running, or its fix or push prompt still queued or out, while Claude hasn't exited), and, mid-turn or while that
-  code review runs only, unpushed commits and uncommitted files (AgentK's work in progress;
+  code review runs only, unpushed commits and uncommitted files (Kode's work in progress;
   mid-turn when they were measured counts too, since a turn can push and end during the look at the
   PR; the code review's fixes are pushed once, after its last round). The others don't: CI failing, changes requested, required approvals
   missing (only on repos that require them, since people's approvals can take days), merge conflicts,
   a branch behind its base, a draft, a PR that isn't open, unpushed or uncommitted work between turns,
   a Needs you with no turn behind it (a parked recovery), and findings left mid-address by a Claude
   that exited. GitHub's own `BLOCKED` (`mergeStateStatus`) counts only when nothing else blocks and
-  only on a head AgentK first saw less than 2 minutes ago, as the first kind: *GitHub's required
+  only on a head Kode first saw less than 2 minutes ago, as the first kind: *GitHub's required
   checks haven't reported on the latest push yet*. After that it's left to GitHub, since a PR not yet
   in a required merge queue reads `BLOCKED` too (`gh pr merge` is what queues it), and so does any PR
   for a moment after an edit reruns a check. With only
@@ -286,12 +286,12 @@ sent, withdrawn or dropped.
 
 ## Run to merge
 
-**Run to merge** (`sessions.auto_run`, `Session.autoRun`; off by default) has AgentK pass Open PR
+**Run to merge** (`sessions.auto_run`, `Session.autoRun`; off by default) has Kode pass Open PR
 and Merge & Close by itself. Approving the design stays yours. It's a box beside each gate: in the
 New session dialog for a start at Code (`CreateSessionRequest.autoRun`), beside **Approve design**
 (the design panel's header, or its questions' footer while the header leaves its Approve out), **Open PR** and **Merge & Close**, all saving through
 `PATCH /api/sessions/:id` (`UpdateSessionRequest.autoRun`, `Lifecycle.setAutoRun`). The session
-tools' `start_sessions` and Ask AgentK's `start` and `link` actions take it too, only for a start at
+tools' `start_sessions` and Ask Kode's `start` and `link` actions take it too, only for a start at
 Code ([session tools](tools.md)); no tool turns it on for a running session.
 
 While it's on, the session's stage carries its mark, a double chevron (`RunToMergeMark` in
@@ -309,27 +309,27 @@ It runs on the [queued gates](#queued-gates):
   which drops a queued Open PR, is armed again by the next turn. Checked between turns, it queues
   Open PR and sends it at once. The `code` and `approved` prompts carry `autoRunLine()` (added in
   code, so a repo's own prompts get it too): finish the work and run the checks in this turn, and ask
-  the user with the question tool rather than ending the turn on a question, since AgentK can't tell
+  the user with the question tool rather than ending the turn on a question, since Kode can't tell
   such a turn from a finished one. The pill reads *✓ Run to merge: opens the PR when this turn ends*.
 - **Pull Request.** Once the PR is adopted (`adoptPr`), or the box is checked there, the merge is
   queued (`armMerge`; `pollAll` queues it again after a restart cut it short). Unlike Merge when
-  ready, a blocker that doesn't clear by itself doesn't drop it (`takeQueuedMerge`): AgentK works on
+  ready, a blocker that doesn't clear by itself doesn't drop it (`takeQueuedMerge`): Kode works on
   failing CI and merge conflicts as it always does (their watchers say when they hand over), and for
   every other one (a held review, changes requested, missing approvals, a branch behind its base,
   unpushed work between turns) you're notified once per new set (`autoRunWaits`, from `mergeInfo()`'s
   `yours`, which also makes the session show Needs you; a question in the terminal had its own Needs
-  you notification, and changes requested don't count while AgentK addresses a review), and while such a blocker is there the PR is looked
+  you notification, and changes requested don't count while Kode addresses a review), and while such a blocker is there the PR is looked
   at every 45 seconds rather than at every 15-second pass (approvals can take days). It merges at the first look that finds
   nothing blocking; if GitHub refuses the merge (a ruleset, say, which the blockers don't show), Run to
   merge stops, so the merge isn't asked for again at every pass. The pill reads
-  *✓ Run to merge: waiting on …*. The gates it passes are logged as AgentK's (`moved_by = 'auto'`).
+  *✓ Run to merge: waiting on …*. The gates it passes are logged as Kode's (`moved_by = 'auto'`).
 - **The code review.** Its findings never wait on you (`checksFindings` reads `auto_run` when a round
   ends), and turning it on while a round's findings wait sends them as they are, with your notes and
   dismissals so far (`CodeReviews.autoSend`, before the gates are armed).
 - **Notifications.** It notifies only when it's done (*Merged*, once the PR merges, here or on
   GitHub: `autoRunDone`) or needs you: Needs you, a held review, *Run to merge waits on you*, the CI
   and conflict watchers handing over after three tries, a refused merge, Claude exiting. Progress
-  AgentK handles itself (a review arrived and was sent to AgentK, AgentK's clean review, CI failed,
+  Kode handles itself (a review arrived and was sent to Kode, Kode's clean review, CI failed,
   merge conflicts, *Merging*) goes to the activity log only (`notifyProgress`); once Run to merge
   stops, it notifies again.
 
@@ -338,7 +338,7 @@ merge is being requested), press **Cancel** on the gate it queued, interrupt a t
 Request, or move the session, by hand or by a tool (a move to Pull Request that's refused leaves it on).
 Stopping drops its PR prompt that Claude exited before taking (`autoRunOff`), so it isn't sent
 again later. A Run to merge PR prompt found with Run to merge already off is dropped (logged) too.
-An interrupt counts only where the harness reports one: Claude Code with AgentK's mod (`/mod/turn`)
+An interrupt counts only where the harness reports one: Claude Code with Kode's mod (`/mod/turn`)
 and OpenCode (its plugin marks `session.execution.interrupted`). Kiro, and Claude Code without the
 mod, report none, so there Esc doesn't stop it, and a queued Open PR goes when the next turn ends:
 uncheck the box instead. Stopping drops only the gate Run to merge queued (`sessions.queued_auto`):
@@ -354,7 +354,7 @@ A task's design doesn't stop at the approval: it's what the PR's reviewers read.
   Design Decisions* section up to date before writing any code (`designQaLine()`, added in code
   after the approval prompt; the Design prompt already asks for the section, and a design without
   one gets it near the top, right after its goal): each question and each decision
-  AgentK made itself from the questions file, who decided it (the user, or AgentK), the user's
+  Kode made itself from the questions file, who decided it (the user, or Kode), the user's
   answer, what was decided and why, and the Meko items it rests on (kind, datapack, id), with
   Meko's marker after the title of each decision that rests on Meko
   ([Design panel](design-panel.md)). Designs written before call the section *Questions and
@@ -375,7 +375,7 @@ A task's design doesn't stop at the approval: it's what the PR's reviewers read.
   under (the SHA-256 of its bytes), kept per version (`designs.md_hash`, `html_hash`). The PR
   description's `meko_design:<name>;<hash>` line names the design by its first version's name
   (`design-<slug>.md`, or `.html` for an Artifact's page), which never changes, and the latest
-  version's hash. AgentK keeps that line current itself (`syncPrDesign()` in `lifecycle.ts`): after
+  version's hash. Kode keeps that line current itself (`syncPrDesign()` in `lifecycle.ts`): after
   each new version reaches Meko, and at each PR poll that finds the line missing or stale (Claude
   rewrote the description, say), it reads the description and rewrites only that line
   (`gh api -X PATCH repos/<repo>/pulls/<n>`), adding it after the datapack line when it's missing.
@@ -398,7 +398,7 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
   Close is reached only through its gate, and a session in Merge & Close or Done can't be moved. A
   step before the current one that the session never went through, like Design for a task started at
   Explore and moved on to Code, shows as skipped.
-- **Refused (409)** while AgentK is mid-turn or a gate action is in flight, during a merge, and for a
+- **Refused (409)** while Kode is mid-turn or a gate action is in flight, during a merge, and for a
   session that still designs in plan mode. A move that sends a prompt is also refused while Claude
   is waiting on you (a design waiting for approval aside) or has exited.
 - **Prompts.** A move to Design or Code can send a prompt for that stage, after the `moved` line
@@ -407,12 +407,12 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
   Explore or Design; not when going back to Code from Pull Request, or to Explore (`promptByDefault`).
   It isn't the stage's start prompt, which names the task: a session's conversation often moves on
   from its first prompt (an exploration that found the real problem elsewhere), so the move sends
-  `move-design` or `move-code` (`movePrompt()` in `prompts.ts`), which have AgentK design or implement
+  `move-design` or `move-code` (`movePrompt()` in `prompts.ts`), which have Kode design or implement
   what the session has discussed, found or done so far, where the conversation ended up, and ask
   when that isn't clear. `move-design` revises the session's design if it has one and designs from
   code already on the branch, and gets the design questions line as `design` does. A repo's
   override of `design` or `code` doesn't change them; override `move-design` and `move-code` too.
-  The dialog's line on what the move does says so (or, with a task typed, that AgentK works on that task). The dialog doesn't offer a choice: what the user
+  The dialog's line on what the move does says so (or, with a task typed, that Kode works on that task). The dialog doesn't offer a choice: what the user
   wants on a move back goes in its optional instructions (see below). The request's `prompt` flag is
   still honored, for pages from before (a move to Explore sends `explore`). A session with no task
   yet (`Session.hasTask`: one started at Explore without a first prompt before its name became the
@@ -430,9 +430,9 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 - **Pull Request** picks up the branch's open PR (any open PR from this repo) when there's nothing to
   push: the branch tip is in the PR and the worktree is clean. The session goes straight to Review,
   logged as "Picked up PR #7", or "Back on PR #7" for the PR it had before (not counted as another
-  PR, and its review state, an AgentK approval say, carries on). Otherwise it does what **Open PR**
+  PR, and its review state, a Kode approval say, carries on). Otherwise it does what **Open PR**
   does. With the [code review](code-review.md) on, the session goes to Code (from Explore or Design
-  too, logged as "Moved to Code: AgentK reviews the change locally before it opens the PR"), the
+  too, logged as "Moved to Code: Kode reviews the change locally before it opens the PR"), the
   review runs, and it sends the PR prompt when it's done; the `moved` line goes before the review's
   first prompt to the task (its fixes, or the PR prompt). A review you ran in Code counts as it does
   for Open PR ([On demand](code-review.md#on-demand)): a finished one sends the PR prompt with its
@@ -443,7 +443,7 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 
 ## Instructions with a move or Open PR
 
-The move dialog and **Open PR** take optional instructions for AgentK, in the user's words
+The move dialog and **Open PR** take optional instructions for Kode, in the user's words
 ("Open it as a draft", "Keep the public API as it is"). Left empty, nothing changes. **Open PR**
 stays one click; **Open PR with instructions** in the session's ⋯ menu (the ⋯ sheet on a phone, and
 *Open PR … with instructions* in the command palette) opens the Open PR with instructions dialog
@@ -453,9 +453,9 @@ of its own: the design's **Other feedback** already goes with the approval. Merg
 Claude for nothing, so it takes none either.
 
 - **The prompt.** They go last, in the `instructions` prompt (`{{instructions}}`, overridable in
-  `.agent-k/stages/instructions.md`), which tells Claude to follow them where they conflict with
+  `.kode/stages/instructions.md`), which tells Claude to follow them where they conflict with
   what's above: after the stage's prompt, and after the PR prompt's push line and Meko footer.
-- **With no stage prompt** (a move back, or to Pull Request when AgentK picks up the branch's open PR)
+- **With no stage prompt** (a move back, or to Pull Request when Kode picks up the branch's open PR)
   they go with the `moved` line alone. For a PR picked up, the session moves first and stays busy
   until the instructions' turn ends, as with the PR prompt, so review prompts waiting for it go after
   that turn; if they can't be typed, the session stays in Pull Request and the 502 says so.

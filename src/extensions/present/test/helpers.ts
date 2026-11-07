@@ -114,7 +114,7 @@ export function sampleDeck(): Deck {
     ['menu', 'What matters most?', { fork: true }, ['s-menu']],
     ['ybdb', 'YugabyteDB', {}, ['s-ybdb-1']],
     ['amp', 'AMP serverless', {}, ['s-amp-1']],
-    ['meko', 'Meko and AgentK', {}, ['s-meko-1']],
+    ['meko', 'Meko and Kode', {}, ['s-meko-1']],
     ['geo', 'Latency or zero loss?', { fork: true }, ['s-geo']],
     ['xcluster', 'xCluster async', {}, ['s-x-1', 's-x-2']],
     ['sync', 'Sync stretch', {}, ['s-sync-1']],

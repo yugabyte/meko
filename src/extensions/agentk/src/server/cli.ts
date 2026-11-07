@@ -18,7 +18,7 @@ import { listenPrivate, socketId } from './hooks.js';
 import { MekoClient } from './meko.js';
 import { getPaths, SHARED_TMP, tildify, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
-import { AGENTK_PATH as BASE_PATH } from '../shared/mekourls.js';
+import { KODE_PATH as BASE_PATH } from '../shared/mekourls.js';
 import { hostServices, moveJobLog, refreshServiceFiles, servicesFor, startMoveJob } from './service.js';
 import { COMMAND } from './cmdlink.js';
 import { openBrowser } from './browser.js';
@@ -37,7 +37,7 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 
 function version(): string {
-  if (process.env.AK_VERSION && process.env.AK_VERSION !== 'unknown') return process.env.AK_VERSION;
+  if (process.env.KODE_VERSION && process.env.KODE_VERSION !== 'unknown') return process.env.KODE_VERSION;
   try {
     return (JSON.parse(readFileSync(join(here, '..', '..', 'package.json'), 'utf8')) as { version: string }).version;
   } catch {
@@ -62,8 +62,8 @@ async function moveFirst(paths: Paths): Promise<Paths> {
   const say = { info: (m: string) => console.error(`meko kode: ${m}`), warn: (m: string, d?: string) => console.error(`meko kode: ${m}${d ? `: ${d}` : ''}`) };
   if (svc?.installed('server')) {
     if (j?.phase !== 'moving') return paths;
-    startMoveJob(svc.kind, { bin: join(process.env.AK_APP_DIR ?? join(paths.app, 'current'), 'bin', COMMAND), from: j.from, to: j.to });
-    console.error(`meko kode: AgentK's home is moving to ${j.to}; the move starts the server again when it's done. See: ${moveJobLog(j.to)}`);
+    startMoveJob(svc.kind, { bin: join(process.env.KODE_APP_DIR ?? join(paths.app, 'current'), 'bin', COMMAND), from: j.from, to: j.to });
+    console.error(`meko kode: Kode's home is moving to ${j.to}; the move starts the server again when it's done. See: ${moveJobLog(j.to)}`);
     process.exit(EXIT_BUSY);
   }
   // A version Meko just updated to moves the home only once it has proved healthy (its next start).
@@ -74,7 +74,7 @@ async function moveFirst(paths: Paths): Promise<Paths> {
   const r = j?.phase === 'moving' ? { plan: j } : checkMove(paths, loadConfig(paths, () => undefined));
   if (!r) return paths;
   if ('skip' in r) {
-    say.warn(`AgentK's home stays in ${paths.home} for now`, r.skip);
+    say.warn(`Kode's home stays in ${paths.home} for now`, r.skip);
     return paths;
   }
   const to = await moveHome(r.plan, { log: say, stop: async () => void (await stopAll(paths, null)), services: null });
@@ -122,7 +122,7 @@ async function serve(): Promise<void> {
     // In server.log, not only on stderr, which may reach no one (a journal that isn't kept): a
     // start that keeps failing after an update (a migration, the guard in Core.start) is rolled
     // back by Meko's launcher (`meko _launch`), and this says why. The lease goes too, so the next start needn't wait.
-    log.error(`AgentK ${v} couldn't start: ${errMsg(e)}`);
+    log.error(`Kode ${v} couldn't start: ${errMsg(e)}`);
     lock.release();
     process.exit(1);
   }
@@ -167,7 +167,7 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
     try {
       await app?.close();
       // Only while the file is still the one it bound: on a lost lease, another server on this home
-      // may have bound its own since. Gone, Meko says AgentK isn't running.
+      // may have bound its own since. Gone, Meko says Kode isn't running.
       if (webSockId && socketId(paths.webSock) === webSockId) rmSync(paths.webSock, { force: true });
       await core?.stop();
       db.close();
@@ -181,7 +181,7 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   };
   const beat = setInterval(() => {
     if (shuttingDown || lock.beat()) return;
-    log.error(`another AgentK server took over ${paths.home} (this one stalled for too long); stopping`);
+    log.error(`another Kode server took over ${paths.home} (this one stalled for too long); stopping`);
     void shutdown(1);
   }, BEAT_MS);
   beat.unref();
@@ -197,11 +197,11 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   await app.ready();
   await listenPrivate(app.server, paths.webSock, 'the web socket');
   webSockId = socketId(paths.webSock);
-  log.info(`AgentK ${v} listening on ${paths.webSock}`);
+  log.info(`Kode ${v} listening on ${paths.webSock}`);
   void probeLocalMeko(mekoDirOf(paths.home) ?? (cfg.meko.home || null)).then((p) => {
     if (p.meko?.webUrl) log.info(`browsers open it at ${p.meko.webUrl}${BASE_PATH}`);
-    else if (p.meko) log.warn('the Meko on this computer is too old to serve AgentK to browsers: update it with meko update');
-    else log.warn('no Meko is running on this computer, so no browser can reach AgentK: start it with meko start');
+    else if (p.meko) log.warn('the Meko on this computer is too old to serve Kode to browsers: update it with meko update');
+    else log.warn('no Meko is running on this computer, so no browser can reach Kode: start it with meko start');
   });
 
   // The move into Meko's data folder: now when this version isn't being tried out, else once it has
@@ -222,24 +222,24 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   process.on('SIGINT', stop);
 }
 
-/** Where browsers open AgentK: Meko's web URL with BASE_PATH, or why there's none. */
+/** Where browsers open Kode: Meko's web URL with BASE_PATH, or why there's none. */
 async function webUrl(paths: Paths, cfg: Config): Promise<{ url: string | null; why: string }> {
   const p = await probeLocalMeko(mekoDirOf(paths.home) ?? (cfg.meko.home || null));
   if (p.meko?.webUrl) return { url: `${p.meko.webUrl}${BASE_PATH}`, why: '' };
   if (p.meko?.webOff) return { url: null, why: "Meko's web UI is off: turn it on with meko ui start" };
-  if (p.meko) return { url: null, why: 'the Meko on this computer is too old to serve AgentK: update it with meko update' };
+  if (p.meko) return { url: null, why: 'the Meko on this computer is too old to serve Kode: update it with meko update' };
   if (p.state === 'stopped') return { url: null, why: "Meko isn't running: start it with meko start" };
-  return { url: null, why: 'no Meko on this computer serves AgentK: install Meko, then run meko extension install agentk' };
+  return { url: null, why: 'no Meko on this computer serves Kode: install Meko, then run meko extension install kode' };
 }
 
-/** Opens AgentK in this computer's browser through Meko (`meko ui`), or prints its URL. */
+/** Opens Kode in this computer's browser through Meko (`meko ui`), or prints its URL. */
 async function ui(): Promise<void> {
   const paths = getPaths();
   const cfg = loadConfig(paths);
   const probe = await probeLocal(paths);
-  if (!probe.ok) throw new Error(`AgentK isn't answering (${probe.error}). Start it with: meko kode start (or meko kode serve)`);
+  if (!probe.ok) throw new Error(`Kode isn't answering (${probe.error}). Start it with: meko kode start (or meko kode serve)`);
   const web = await webUrl(paths, cfg);
-  if (!web.url) throw new Error(`AgentK is running, but ${web.why}.`);
+  if (!web.url) throw new Error(`Kode is running, but ${web.why}.`);
   if (await openBrowser(web.url)) console.log(`Opened ${web.url}`);
   else console.log(`Couldn't open a browser here. Open ${web.url} in yours.`);
 }
@@ -300,7 +300,7 @@ async function selftest(): Promise<void> {
     });
   });
   if (!findWebDir(here)) throw new Error('web assets are missing');
-  console.log(`AgentK ${version()} selftest ok`);
+  console.log(`Kode ${version()} selftest ok`);
 }
 
 /** How long `status` waits for the server's /healthz: well inside the 3 s `meko status` gives it. */
@@ -357,7 +357,7 @@ async function status(): Promise<void> {
   };
   const paint = { ok: style.green, warn: style.yellow, fail: style.red };
   for (const line of formatStatus(facts, (k, m) => paint[k](m))) console.log(line);
-  // Meko reads the exit code (meko status, and an update deciding whether to restart AgentK): 3 when
+  // Meko reads the exit code (meko status, and an update deciding whether to restart Kode): 3 when
   // no server runs this home, as Present's. One holding the lease that was only slow to answer runs.
   if (!serverRuns(facts)) process.exitCode = 3;
 }
@@ -373,7 +373,7 @@ async function host(args: string[]): Promise<void> {
       const server = heldLease(paths.lock);
       if (server) {
         throw new Error(
-          `The AgentK server for this home is running (pid ${server.pid} on ${server.host}), and it would start the ` +
+          `The Kode server for this home is running (pid ${server.pid} on ${server.host}), and it would start the ` +
             `session host again and resume every session. Stop both with: meko kode stop, or use: meko kode host restart`,
         );
       }
@@ -408,7 +408,7 @@ async function host(args: string[]): Promise<void> {
   // After a stop request (or a lost lease): let go of the socket and the lease, then exit.
   const exit = () => void (handle?.close() ?? Promise.resolve()).finally(() => process.exit(0));
   try {
-    handle = await startHost({ paths, version: version(), appDir: process.env.AK_APP_DIR ?? null, log, onStop: exit });
+    handle = await startHost({ paths, version: version(), appDir: process.env.KODE_APP_DIR ?? null, log, onStop: exit });
   } catch (e) {
     if (!(e instanceof HostRunningError)) throw e;
     console.error(`meko kode: ${e.message}`);
@@ -430,9 +430,9 @@ async function stop(): Promise<void> {
   const svc = servicesFor(paths.home);
   const { stopped, sessions: n } = await stopAll(paths, svc);
   const resume = svc?.installed('server') ? 'meko kode start' : 'meko kode serve';
-  if (forMekoSummary()) return void console.log(summaryRow('✓', 'AgentK', stopRowText(stopped, n, svc?.installed('server') === true)));
-  if (!stopped) console.log('AgentK is not running.');
-  else console.log(`Stopped AgentK${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
+  if (forMekoSummary()) return void console.log(summaryRow('✓', 'Kode', stopRowText(stopped, n, svc?.installed('server') === true)));
+  if (!stopped) console.log('Kode is not running.');
+  else console.log(`Stopped Kode${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
 }
 
 /** Restarts the server's service, not the session host's: sessions keep running. Meko runs it after an update. */
@@ -440,7 +440,7 @@ async function restart(): Promise<void> {
   const paths = getPaths();
   rememberMekoHome(paths);
   const v = await restartServer(paths, servicesFor(paths.home));
-  console.log(`AgentK ${v} is running; sessions kept running.`);
+  console.log(`Kode ${v} is running; sessions kept running.`);
 }
 
 /** Starts the services `stop` stopped. */
@@ -456,25 +456,25 @@ async function start(): Promise<void> {
     if (!svc.state(s).running) throw new Error(`${svc.id(s)} didn't start. Check: ${svc.statusHint(s)}`);
   }
   console.log(forMekoSummary()
-    ? summaryRow('✓', 'AgentK', 'started; sessions resume in a few seconds')
-    : 'Started AgentK; the server resumes the sessions in a few seconds. Check: meko kode status');
+    ? summaryRow('✓', 'Kode', 'started; sessions resume in a few seconds')
+    : 'Started Kode; the server resumes the sessions in a few seconds. Check: meko kode status');
 }
 
 function help(): void {
-  console.log(`AgentK ${version()}
+  console.log(`Kode ${version()}
 
 Usage: meko kode <command>
 
   serve         Run the server (the background service runs this for you)
   install       Configure this host, set up Meko for Claude Code if needed (asks first; --install-deps
-                to skip asking; AgentK uses the Meko running on this computer), and install
-                the background services (systemd or launchd). Browsers reach AgentK through the Meko on
-                this computer, at /ext/agentk/
-  uninstall     Stop and remove the background services (--purge also deletes AgentK's home, in Meko's
+                to skip asking; Kode uses the Meko running on this computer), and install
+                the background services (systemd or launchd). Browsers reach Kode through the Meko on
+                this computer, at /ext/kode/
+  uninstall     Stop and remove the background services (--purge also deletes Kode's home, in Meko's
                 data folder, except its session worktrees and designs; add --delete-worktrees to delete
                 those too)
-  status        Show services, the URL (Meko's, at /ext/agentk/) and sessions
-  ui            Open AgentK in your browser through Meko (prints its URL when there's no browser to open)
+  status        Show services, the URL (Meko's, at /ext/kode/) and sessions
+  ui            Open Kode in your browser through Meko (prints its URL when there's no browser to open)
   stop          Stop the server and the session host, ending every session (they resume at start, or
                 serve without services; the services also start again at the next login)
   start         Start the background services again after stop
@@ -504,7 +504,7 @@ async function main(): Promise<void> {
     case 'attach': return (await import('./attachcli.js')).runAttach(getPaths(), args);
     case 'host': return host(args);
     case 'logs': return logs(args);
-    // AgentK's session tools as a stdio MCP server; sessions start it as mcpmain.js (tools.ts).
+    // Kode's session tools as a stdio MCP server; sessions start it as mcpmain.js (tools.ts).
     case 'mcp': return (await import('./mcp.js')).runMcp(version());
     // The job that moves the home into Meko's data folder (movehome.ts); not for people to run.
     case '_move-home': return (await import('./movehome.js')).runMoveJob(args);

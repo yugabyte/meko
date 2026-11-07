@@ -174,12 +174,12 @@ describe('the scorer', () => {
 });
 
 describe('the steps a prompt lists', () => {
-  const steps = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `score ${i + 1}`, agent: 'agentk-review-small', prompt: `Read /run/score-${i + 1}.md and do what it says.` }));
+  const steps = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `score ${i + 1}`, agent: 'kode-review-small', prompt: `Read /run/score-${i + 1}.md and do what it says.` }));
 
   it('numbers each step with its subagent and prompt, in one list without a batch', () => {
     expect(stepList(steps(2))).toBe(
-      '1. score 1: subagent `agentk-review-small`, prompt: `Read /run/score-1.md and do what it says.`\n'
-      + '2. score 2: subagent `agentk-review-small`, prompt: `Read /run/score-2.md and do what it says.`',
+      '1. score 1: subagent `kode-review-small`, prompt: `Read /run/score-1.md and do what it says.`\n'
+      + '2. score 2: subagent `kode-review-small`, prompt: `Read /run/score-2.md and do what it says.`',
     );
   });
 
@@ -187,7 +187,7 @@ describe('the steps a prompt lists', () => {
     [11, [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11]]],
     [5, [[1, 2, 3, 4, 5]]],
   ])('groups %i steps into numbered batches of at most 5, the steps numbered on across them', (n, batches) => {
-    const line = (i: number) => `${i}. score ${i}: subagent \`agentk-review-small\`, prompt: \`Read /run/score-${i}.md and do what it says.\``;
+    const line = (i: number) => `${i}. score ${i}: subagent \`kode-review-small\`, prompt: \`Read /run/score-${i}.md and do what it says.\``;
     expect(stepList(steps(n), 5)).toBe(batches.map((b, i) => `Batch ${i + 1}:\n${b.map(line).join('\n')}`).join('\n\n'));
   });
 });

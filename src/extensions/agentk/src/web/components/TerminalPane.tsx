@@ -13,7 +13,7 @@ import { TermKeys } from './TermKeys';
 
 /**
  * `onAsk` opens the questions Claude is asking (Session.asking), offered in a bar above the terminal.
- * `onResume` resumes the session: the overlay's Resume for an agent AgentK stopped for sitting idle,
+ * `onResume` resumes the session: the overlay's Resume for an agent Kode stopped for sitting idle,
  * and the first key typed into its terminal.
  * `mekoTo` is the datapack the held files' Upload to Meko sends to: null hides it (Meko off, or no datapack).
  */

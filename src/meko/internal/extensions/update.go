@@ -75,7 +75,7 @@ func Update(ctx context.Context, o UpdateOptions, name string) (bool, error) {
 	}
 	app := cat.App(o.Root, name)
 	goos, arch := update.Platform()
-	rel, next, found := update.PickPackage(rels, cat.TagPrefixes, name, goos, arch, app.BadVersions())
+	rel, next, found := update.PickPackage(rels, cat.TagPrefixes, app.Packages(), goos, arch, app.BadVersions())
 	if !found {
 		fmt.Fprintf(out, "%s %s is installed; no release of it for %s-%s was found in %s, leaving out versions "+
 			"that were rolled back\n", cat.Title, cur, goos, arch, o.Client.Repo)
@@ -223,7 +223,7 @@ func Check(root string, releases []update.Release) map[string]update.ExtensionSt
 			continue
 		}
 		app := cat.App(root, name)
-		rel, ver, found := update.PickPackage(releases, cat.TagPrefixes, name, goos, arch, app.BadVersions())
+		rel, ver, found := update.PickPackage(releases, cat.TagPrefixes, app.Packages(), goos, arch, app.BadVersions())
 		if !found {
 			out[name] = update.ExtensionState{}
 			continue

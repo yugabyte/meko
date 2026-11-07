@@ -41,11 +41,11 @@ async function ghWithin(cwd: string, timeoutMs: number, ...args: string[]): Prom
  */
 function ghMissing(e: unknown, cwd: string): Error | null {
   if ((e as NodeJS.ErrnoException).code !== 'ENOENT' || !existsSync(cwd)) return null;
-  if (!loginPathMissing) return new Error("AgentK can't find gh, GitHub's command-line tool. AgentK offers to install it the next time you open a PR, or install it from https://cli.github.com.");
+  if (!loginPathMissing) return new Error("Kode can't find gh, GitHub's command-line tool. Kode offers to install it the next time you open a PR, or install it from https://cli.github.com.");
   const allow = process.platform === 'darwin'
     ? ' If macOS asked whether meko may open a folder, allow it (System Settings › Privacy & Security › Files and Folders), then run meko kode restart.'
     : ' Run meko kode restart.';
-  return new Error(`AgentK can't find gh, because it couldn't read PATH from your login shell when it started.${allow}`);
+  return new Error(`Kode can't find gh, because it couldn't read PATH from your login shell when it started.${allow}`);
 }
 
 export interface IssueText {
@@ -98,7 +98,7 @@ export async function prByNumber(cwd: string, number: number, repo?: string | nu
 /**
  * The newest PR opened since `since`, an open one first. With `anyOpen`, an older open PR counts too.
  * Only a PR whose head is in `headRepo` (the repo the branch is pushed to) is the branch's: anyone
- * can open a PR from a fork's branch of the same name, and taking it would have AgentK follow and
+ * can open a PR from a fork's branch of the same name, and taking it would have Kode follow and
  * merge it. Without `headRepo` (a remote whose URL doesn't name its GitHub repo), any PR opened
  * since counts, a fork's too (the user's own, from a clone of their fork), but an older one only
  * from the base repo itself.

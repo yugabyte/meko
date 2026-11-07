@@ -542,7 +542,7 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
           for: 'set-idle-stop-hours',
           text:
             'A session’s agent idle this long is stopped to free its memory. The session, its worktree and its conversation stay, ' +
-            'and the agent starts again when you resume it, type in its terminal, or AgentK needs it. 0 keeps agents running.',
+            'and the agent starts again when you resume it, type in its terminal, or Kode needs it. 0 keeps agents running.',
         }}
       >
         <input
@@ -562,7 +562,7 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
         checked={s.resolveConflicts}
         onChange={(on) => change({ resolveConflicts: on })}
       >
-        When a PR conflicts with its base, AgentK merges the base in, resolves the conflicts and pushes. Off leaves them to you.
+        When a PR conflicts with its base, Kode merges the base in, resolves the conflicts and pushes. Off leaves them to you.
       </InfoCheck>
       <InfoCheck
         id="set-tools-enabled"
@@ -570,7 +570,7 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
         checked={s.toolsEnabled}
         onChange={(on) => change({ toolsEnabled: on })}
       >
-        Gives agents AgentK’s session tools. When you ask, they can open projects, start sessions (from GitHub issues and PRs
+        Gives agents Kode’s session tools. When you ask, they can open projects, start sessions (from GitHub issues and PRs
         too), move sessions between stages and open another session’s PR. The agent asks before each change, unless Kiro may
         run any tool without asking (Harness). Off applies at once. On applies at each session’s next start.
       </InfoCheck>
@@ -634,7 +634,7 @@ function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
   if (!h.available) {
     if (onlyMekoBlocks(h)) return `Version ${h.version}; not offered until it’s connected to Meko.`;
     const upgrade = HARNESS_CAPS[id].upgrade;
-    return `Version ${h.version}; AgentK needs ${h.minVersion} or later. ${upgrade ? `Run ${upgrade}` : 'Update it'}, then check again.`;
+    return `Version ${h.version}; Kode needs ${h.minVersion} or later. ${upgrade ? `Run ${upgrade}` : 'Update it'}, then check again.`;
   }
   return `Version ${h.version}.`;
 }
@@ -737,7 +737,7 @@ function HarnessTab({
             labelledBy="set-agent-label"
           />
           <InfoPanel id="set-agent-info">
-            New sessions and Ask AgentK run on it. The New session dialog can pick another, and a session keeps the agent it
+            New sessions and Ask Kode run on it. The New session dialog can pick another, and a session keeps the agent it
             started on.
           </InfoPanel>
         </div>
@@ -811,7 +811,7 @@ export function AgentSettings({
   updating: boolean;
   /** What this page's update of it came to, when nothing else says so (Claude Code with the mod off). */
   outcome?: { ok: boolean; text: string } | null;
-  /** Whether this agent's sessions reach AgentK's Meko (`AppState.meko`); left out, no Meko row. */
+  /** Whether this agent's sessions reach Kode's Meko (`AppState.meko`); left out, no Meko row. */
   meko?: MekoStatus;
   /** Every harness's status as Connect to Meko's refresh answered, until the next state push. */
   onHarnesses?: (harnesses: HarnessStatus[]) => void;
@@ -858,7 +858,7 @@ export function AgentSettings({
           checked={s.opencodeDisableTracking}
           onChange={(on) => onChange({ opencodeDisableTracking: on })}
         >
-          On, OpenCode sessions and Ask AgentK send no telemetry, skip OpenCode's update check and hide OpenCode Zen's free
+          On, OpenCode sessions and Ask Kode send no telemetry, skip OpenCode's update check and hide OpenCode Zen's free
           models, whose providers may train on your prompts, and commands the agent runs export no OpenTelemetry. Your prompts
           and code still go to the model you pick; for code that must stay on this computer, use a local model (Ollama, LM
           Studio). Applies when a session next starts or resumes.
@@ -866,9 +866,9 @@ export function AgentSettings({
       )}
       {id === 'kiro' && enabled && (
         <InfoCheck id="set-kiro-trust" label="Let Kiro run any tool without asking" checked={s.kiroTrustTools} onChange={(on) => onChange({ kiroTrustTools: on })}>
-          Kiro tells AgentK nothing while it waits for a permission answer, so the session looks busy until you answer in its
-          terminal. On, Kiro runs every tool, shell commands included, without asking, in AgentK's sessions. Applies when a
-          session next starts or resumes. On Kiro 3.0, turning it off also makes sessions already running ask again, and AgentK
+          Kiro tells Kode nothing while it waits for a permission answer, so the session looks busy until you answer in its
+          terminal. On, Kiro runs every tool, shell commands included, without asking, in Kode's sessions. Applies when a
+          session next starts or resumes. On Kiro 3.0, turning it off also makes sessions already running ask again, and Kode
           stops following them until they're restarted.
         </InfoCheck>
       )}
@@ -887,7 +887,7 @@ const MEKO_TAG: Record<HarnessMekoState, string> = {
 
 /**
  * Settings › Harness › an agent: whether it's connected to Meko (Meko's list, `HarnessStatus.meko`),
- * with **Connect to Meko** when it isn't, and whether its sessions reach AgentK's Meko, worked out by
+ * with **Connect to Meko** when it isn't, and whether its sessions reach Kode's Meko, worked out by
  * the server (`MekoStatus.claude`, `.opencode`, `.kiro`), with Meko's setup for what Meko's capture
  * needs. Nothing when there's nothing to say for that agent.
  */
@@ -900,7 +900,7 @@ function AgentMeko({
   const label = HARNESS_CAPS[id].label;
   const url = meko.url ?? '';
   const m = harness.meko;
-  // The connection first, then what AgentK checks itself.
+  // The connection first, then what Kode checks itself.
   let tag: string | null = m ? MEKO_TAG[m.state] : null;
   const lines: string[] = [];
   if (m?.state === 'elsewhere') lines.push(`Connected elsewhere: ${m.url ?? 'another server'}.`);
@@ -921,7 +921,7 @@ function AgentMeko({
     tag ??= capture.length ? 'differs' : 'matches';
   } else if (meko.configured && id === 'opencode' && meko.opencode) {
     tag ??= meko.opencode.own ? 'its own' : 'matches';
-    info = meko.opencode.own ? 'AgentK leaves OpenCode’s config as it is.' : 'AgentK adds it to their config.';
+    info = meko.opencode.own ? 'Kode leaves OpenCode’s config as it is.' : 'Kode adds it to their config.';
     if (!lines.length) lines.push(meko.opencode.own ? 'Sessions use OpenCode’s own meko server.' : `Sessions use ${url}.`);
   }
   if (!tag && !lines.length) return null;
@@ -1028,18 +1028,18 @@ function UsageStatsCheck() {
           <span>Send anonymous usage stats to YugabyteDB</span>
         </label>
       )}
-      {offBy && <p className="muted small">Turned off by {offBy} in AgentK's environment.</p>}
+      {offBy && <p className="muted small">Turned off by {offBy} in Kode's environment.</p>}
       <ErrorText error={error} />
     </div>
   );
 }
 
-/** Who installs AgentK's updates and what one restarts, behind Settings › Updates' ⓘ. */
+/** Who installs Kode's updates and what one restarts, behind Settings › Updates' ⓘ. */
 const UPDATES_INFO =
-  'Meko checks for and installs AgentK’s updates. An update restarts only the web server: sessions keep running and the page reconnects on its own.';
+  'Meko checks for and installs Kode’s updates. An update restarts only the web server: sessions keep running and the page reconnects on its own.';
 
 function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew: (from: string, to: string) => void }) {
-  // Meko checks for AgentK's updates, installs them and keeps Update automatically (mekoupdate.ts).
+  // Meko checks for Kode's updates, installs them and keeps Update automatically (mekoupdate.ts).
   const { row, error: mekoError, loaded } = useMekoUpdate();
   const can = !!row?.updatable;
   const available = can && !!row.update_available && !!row.latest;

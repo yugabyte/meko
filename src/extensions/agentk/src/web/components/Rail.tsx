@@ -145,7 +145,7 @@ export function Rail({
           It's named by its visible text, so speech input can say what it sees; the chip stays out of the name. */}
       <button className="rail-search" onClick={onPalette} aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}>
         <img src={appUrl('/logo.png')} alt="" width={16} height={16} />
-        <span className="rail-search-text">Ask AgentK</span>
+        <span className="rail-search-text">Ask Kode</span>
         {!touch && <kbd aria-hidden="true">{mod}K</kbd>}
       </button>
       <div className="rail-list" ref={listRef}>
@@ -485,7 +485,7 @@ function Icon({ d }: { d: string }) {
   );
 }
 
-/** Opens Meko's own web UI, in this tab: its main page, on the origin AgentK is served from. */
+/** Opens Meko's own web UI, in this tab: its main page, on the origin Kode is served from. */
 export function MekoHomeLink() {
   return (
     <a className="icon-btn rail-meko" href={MEKO_HOME_PATH} title="Open Meko" aria-label="Open Meko">

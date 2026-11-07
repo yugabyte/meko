@@ -10,7 +10,7 @@ export function newCommitsText(n: number | null): string {
 
 /**
  * A Review a PR session's gate: where the PR stands, Update to latest when it has moved on (or has a
- * design AgentK hasn't read), and Close review.
+ * design Kode hasn't read), and Close review.
  */
 export function ReviewPrGate({
   session,
@@ -33,7 +33,7 @@ export function ReviewPrGate({
   const rv = session.reviewingPr;
   const gone = !!rv && rv.prState !== 'OPEN';
   const moved = !!rv && !gone && rv.headSha !== rv.reviewSha;
-  // A version of the PR's design AgentK hasn't read: Update to latest has it read, commits or not.
+  // A version of the PR's design Kode hasn't read: Update to latest has it read, commits or not.
   const designUnread = !!rv && !gone && rv.designUnread;
   return (
     <span className="gate-group">
@@ -44,7 +44,7 @@ export function ReviewPrGate({
         <button
           className="gate"
           disabled={blocked || updating || !!reason}
-          title={reason ?? (moved ? "Check out the PR's latest commits; AgentK sums up what changed" : "AgentK reads the PR's new design and sums it up")}
+          title={reason ?? (moved ? "Check out the PR's latest commits; Kode sums up what changed" : "Kode reads the PR's new design and sums it up")}
           onClick={() => onAct('update-pr')}
         >
           {updating ? <Busy label="Updating" /> : 'Update to latest'}

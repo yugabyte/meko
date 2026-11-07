@@ -112,21 +112,31 @@ func versionOf(tag string, prefixes []string) (string, bool) {
 
 // PickMeko is the newest Meko release with a tarball for this platform.
 func PickMeko(releases []Release, goos, arch string, bad map[string]bool) (Release, string, bool) {
-	return PickPackage(releases, []string{TagPrefix}, "meko", goos, arch, bad)
+	return PickPackage(releases, []string{TagPrefix}, []string{"meko"}, goos, arch, bad)
 }
 
-// PickPackage is the newest release tagged with one of prefixes that has package name's tarball for
-// this platform and SHA256SUMS, skipping the versions in bad.
-func PickPackage(releases []Release, prefixes []string, name, goos, arch string,
+// PickPackage is the newest release tagged with one of prefixes that has a tarball for this platform
+// of the package by one of names (App.Packages: its name now, then its old ones) and SHA256SUMS,
+// skipping the versions in bad.
+func PickPackage(releases []Release, prefixes, names []string, goos, arch string,
 	bad map[string]bool) (Release, string, bool) {
-	return Pick(releases, prefixes, func(v string) []string {
-		return []string{PackageTarball(name, v, goos, arch), Sums}
-	}, bad)
+	var best Release
+	var bestV Version
+	found := false
+	for _, name := range names {
+		r, ver, ok := Pick(releases, prefixes, func(v string) []string {
+			return []string{PackageTarball(name, v, goos, arch), Sums}
+		}, bad)
+		if v, _ := ParseVersion(ver); ok && (!found || bestV.Less(v)) {
+			best, bestV, found = r, v, true
+		}
+	}
+	return best, bestV.String(), found
 }
 
-// PickPackageVersion is the release of package name's version, tagged with one of prefixes, that has
-// its tarball for this platform and SHA256SUMS, whether or not it was rolled back.
-func PickPackageVersion(releases []Release, prefixes []string, name, version, goos, arch string) (Release, bool) {
+// PickPackageVersion is the release of the package's version, tagged with one of prefixes, that has
+// its tarball for this platform by one of names and SHA256SUMS, whether or not it was rolled back.
+func PickPackageVersion(releases []Release, prefixes, names []string, version, goos, arch string) (Release, bool) {
 	for _, r := range releases {
 		if r.Draft {
 			continue
@@ -134,10 +144,13 @@ func PickPackageVersion(releases []Release, prefixes []string, name, version, go
 		if v, ok := versionOf(r.Tag, prefixes); !ok || v != version {
 			continue
 		}
-		_, tar := r.Asset(PackageTarball(name, version, goos, arch))
-		_, sums := r.Asset(Sums)
-		if tar && sums {
-			return r, true
+		if _, sums := r.Asset(Sums); !sums {
+			continue
+		}
+		for _, name := range names {
+			if _, tar := r.Asset(PackageTarball(name, version, goos, arch)); tar {
+				return r, true
+			}
 		}
 	}
 	return Release{}, false

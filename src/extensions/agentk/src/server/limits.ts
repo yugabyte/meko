@@ -37,7 +37,7 @@ export function parseRateLimits(input: unknown, now: number): PlanLimits | null 
 }
 
 /**
- * The plan limits AgentK's mod reports (`session.measure`'s `rateLimits`: `{ kind, percentUsed,
+ * The plan limits Kode's mod reports (`session.measure`'s `rateLimits`: `{ kind, percentUsed,
  * resetsAt }`, the reset time as an ISO date), or null when it has none.
  */
 export function parseMeasuredLimits(list: unknown, now: number): PlanLimits | null {
@@ -123,7 +123,7 @@ export class PlanLimitsStore {
 
   /**
    * Starts afresh when Claude is signed in to another account: the limits are the old account's.
-   * The first account AgentK learns (an upgrade) starts afresh too, since nothing says the limits
+   * The first account Kode learns (an upgrade) starts afresh too, since nothing says the limits
    * it kept are that account's: a switch before the upgrade left the old one's. That costs an
    * empty rail until the next reply. Being signed out (no account) isn't a change: the next
    * sign-in is. Returns whether it started afresh.
@@ -166,7 +166,7 @@ export class PlanLimitsStore {
     this.take(session, parseRateLimits(input, now), now);
   }
 
-  /** Takes the limits AgentK's mod measured in a session (see `take`). */
+  /** Takes the limits Kode's mod measured in a session (see `take`). */
   reportMeasured(session: string, rateLimits: unknown, now = Date.now()): void {
     this.take(session, parseMeasuredLimits(rateLimits, now), now);
   }

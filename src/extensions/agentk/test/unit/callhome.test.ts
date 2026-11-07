@@ -132,10 +132,10 @@ function seeded(): Db {
   event('s1', 'p1', 'created', 'Started ak/secret-branch from main in a reused worktree (wt-1)', '2026-09-27T11:00:00Z', { reused: true });
   event('s1', 'p1', 'pr', 'Opened PR #7', '2026-09-27T13:00:00Z', { url: 'https://github.com/alice/zeta/pull/7' });
   event('s1', 'p1', 'pr', 'Opened PR #3', '2026-09-01T13:00:00Z', { url: 'https://github.com/alice/zeta/pull/3' });
-  event('s1', 'p1', 'review', 'AgentK review: 2 findings in secret-branch', '2026-09-27T14:30:00Z');
+  event('s1', 'p1', 'review', 'Kode review: 2 findings in secret-branch', '2026-09-27T14:30:00Z');
   event('s1', 'p1', 'review', 'Dismissed the held review from bob', '2026-09-27T14:40:00Z');
   event('s1', 'p1', 'ci', 'CI failed: build', '2026-09-27T14:50:00Z');
-  event('s1', 'p1', 'comments', 'Sent 3 to AgentK', '2026-09-27T15:10:00Z');
+  event('s1', 'p1', 'comments', 'Sent 3 to Kode', '2026-09-27T15:10:00Z');
   event('s1', 'p1', 'recovered', 'Relaunched', '2026-09-27T16:10:00Z');
   event('s1', 'p1', 'resumed', 'Resumed', '2026-09-27T16:20:00Z');
   event('s2', 'p1', 'created', 'Started', '2026-09-20T09:00:00Z', { reused: false });
@@ -394,7 +394,7 @@ describe('the usage stats report', () => {
     expect(first.days.reduce((n, d) => n + (d.meko?.calls ?? 0), 0)).toBe(5);
   });
 
-  it("counts learn steps, AgentK's own Meko calls, transcript captures and Ask AgentK's asks, on the day each began", () => {
+  it("counts learn steps, Kode's own Meko calls, transcript captures and Ask Kode's asks, on the day each began", () => {
     const db = seeded();
     const learn = (id: string, s: string, trigger: string, path: string, start: string, end: string, outcome: string, c: number[]) =>
       run(db, `INSERT INTO meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, candidates, saves, updates, skips,
@@ -419,7 +419,7 @@ describe('the usage stats report', () => {
     own('2026-09-27T17:00:55Z', 'memory_add', 200, 0, 900);
     own('2026-09-28T05:00:00Z', 'Weird.Tool', 40, 1, 100);
     run(db, 'INSERT INTO meko_capture_runs(at, ok, ms) VALUES (?, 1, 300), (?, 0, 100)', at('2026-09-27T18:00:00Z'), at('2026-09-28T06:00:00Z'));
-    // Ask AgentK: two asks one day (one timed out), one the next.
+    // Ask Kode: two asks one day (one timed out), one the next.
     run(db, 'INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, 1, 2, 2100), (?, 0, 0, 45000), (?, 1, 0, 1900)',
       at('2026-09-27T19:00:00Z'), at('2026-09-27T19:05:00Z'), at('2026-09-28T07:00:00Z'));
 
@@ -505,7 +505,7 @@ describe('the usage stats report', () => {
     expect(models.at(-1)).toMatchObject({ model: 'other', messages: 1 + 2 + 3 + 4 });
   });
 
-  it("names AgentK's nine most used tools, and the rest as other", () => {
+  it("names Kode's nine most used tools, and the rest as other", () => {
     const db = openDb(':memory:');
     for (let i = 0; i < 12; i++) {
       for (let n = 0; n <= i; n++) {
@@ -608,7 +608,7 @@ describe('what the report says about the install', () => {
     return a;
   };
 
-  it("reads the agents' versions from the config and Meko from the one on this computer, linked or not, and says Meko serves AgentK", async () => {
+  it("reads the agents' versions from the config and Meko from the one on this computer, linked or not, and says Meko serves Kode", async () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
     const reader = new LocalMekoReader(async () => ({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 't' }, cloud: { account: '', webUrl: '' } }));
     await reader.refresh();
@@ -680,7 +680,7 @@ describe('sending the report', () => {
 
   it("sends the report in yugabyted's envelope to YugabyteDB's call home service from a release install", async () => {
     const t = setup();
-    // A report AgentK's own collector received before doesn't count: the first one here is still 30 days.
+    // A report Kode's own collector received before doesn't count: the first one here is still 30 days.
     kvSet(t.db, 'call_home_last_sent', String(NOW - CHECK_EVERY_MS));
     expect(await t.service().tick()).toBe(true);
     expect(t.calls).toHaveLength(1);

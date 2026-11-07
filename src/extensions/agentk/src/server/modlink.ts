@@ -52,7 +52,7 @@ interface Pending {
   text: string;
   /**
    * A workshop host's events: the mod hides a bare "OK" in its turn. The prompt's own row is hidden by
-   * AgentK's view mod, by its first line (AK_HIDDEN_PROMPT), not by this.
+   * Kode's view mod, by its first line (KODE_HIDDEN_PROMPT), not by this.
    */
   hidden: boolean;
   /** Answered to a poll; waiting for the mod's ack. */
@@ -112,9 +112,9 @@ interface Link {
 }
 
 /**
- * Each session's link to AgentK's mod running in its Claude process (src/mod/agentk): whether the
+ * Each session's link to Kode's mod running in its Claude process (src/mod/agentk): whether the
  * mod is there, and the prompts on their way to it. Kept in memory only: after a server restart the
- * mod's next poll brings the link back, and the prompts AgentK queues are in the database anyway.
+ * mod's next poll brings the link back, and the prompts Kode queues are in the database anyway.
  *
  * A prompt goes to the mod only while the link is live, and is submitted by the mod only once the
  * server answered its `accepted` ack with 204, which is also when the send resolves. A prompt not
@@ -275,8 +275,8 @@ export class ModLinks {
    * Sends a prompt through the mod. Resolves with its id once the server has told the mod to submit
    * it (Claude runs it when it's next idle); rejects when the mod doesn't ack it within ACCEPT_MS, or the link
    * is reset, and then the mod is told not to submit it. For a `hidden` one (a workshop host's events)
-   * the mod draws a bare "OK" in its turn as nothing; AgentK's view mod hides the prompt's own row by
-   * its first line (AK_HIDDEN_PROMPT).
+   * the mod draws a bare "OK" in its turn as nothing; Kode's view mod hides the prompt's own row by
+   * its first line (KODE_HIDDEN_PROMPT).
    */
   send(session: string, text: string, hidden = false): Promise<string> {
     const l = this.link(session);
@@ -290,7 +290,7 @@ export class ModLinks {
         reject,
         timer: setTimeout(() => {
           this.remove(l, p);
-          reject(new Error("AgentK's mod in Claude didn't take the prompt in time"));
+          reject(new Error("Kode's mod in Claude didn't take the prompt in time"));
         }, ACCEPT_MS),
       };
       p.timer.unref?.();
@@ -520,6 +520,6 @@ export class ModLinks {
   closeAll(): void {
     clearInterval(this.sweeper);
     this.pause();
-    for (const s of [...this.links.keys()]) this.reset(s, 'AgentK is stopping');
+    for (const s of [...this.links.keys()]) this.reset(s, 'Kode is stopping');
   }
 }

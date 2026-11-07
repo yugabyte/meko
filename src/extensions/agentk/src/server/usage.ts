@@ -671,7 +671,7 @@ export interface AgentUsageRead {
 
 /**
  * Reads an OpenCode session's `messages.jsonl` (each finished response's tokens, and each Meko call
- * with its reply, written by AgentK's plugin) from where the last read stopped: responses into
+ * with its reply, written by Kode's plugin) from where the last read stopped: responses into
  * `usage_messages`, priced like Claude Code's, and Meko calls into `meko_calls`. Its subagents'
  * count too, under their own OpenCode session as the agent (`main`'s have none).
  */

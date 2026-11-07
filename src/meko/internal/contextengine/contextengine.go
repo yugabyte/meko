@@ -83,8 +83,8 @@ func (e *APIError) Error() string { return e.Message }
 
 // FindNode picks the Node binary: o.Node alone if it's set (configured explicitly, it replaces the
 // search); otherwise the one shipped next to meko (<bin>/../node/bin/node), then node on PATH.
-// It must be MinNode or newer. It doesn't check whose Node it found: AgentK's own is used only if
-// meko is installed inside AgentK's app folder or AgentK's node leads PATH, which packaging
+// It must be MinNode or newer. It doesn't check whose Node it found: Kode's own is used only if
+// meko is installed inside Kode's app folder or Kode's node leads PATH, which packaging
 // avoids.
 func FindNode(o Options) (string, error) {
 	var candidates []string

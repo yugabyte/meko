@@ -10,7 +10,7 @@ an HTTP server with auth, and a supervisor for child processes. The rest builds 
 | [api.md](api.md) | MCP at `/mcp`, REST at `/api/v1`, the client token, the call log, the CLI's tool commands |
 | [knowledge.md](knowledge.md) | Knowledge files: uploads, ingestion, hybrid search with a reranker |
 | [install.md](install.md) | Release builds, releases, the installer, the login service, extensions, updates, secrets |
-| [web.md](web.md) | One port for browsers and agents: local or remote access (no login), turning the web UI off, TLS beside plain HTTP, extensions at `/ext/<name>/`, the handoff from AgentK |
+| [web.md](web.md) | One port for browsers and agents: local or remote access (no login), turning the web UI off, TLS beside plain HTTP, extensions at `/ext/<name>/`, the handoff from Kode |
 | [web-ui.md](web-ui.md) | The web UI served at `/` |
 
 Meko keeps up to 200 MB of content by default: the stored data itself (memory text, conversation
@@ -29,7 +29,7 @@ code is private: nothing here copies it or cites its paths.
 ```mermaid
 flowchart LR
   cli["meko start"] -->|"spawns detached, or starts the login service"| serve["meko serve"]
-  serve -->|"7777: agents and the CLI on 127.0.0.1, browsers local or remote (web.md)"| web["/healthz, /api/v1, /mcp, / (the web UI), /ext/agentk/"]
+  serve -->|"7777: agents and the CLI on 127.0.0.1, browsers local or remote (web.md)"| web["/healthz, /api/v1, /mcp, / (the web UI), /ext/kode/"]
   serve -->|"owns"| db[("meko.db (SQLite)")]
   serve -->|"starts, watches, restarts"| context_engine["Node context engine"]
   context_engine -->|"store API, unix socket"| serve
@@ -51,7 +51,7 @@ flag set's flags), which `meko --help`, `meko help <cmd>` and `<cmd> --help` (ex
 (`report.go`): a row per step marked `✓`, `!` or `✗`, a `● Meko <version> is running` headline,
 the links as plain aligned rows (`Web UI` and `Agents`, both on Meko's one port, and `Cloud`), and the commands to run next (`next.go`, the first shown as the call to action, which
 leaves out what's already set up, an agent connected, memory extraction on or Meko Cloud linked,
-and once AgentK is installed offers opening it in place of installing it); the extensions
+and once Kode is installed offers opening it in place of installing it); the extensions
 print their own rows ([install.md](install.md#the-summary-rows)), and the colors are one palette
 that reads on light and dark terminals ([install.md](install.md#colors)). `status` is that checklist;
 `status --verbose` has everything, and `status --json` the server's status reply.
@@ -82,7 +82,7 @@ Shutdown on SIGTERM or SIGINT: stop accepting connections, drain requests (10 s)
 them), checkpoint the WAL, close the database, remove the pid file.
 
 No client keeps `serve` as its own child, because restarting the client would then stop Meko. It's
-the other way round: Meko runs as a login service and starts and stops its extensions, AgentK first,
+the other way round: Meko runs as a login service and starts and stops its extensions, Kode first,
 through their own CLIs ([install.md](install.md#extensions)).
 
 ### destroy
@@ -101,10 +101,10 @@ of input means no; a no exits 1), or doesn't ask with `--force`.
   parent isn't writable), nothing is removed: removing the folder in place would unlink the lock
   file partway, and since flock locks the inode, a `serve` starting then could lock a new file and
   write into the folder.
-- Extensions' data in the folder (`extensions/`, where AgentK's home is, and `extensions.json`) is
+- Extensions' data in the folder (`extensions/`, where Kode's home is, and `extensions.json`) is
   kept unless the user says so at a second question, or passes `--with-extensions`, which runs each
   extension's own uninstall first ([install.md](install.md#extensions)); `--force` alone keeps it.
-  Keeping it can't rename the folder, which would pull AgentK's home out from under its running
+  Keeping it can't rename the folder, which would pull Kode's home out from under its running
   sessions: holding the lock, it moves every other entry into `<root>.destroying-<pid>`, `run/`
   (which holds the lock file) last, so no server starts before Meko's data is all gone, then removes
   them; a failed move puts back what was moved.
@@ -131,19 +131,19 @@ of input means no; a no exits 1), or doesn't ask with `--force`.
   secrets/                   the file secret store (install.md)
   update.json                the last update check
   extensions.json            the extensions meko start and stop run (install.md)
-  extensions/<name>/         each extension's own data: extensions/agentk is AgentK's home, which
+  extensions/<name>/         each extension's own data: extensions/kode is Kode's home, which
                              follows wherever this folder is; destroy keeps it unless told otherwise
 ```
 
 The database must sit on a local disk, not a network filesystem: SQLite's WAL locking doesn't work
 there, and neither does `flock` across hosts. When the default folder is on a network filesystem
-(NFS, SMB, sshfs and the others in AgentK's `install.ts` list), the default moves to local disk
-instead, as AgentK's installer does (`src/extensions/agentk/src/server/install.ts`):
+(NFS, SMB, sshfs and the others in Kode's `install.ts` list), the default moves to local disk
+instead, as Kode's installer does (`src/extensions/agentk/src/server/install.ts`):
 `$XDG_STATE_HOME/meko` if that's an absolute path on a local disk (a relative one is ignored, as the
 XDG spec says), else `/var/tmp/<user>/meko`, named by the user lookup; a failed lookup is an error.
 `/var/tmp/<user>` must be a real folder (not a symlink) owned by the user and not writable by
 others, or by a group other than the user's own. An
-explicit `--data-dir` on a network filesystem is refused with a message saying why. Meko, AgentK
+explicit `--data-dir` on a network filesystem is refused with a message saying why. Meko, Kode
 and Present check their rule against the cases in `internal/paths/testdata/resolve-cases.json`.
 
 Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown key in
@@ -152,7 +152,7 @@ Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown k
 | Key | Env | Default | What |
 |---|---|---|---|
 | `[server] port` | `MEKO_PORT`, `--port` | 7777 | Meko's one port, for agents, the CLI and browsers ([web.md](web.md)). A taken port is an error naming the setting, with no random fallback. `[web] port` and `MEKO_WEB_PORT` are refused, naming it. |
-| `[web] access`, `name`, `enabled`; `[tls] cert`, `key` | `MEKO_WEB_ACCESS` | `"local"` | How browsers reach Meko ([web.md](web.md#settings)). What Meko chose itself (`meko install`, the handoff from AgentK, `meko ui start` and `stop`) is in `web.toml`, which these keys in `config.toml` override. |
+| `[web] access`, `name`, `enabled`; `[tls] cert`, `key` | `MEKO_WEB_ACCESS` | `"local"` | How browsers reach Meko ([web.md](web.md#settings)). What Meko chose itself (`meko install`, the handoff from Kode, `meko ui start` and `stop`) is in `web.toml`, which these keys in `config.toml` override. |
 | `[server] auth` | `MEKO_AUTH` | `"token"` | `"none"` lifts the credential on `/mcp` and the data routes ([api.md](api.md)). |
 | `[log] level` | `MEKO_LOG_LEVEL`, `--log-level` | `"info"` | |
 | `[context_engine] node`, `dir` | `MEKO_NODE`, `MEKO_CONTEXT_ENGINE_DIR` | found | Node and the built context engine ([context-engine.md](context-engine.md)). |
@@ -235,7 +235,7 @@ moved), bump the `replace`, and update the versions `TestLibVersions` expects.
 
 Numbered SQL files in `internal/store/migrations/`, embedded with `go:embed`, applied in order
 inside a transaction, with the version recorded in `PRAGMA user_version`. They're append-only: a
-shipped migration is never edited (the same rule as AgentK's `src/extensions/agentk/src/server/db.ts`).
+shipped migration is never edited (the same rule as Kode's `src/extensions/agentk/src/server/db.ts`).
 Before a migration runs on an existing database, the old file is copied to `meko.db.bak-<version>`
 with `VACUUM INTO` (a consistent copy while open), so a failed upgrade can be rolled back
 (`store.RestoreBackup`, [install.md](install.md#updates-and-rollback)). A database whose version is
@@ -446,8 +446,8 @@ In `make test` on Linux and macOS:
   `UnixHTTPCheck` passes on 2xx and fails on other answers or a missing socket.
 - **cli**: `start`, `status`, `stop` against a temp data folder; `ui`, `ui stop` (browsers kept
   out and agents let in, across a restart too) and `ui start`, running or not, and `token --json`'s
-  `web_url`; the handoff from a fake AgentK (remote access and its certificate taken over, never its
-  port, its login ignored, then AgentK reached through Meko over HTTPS while the CLI keeps plain
+  `web_url`; the handoff from a fake Kode (remote access and its certificate taken over, never its
+  port, its login ignored, then Kode reached through Meko over HTTPS while the CLI keeps plain
   HTTP, and nothing added twice); agents at 127.0.0.1:7778 moved to the one port once; a second `serve` on the same
   folder fails on the lock; a stale pid file doesn't block `start` and is replaced by the new
   server's pid; a taken port gives the clear error; `destroy`'s refusals and what it keeps; every

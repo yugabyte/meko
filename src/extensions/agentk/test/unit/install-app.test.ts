@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { installOffer, isIos } from '../../src/web/installapp.js';
 
-describe('offering to install AgentK as an app', () => {
+describe('offering to install Kode as an app', () => {
   const none = { installed: false, canPrompt: false, ios: false, dismissed: false };
 
   it.each([

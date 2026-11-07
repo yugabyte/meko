@@ -94,7 +94,7 @@ export class ApiError extends Error {
 }
 
 /**
- * `path` is the route on AgentK's server (`/api/…`), fetched under BASE. `raw` sends those bytes as
+ * `path` is the route on Kode's server (`/api/…`), fetched under BASE. `raw` sends those bytes as
  * the body, with their content type, instead of `body` as JSON.
  */
 async function request<T>(
@@ -112,7 +112,7 @@ async function request<T>(
   } catch (e) {
     // Cancelled by the caller: theirs to ignore, not a server that's down.
     if (opts.signal?.aborted) throw e;
-    throw new ApiError(0, 'Can’t reach the AgentK server. Check that it is running.');
+    throw new ApiError(0, 'Can’t reach the Kode server. Check that it is running.');
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -126,7 +126,7 @@ async function request<T>(
   }
   if (!res.ok) {
     const obj = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
-    // Meko, in front of AgentK, answers its own refusals in its envelope: { error: { code, message } }.
+    // Meko, in front of Kode, answers its own refusals in its envelope: { error: { code, message } }.
     const meko = obj.error && typeof obj.error === 'object' ? (obj.error as { message?: unknown }).message : undefined;
     const msg =
       typeof obj.error === 'string'
@@ -136,7 +136,7 @@ async function request<T>(
           : res.status === 429
             ? 'Too many attempts. Wait a few minutes and try again.'
             : `Request failed (${res.status}).`;
-    // AgentK has no login of its own: a 401 is Meko's, whose sign-in has gone.
+    // Kode has no login of its own: a 401 is Meko's, whose sign-in has gone.
     if (res.status === 401) void checkSignIn();
     // An action that works on GitHub, while gh isn't installed or signed in: the GitHub dialog offers both.
     if (obj.code === GH_NEEDED) openGhDialog(msg);
@@ -199,7 +199,7 @@ export const api = {
   /** What a pasted GitHub PR or issue (a link or owner/name#N) would start, and where. */
   githubLink: (ref: string, projectId: string | null) => get<LinkPlan>(`/api/github-link?ref=${enc(ref)}${projectId ? `&project=${enc(projectId)}` : ''}`),
   startFromLink: (b: StartFromLinkRequest) => post<StartFromLinkResult>('/api/github-link/start', b),
-  askAgentk: (b: AskAgentkRequest, signal: AbortSignal) => request<AskAgentkResult>('POST', '/api/ask-agentk', b, { signal }),
+  askKode: (b: AskAgentkRequest, signal: AbortSignal) => request<AskAgentkResult>('POST', '/api/ask-kode', b, { signal }),
   runActions: (b: RunActionsRequest) => post<RunActionsResult>('/api/actions/run', b),
   usage: () => get<UsageOverview>('/api/usage'),
   closedWorkItems: () => get<WorkItem[]>('/api/work-items?status=closed'),

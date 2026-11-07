@@ -3,7 +3,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { HttpResponse, On, PromptSubmitInput } from 'claude-code'
 
-const ENV = { AK_HOOK_SOCK: '/ak/hook.sock', AK_HOOK_TOKEN: 'tok' }
+const ENV = { KODE_HOOK_SOCK: '/ak/hook.sock', KODE_HOOK_TOKEN: 'tok' }
 
 interface Call {
   path: string
@@ -18,7 +18,7 @@ const answer = (status: number, body?: unknown): { value: HttpResponse } => ({
 })
 
 /**
- * The AgentK server beneath the mod: records each request, answers polls from `prompts`, and an
+ * The Kode server beneath the mod: records each request, answers polls from `prompts`, and an
  * `accepted` ack with `ackStatus` (204: submit it).
  */
 function server(on: On, prompts: { id: string; text: string }[][] = [], ackStatus = 204) {
@@ -64,7 +64,7 @@ function engine(on: On, drop?: string, box = '') {
 
 const START = { cwd: '/work', surface: null, isInteractive: true } as const
 
-test('says hello, then submits each prompt AgentK has as the person own, acked first', async ($, on) => {
+test('says hello, then submits each prompt Kode has as the person own, acked first', async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)
   const calls = server(on, [[{ id: 'p1', text: 'Implement the design.' }]])
@@ -156,7 +156,7 @@ test('passes the context fill and plan limits on after a turn', async ($, on) =>
   expect(calls).toEqual([{ path: '/mod/measure', body: { context, rateLimits }, socketPath: '/ak/hook.sock', token: 'tok' }])
 })
 
-test('tells AgentK of a turn the person interrupted, and of no other turn', async ($, on) => {
+test('tells Kode of a turn the person interrupted, and of no other turn', async ($, on) => {
   mock.env(on, ENV)
   const calls = server(on)
   on('turn.complete', () => ({ text: '' }))
@@ -170,7 +170,7 @@ test('tells AgentK of a turn the person interrupted, and of no other turn', asyn
 test("draws a bare OK in a hidden prompt's turn as nothing, but in full with ctrl+o", async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)
-  const events = 'AgentK events:\n- Review the score fix: First look done'
+  const events = 'Kode events:\n- Review the score fix: First look done'
   server(on, [[{ id: 'p1', text: events, hidden: true }]])
   engine(on)
   on('ui.render', () => ({ type: 'Text', children: ['drawn'] }))
@@ -178,7 +178,7 @@ test("draws a bare OK in a hidden prompt's turn as nothing, but in full with ctr
   const drawn = expect.objectContaining({ type: 'Text' })
   await $.session.start(START)
   await clock.advance(5)
-  const origin = { kind: 'plugin', name: 'agentk', asUser: true } as const
+  const origin = { kind: 'plugin', name: 'kode', asUser: true } as const
   const reply = (requestId: string, text: string) =>
     $.ui.render({ surface: 'terminal', component: 'AssistantMessage', requestId, props: { text, isFirstOfReply: true } })
   const hidden = expect.objectContaining({ type: 'Box', props: { display: 'none' } })
@@ -192,7 +192,7 @@ test("draws a bare OK in a hidden prompt's turn as nothing, but in full with ctr
   expect(await reply('a1', 'OK')).toEqual(hidden)
 })
 
-test('does nothing outside an AgentK session', async ($, on) => {
+test('does nothing outside a Kode session', async ($, on) => {
   mock.env(on, {})
   const clock = mock.clock(on)
   const calls = server(on)
@@ -207,7 +207,7 @@ test('does nothing outside an AgentK session', async ($, on) => {
 
 const QUESTIONS = [{ question: 'Which color?', header: 'Color', options: [{ label: 'Red', description: 'Warm' }, { label: 'Blue', description: 'Cool' }], multiSelect: false }]
 
-/** The AgentK server for asks and the questions tool: `reply` answers each request (pending: held). */
+/** The Kode server for asks and the questions tool: `reply` answers each request (pending: held). */
 function routes(on: On, reply: (path: string, body: Record<string, unknown>) => { value: HttpResponse } | Promise<{ value: HttpResponse }>) {
   const calls: { path: string; body: Record<string, unknown> }[] = []
   on('http.fetch', (_$, e) => {
@@ -239,7 +239,7 @@ function dialog(on: On) {
 
 const held = () => new Promise<{ value: HttpResponse }>(() => undefined)
 
-test("answers Claude's question with the user's answer from AgentK, closing the terminal's dialog", async ($, on) => {
+test("answers Claude's question with the user's answer from Kode, closing the terminal's dialog", async ($, on) => {
   mock.env(on, ENV)
   const calls = routes(on, (path) => (path === '/mod/ask' ? answer(200, { answers: { 0: 'Blue' } }) : answer(204)))
   const d = dialog(on)
@@ -273,7 +273,7 @@ test("asks again after each hold, and takes the terminal's answer when it comes 
   expect(calls.some((c) => c.path === '/mod/ask/done' && c.body.id === 'tu2')).toBe(true)
 })
 
-test("leaves the question to the terminal when AgentK can't take it", async ($, on) => {
+test("leaves the question to the terminal when Kode can't take it", async ($, on) => {
   mock.env(on, ENV)
   const calls = routes(on, (path) => (path === '/mod/ask' ? answer(400, { error: "question 1 isn't a choice" }) : answer(204)))
   const d = dialog(on)
@@ -302,7 +302,7 @@ test('asks again a while after the server was away', async ($, on) => {
   expect((await call).result).toEqual({ questions: QUESTIONS, answers: { 'Which color?': 'Red' } })
 })
 
-test("leaves Claude's questions to the terminal outside an AgentK session", async ($, on) => {
+test("leaves Claude's questions to the terminal outside a Kode session", async ($, on) => {
   mock.env(on, {})
   const calls = routes(on, () => answer(204))
   const d = dialog(on)
@@ -315,19 +315,19 @@ test("leaves Claude's questions to the terminal outside an AgentK session", asyn
 
 const DESIGN_QUESTIONS = [{ id: 'store', question: 'Where do designs live?', options: [{ label: 'Datapack' }, { label: 'Repo' }], recommended: 0, status: 'open' }]
 
-test('gives Claude the design_questions tool, and passes its questions to AgentK', async ($, on) => {
+test('gives Claude the design_questions tool, and passes its questions to Kode', async ($, on) => {
   mock.env(on, ENV)
   mock.clock(on)
   const registered: string[] = []
   on('tool.register', (_$, e) => {
     registered.push(e.name)
-    return { value: { tool: `mcp__agentk__${e.name}` } }
+    return { value: { tool: `mcp__kode__${e.name}` } }
   })
   const calls = routes(on, (path) => (path === '/mod/questions' ? answer(200, { text: 'Saved 1 question (1 open).' }) : answer(204)))
   engine(on)
   await $.session.start(START)
   expect(registered).toEqual(['design_questions'])
-  const r = await $.tool.call({ tool: 'mcp__agentk__design_questions', questions: DESIGN_QUESTIONS })
+  const r = await $.tool.call({ tool: 'mcp__kode__design_questions', questions: DESIGN_QUESTIONS })
   expect(r.result).toBe('Saved 1 question (1 open).')
   expect(calls.find((c) => c.path === '/mod/questions')?.body).toEqual({ questions: DESIGN_QUESTIONS })
 })
@@ -335,11 +335,11 @@ test('gives Claude the design_questions tool, and passes its questions to AgentK
 test("answers a bad design_questions call with what's wrong, for Claude to fix", async ($, on) => {
   mock.env(on, ENV)
   routes(on, (path) => (path === '/mod/questions' ? answer(400, { error: 'Question 1 needs an "id".' }) : answer(204)))
-  const r = await $.tool.call({ tool: 'mcp__agentk__design_questions', questions: [{ question: 'Where?' }] })
+  const r = await $.tool.call({ tool: 'mcp__kode__design_questions', questions: [{ question: 'Where?' }] })
   expect(r.deny ?? r.text).toBe('Question 1 needs an "id".')
 })
 
-test("tells AgentK when each of Claude's Meko calls starts and ends, failed ones too, and no other tool's", async ($, on) => {
+test("tells Kode when each of Claude's Meko calls starts and ends, failed ones too, and no other tool's", async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)
   const calls = routes(on, () => answer(204))
@@ -366,7 +366,7 @@ test("tells AgentK when each of Claude's Meko calls starts and ends, failed ones
   ])
 })
 
-test("leaves Claude's Meko calls alone outside an AgentK session", async ($, on) => {
+test("leaves Claude's Meko calls alone outside a Kode session", async ($, on) => {
   mock.env(on, {})
   const calls = routes(on, () => answer(204))
   on('tool.call', { tool: 'mcp__meko__context_search' }, () => ({ result: 'found 3' }))
@@ -374,7 +374,7 @@ test("leaves Claude's Meko calls alone outside an AgentK session", async ($, on)
   expect(calls).toEqual([])
 })
 
-test('tells AgentK which prompts Claude still holds, until each starts its turn', async ($, on) => {
+test('tells Kode which prompts Claude still holds, until each starts its turn', async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)
   const calls = server(on, [[{ id: 'p1', text: 'Revise the design.' }]])
@@ -417,10 +417,10 @@ function models(on: On, fork: unknown, check: unknown) {
   return asked
 }
 
-test('runs a learn step: forks the session, runs the duplicate check AgentK hands over, and shows what was saved', async ($, on) => {
+test('runs a learn step: forks the session, runs the duplicate check Kode hands over, and shows what was saved', async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)
-  // AgentK's side: each part of the step, then the line saying what it saved, comes on a poll.
+  // Kode's side: each part of the step, then the line saying what it saved, comes on a poll.
   const answers = [
     { prompts: [], learn: { id: 'L1', kind: 'extract', prompt: 'What did you learn?' } },
     { prompts: [], learn: { id: 'L1', kind: 'check', prompt: 'Check these.', model: 'claude-haiku-4-5-20251001' } },
@@ -446,7 +446,7 @@ test('runs a learn step: forks the session, runs the duplicate check AgentK hand
   expect(asked.toasts).toEqual(['Saved 1 memory and corrected 0 in team/demo.'])
 })
 
-test('tells AgentK why a fork gave nothing', async ($, on) => {
+test('tells Kode why a fork gave nothing', async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)
   let polled = false
@@ -466,7 +466,7 @@ test('tells AgentK why a fork gave nothing', async ($, on) => {
   expect(asked.check).toEqual([])
 })
 
-test('gives the terminal /agentk_learn, which asks AgentK to start a learn step', async ($, on) => {
+test('gives the terminal /kode_learn, which asks Kode to start a learn step', async ($, on) => {
   mock.env(on, ENV)
   mock.clock(on)
   const registered: string[] = []
@@ -474,16 +474,16 @@ test('gives the terminal /agentk_learn, which asks AgentK to start a learn step'
     registered.push(e.name)
     return { value: { command: e.name } }
   })
-  const calls = routes(on, (path) => (path === '/mod/learn/start' ? answer(200, { text: 'AgentK is saving what this session learned to Meko.' }) : answer(204)))
+  const calls = routes(on, (path) => (path === '/mod/learn/start' ? answer(200, { text: 'Kode is saving what this session learned to Meko.' }) : answer(204)))
   engine(on)
   await $.session.start(START)
-  expect(registered).toEqual(['agentk_learn'])
-  const r = await $.command.run({ command: 'agentk_learn', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
-  expect(r.text).toBe('AgentK is saving what this session learned to Meko.')
+  expect(registered).toEqual(['kode_learn'])
+  const r = await $.command.run({ command: 'kode_learn', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+  expect(r.text).toBe('Kode is saving what this session learned to Meko.')
   expect(calls.some((c) => c.path === '/mod/learn/start')).toBe(true)
 })
 
-test("tells AgentK at once when this Claude Code can't fork the session", async ($, on) => {
+test("tells Kode at once when this Claude Code can't fork the session", async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)
   let polled = false

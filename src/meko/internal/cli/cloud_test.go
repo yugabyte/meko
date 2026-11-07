@@ -480,7 +480,7 @@ func TestCloudDatapacks(t *testing.T) {
 		t.Fatalf("REST's create didn't make it in Cloud:\n%s", out)
 	}
 	// REST with the client token, as extensions call it: /api/v1 serves this Meko's datapacks and
-	// passes Meko Cloud's on to it. AgentK's knowledge upload works on each side: the upload link
+	// passes Meko Cloud's on to it. Kode's knowledge upload works on each side: the upload link
 	// comes from the Meko that has the datapack, and its status reads completed there.
 	tok := strings.TrimSpace(clientTok)
 	for _, side := range []struct{ name, id, port string }{{"this Meko", dpHere, port}, {"Cloud", dp, cloudPort}} {
@@ -681,7 +681,7 @@ func restAs(t *testing.T, tok, method, link string, body any) (int, string) {
 	return res.StatusCode, string(out)
 }
 
-// postFile posts a file to an upload link as AgentK does: the signed fields, then the file, no key.
+// postFile posts a file to an upload link as Kode does: the signed fields, then the file, no key.
 func postFile(t *testing.T, link string, fields map[string]string, name string, data []byte) {
 	t.Helper()
 	var body bytes.Buffer

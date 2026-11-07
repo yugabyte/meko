@@ -3,7 +3,7 @@ import { formatStatus, upFor, type StatusFacts } from '../../src/server/statusvi
 
 const NOW = Date.parse('2026-11-03T12:00:00.000Z');
 
-/** A running AgentK, its server up 2h4m, with `o` changed. */
+/** A running Kode, its server up 2h4m, with `o` changed. */
 function facts(o: Partial<StatusFacts> = {}): StatusFacts {
   return {
     version: '0.20261103.13',
@@ -14,9 +14,9 @@ function facts(o: Partial<StatusFacts> = {}): StatusFacts {
       { id: 'com.yugabyte.me_kode', installed: true, running: true, text: 'running' },
       { id: 'com.yugabyte.me_kode.host', installed: true, running: true, text: 'running' },
     ] },
-    webUrl: 'http://127.0.0.1:7777/ext/agentk/',
-    home: '/home/alice/.meko/extensions/agentk',
-    logs: '/home/alice/.meko/extensions/agentk/logs/server.log',
+    webUrl: 'http://127.0.0.1:7777/ext/kode/',
+    home: '/home/alice/.meko/extensions/kode',
+    logs: '/home/alice/.meko/extensions/kode/logs/server.log',
     now: NOW,
     ...o,
   };
@@ -25,18 +25,18 @@ function facts(o: Partial<StatusFacts> = {}): StatusFacts {
 describe("meko kode status, shaped like meko status", () => {
   it('opens with a marked headline, then a row per part, then the links in a box like Meko\'s', () => {
     expect(formatStatus(facts())).toEqual([
-      '✓ AgentK 0.20261103.13 is running (pid 39527, up 2h4m0s)',
+      '✓ Kode 0.20261103.13 is running (pid 39527, up 2h4m0s)',
       '  ✓ Server          healthy',
       '  ✓ Session host    running (pid 39531), 0 sessions',
       '  ✓ Service         launchd',
       '',
-      '┌──────────────────────────────────────────────────────────────┐',
-      '│ AgentK 0.20261103.13                                         │',
-      '├──────────────────────────────────────────────────────────────┤',
-      '│ Web UI   http://127.0.0.1:7777/ext/agentk/                   │',
-      '│ Home     /home/alice/.meko/extensions/agentk                 │',
-      '│ Logs     /home/alice/.meko/extensions/agentk/logs/server.log │',
-      '└──────────────────────────────────────────────────────────────┘',
+      '┌────────────────────────────────────────────────────────────┐',
+      '│ Kode 0.20261103.13                                         │',
+      '├────────────────────────────────────────────────────────────┤',
+      '│ Web UI   http://127.0.0.1:7777/ext/kode/                   │',
+      '│ Home     /home/alice/.meko/extensions/kode                 │',
+      '│ Logs     /home/alice/.meko/extensions/kode/logs/server.log │',
+      '└────────────────────────────────────────────────────────────┘',
     ]);
   });
 
@@ -50,7 +50,7 @@ describe("meko kode status, shaped like meko status", () => {
         { id: 'me_kode-host.service', installed: true, running: false, text: 'inactive' },
       ] },
     }));
-    expect(lines[0]).toBe("✗ AgentK 0.20261103.13 isn't running");
+    expect(lines[0]).toBe("✗ Kode 0.20261103.13 isn't running");
     expect(lines).toContain('  ✓ Session host    running (pid 39531), 2 sessions (1 running)');
     expect(lines).toContain('  ! Service         systemd, stopped');
     expect(lines.some((l) => l.includes('Server'))).toBe(false);
@@ -59,7 +59,7 @@ describe("meko kode status, shaped like meko status", () => {
 
   it('warns about a server that holds the lease but is slow to answer, and a host that is down', () => {
     const lines = formatStatus(facts({ probe: { ok: false, error: 'timed out' }, host: { up: false } }));
-    expect(lines[0]).toBe("! AgentK 0.20261103.13 is running (pid 39527), but isn't answering");
+    expect(lines[0]).toBe("! Kode 0.20261103.13 is running (pid 39527), but isn't answering");
     expect(lines).toContain('  ! Server          not answering (timed out)');
     expect(lines).toContain('  ! Session host    not running');
     expect(lines).not.toContain('  Start it: meko kode start');
@@ -76,7 +76,7 @@ describe("meko kode status, shaped like meko status", () => {
       webUrl: null,
       webWhy: "Meko isn't running: start it with meko start",
     }));
-    expect(lines[0]).toBe('✓ AgentK 0.20261103.13 is running (pid 39527)');
+    expect(lines[0]).toBe('✓ Kode 0.20261103.13 is running (pid 39527)');
     expect(lines).toContain('  ! Session host    not answering (EACCES)');
     expect(lines).toContain('  ! Service         launchd: com.yugabyte.me_kode.host not installed');
     expect(lines.some((l) => l.startsWith("│ Web UI   none (Meko isn't running: start it with meko start)"))).toBe(true);
@@ -86,7 +86,7 @@ describe("meko kode status, shaped like meko status", () => {
 
   it("colors the rows' marks, never the headline's, which Meko reads", () => {
     const lines = formatStatus(facts(), (_k, m) => `<${m}>`);
-    expect(lines[0].startsWith('✓ AgentK')).toBe(true);
+    expect(lines[0].startsWith('✓ Kode')).toBe(true);
     expect(lines[1]).toBe('  <✓> Server          healthy');
   });
 

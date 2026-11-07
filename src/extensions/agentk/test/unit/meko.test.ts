@@ -76,11 +76,11 @@ describe('Meko client', () => {
     await meko.stop();
   });
 
-  it("sends its key and says the calls are AgentK's own on every request, so Meko keeps no question for them", async () => {
+  it("sends its key and says the calls are Kode's own on every request, so Meko keeps no question for them", async () => {
     meko.tools.context_search = () => ({ results: { memory: [] } });
     await client.search('the task', { id: 'dp-1', name: 'team/demo' }, 'agent', 'conv-1');
     expect(meko.headers.length).toBeGreaterThan(1);
-    for (const h of meko.headers) expect(h).toMatchObject({ authorization: 'Bearer test-key', 'x-meko-client': 'agentk' });
+    for (const h of meko.headers) expect(h).toMatchObject({ authorization: 'Bearer test-key', 'x-meko-client': 'kode' });
   });
 
   it('checks health with a real round trip every time', async () => {
@@ -112,11 +112,11 @@ describe('Meko client', () => {
     meko.tools.conversation_create = () => ({ id: 'conv-1' });
     meko.tools.datapack_list = () => [{
       datapack_id: 'd1', datapack_name: 'adlc/proj/a/b', grant: 'contributor', user_id: 'u-alice', datapack_owner_name: 'Alice Ng',
-      datapack_owner_email_id: 'alice@example.com', description: 'AgentK project "b" · repo git@github.com:corp/a.git',
+      datapack_owner_email_id: 'alice@example.com', description: 'Kode project "b" · repo git@github.com:corp/a.git',
     }];
     expect(await client.listDatapacks()).toEqual([{
       id: 'd1', name: 'adlc/proj/a/b', grant: 'contributor', createdAt: null, ownerName: 'Alice Ng', ownerEmail: 'alice@example.com',
-      description: 'AgentK project "b" · repo git@github.com:corp/a.git', ownerUserId: 'u-alice',
+      description: 'Kode project "b" · repo git@github.com:corp/a.git', ownerUserId: 'u-alice',
     }]);
   });
 
@@ -173,7 +173,7 @@ describe('Meko client', () => {
     ]);
   });
 
-  it("records each of AgentK's calls by tool and size, tagged with the step that made it, never their content", async () => {
+  it("records each of Kode's calls by tool and size, tagged with the step that made it, never their content", async () => {
     const records: MekoCallRecord[] = [];
     client.onCall = (r) => records.push(r);
     meko.tools.memory_add = () => ({ results: [] });

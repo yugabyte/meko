@@ -3,8 +3,8 @@ import { basePath } from '../../src/web/base.js';
 import { parseRoute, routePath, type Route } from '../../src/web/router.js';
 
 describe('router', () => {
-  // `/ext/agentk/` behind Meko, `/` under `npm run dev`.
-  describe.each(['/', '/ext/agentk/'])('served under %s', (base) => {
+  // `/ext/kode/` behind Meko, `/` under `npm run dev`.
+  describe.each(['/', '/ext/kode/'])('served under %s', (base) => {
     const at = (rest: string) => parseRoute(base + rest, base);
 
     it('parses every view', () => {
@@ -36,9 +36,9 @@ describe('router', () => {
   });
 
   it.each([
-    ['https://host:7777/ext/agentk/', '/ext/agentk/'],
-    ['http://127.0.0.1:7777/ext/agentk/index.html', '/ext/agentk/'],
-    // No <base>: the page's own URL is a route, not where AgentK is served.
+    ['https://host:7777/ext/kode/', '/ext/kode/'],
+    ['http://127.0.0.1:7777/ext/kode/index.html', '/ext/kode/'],
+    // No <base>: the page's own URL is a route, not where Kode is served.
     [null, '/'],
   ])('takes the base path from the page’s <base> (%s)', (baseURI, base) => {
     expect(basePath(baseURI)).toBe(base);

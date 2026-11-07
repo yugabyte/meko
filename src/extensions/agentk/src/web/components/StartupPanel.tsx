@@ -7,10 +7,10 @@ import { agentName, cx } from '../util';
 import { Busy, Check, StageChip } from './common';
 
 const STAGE_HINT: Partial<Record<Session['stage'], string>> = {
-  explore: 'AgentK investigates and experiments in this worktree. Nothing is merged; end the session when you are done.',
-  design: 'AgentK reads the code and writes a design for you to approve before anything changes.',
-  code: 'AgentK works on the task directly in this worktree.',
-  review: 'AgentK picks up review feedback on the open PR.',
+  explore: 'Kode investigates and experiments in this worktree. Nothing is merged; end the session when you are done.',
+  design: 'Kode reads the code and writes a design for you to approve before anything changes.',
+  code: 'Kode works on the task directly in this worktree.',
+  review: 'Kode picks up review feedback on the open PR.',
 };
 
 function secs(ms: number): string {

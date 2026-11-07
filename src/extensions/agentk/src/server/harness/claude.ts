@@ -15,7 +15,7 @@ import { ingestSessionUsage, sessionTranscript } from '../usage.js';
 import type { CliStatus, Harness } from './types.js';
 
 /**
- * Claude Code: AgentK's first harness, and the only one with AgentK's mod and Artifact designs. Like
+ * Claude Code: Kode's first harness, and the only one with Kode's mod and Artifact designs. Like
  * any other, it's available while it's turned on and its `--version` answers (any version runs
  * sessions; the mod needs MIN_MOD_CLAUDE).
  */
@@ -37,19 +37,19 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
     id: 'claude',
     caps: HARNESS_CAPS.claude,
     systemPromptByContext: false,
-    // The hook files (run/hooks.json and the scripts Kiro's agent runs too) are AgentK's own: Core
+    // The hook files (run/hooks.json and the scripts Kiro's agent runs too) are Kode's own: Core
     // writes them at start whether or not Claude Code is there (writeHookFiles in Core.start).
     async prepare(paths) {
       try {
-        if (!writeModFiles(paths)) deps.log.warn("AgentK's mod for Claude Code is missing from this install; sessions start without it");
+        if (!writeModFiles(paths)) deps.log.warn("Kode's mod for Claude Code is missing from this install; sessions start without it");
       } catch (e) {
-        deps.log.warn("couldn't write AgentK's mod for Claude Code; sessions start without it", errMsg(e));
+        deps.log.warn("couldn't write Kode's mod for Claude Code; sessions start without it", errMsg(e));
       }
-      // The view mod only draws: without it, AgentK's prompts show in full.
+      // The view mod only draws: without it, Kode's prompts show in full.
       try {
-        if (!writeViewFiles(paths)) deps.log.warn("AgentK's view mod for Claude Code is missing from this install; sessions show AgentK's prompts in full");
+        if (!writeViewFiles(paths)) deps.log.warn("Kode's view mod for Claude Code is missing from this install; sessions show Kode's prompts in full");
       } catch (e) {
-        deps.log.warn("couldn't write AgentK's view mod for Claude Code; sessions show AgentK's prompts in full", errMsg(e));
+        deps.log.warn("couldn't write Kode's view mod for Claude Code; sessions show Kode's prompts in full", errMsg(e));
       }
       // Reads the Claude Code version now (none while it's turned off), so the first launch doesn't
       // wait for it, and New session and the banners know whether it's there.
@@ -83,18 +83,18 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
         // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
         // Set even when empty: empty means the user has none, unset means a session from before this.
         // Not a PR's own status line when its code isn't trusted: the relay runs it with sh.
-        AK_USER_STATUSLINE: userStatusLine(l.untrusted ? null : l.row.worktree_path, statusLineScriptPath(paths))?.command ?? '',
+        KODE_USER_STATUSLINE: userStatusLine(l.untrusted ? null : l.row.worktree_path, statusLineScriptPath(paths))?.command ?? '',
         // Plugins' hooks modules are early access in Claude Code, off unless this says otherwise.
         ...(l.modDir ? { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' } : {}),
         // A review's steps run in subagents (a sweep's passes all at once), and its turn's end is the sweep's end. Claude Code
         // runs subagents in the background by default, ending the turn before they report; this keeps them in it.
         ...(l.review ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } : {}),
         // Claude Code hands a conversation whose TUI exits with background tasks running to its own
-        // background sessions, where AgentK can't reach it (no hooks, no mod, a new conversation id).
+        // background sessions, where Kode can't reach it (no hooks, no mod, a new conversation id).
         CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1',
       },
     }),
-    // Claude Code's hook shape is AgentK's event shape.
+    // Claude Code's hook shape is Kode's event shape.
     normalize: (raw) => raw,
     deny: (reason) => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }),
     context: (text) => ({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } }),

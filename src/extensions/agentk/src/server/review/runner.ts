@@ -38,15 +38,15 @@ function findingCredits(f: Candidate['finding']): GotchaCredit[] {
   return f.gotchas.map((id) => ({ id, quote: f.quotes?.[id] ?? '' }));
 }
 
-/** The review tools' names, as AgentK's MCP server (`agentk_sessions`) has them. */
+/** The review tools' names, as Kode's MCP server (`kode_sessions`) has them. */
 export const REVIEW_TOOLS = ['review_report', 'review_score', 'review_outcome'] as const;
 export type ReviewTool = (typeof REVIEW_TOOLS)[number];
 
 /** The subagents a review session is launched with, one per model tier. */
 export const REVIEW_AGENTS: Record<Tier, string> = {
-  large: 'agentk-review-large',
-  mid: 'agentk-review-mid',
-  small: 'agentk-review-small',
+  large: 'kode-review-large',
+  mid: 'kode-review-mid',
+  small: 'kode-review-small',
 };
 
 /** The subagent each scorer runs on: the cloud's scorers run on the small model. */
@@ -58,7 +58,7 @@ const SCORER_TIER: Tier = 'small';
  */
 const SCORE_BATCH = 5;
 
-/** How many times AgentK asks again for the steps a turn left unreported, before it goes on without them. */
+/** How many times Kode asks again for the steps a turn left unreported, before it goes on without them. */
 const ASK_AGAIN = 1;
 
 /** One step of a sweep or of scoring: its name, the tier it runs on, and the prompt file it reads. */
@@ -121,7 +121,7 @@ const holds = (r: ReviewRow | undefined) => reviewHolds(r && { ...r, onDemand: r
 /** A finished Code review whose PR prompt hasn't gone, which Open PR sends with its line rather than reviewing again. */
 const unsent = (r: ReviewRow | undefined): boolean => r?.state === 'done' && !r.finished_at && !r.stale && r.stage === 'code';
 
-/** Every round's kept findings, by severity: what the `me_ak_review:` line adds up (`counts_json`). */
+/** Every round's kept findings, by severity: what the `me_kode_review:` line adds up (`counts_json`). */
 function keptCounts(findings: CodeReviewFinding[]): SeverityCounts {
   const counts = noCounts();
   for (const f of findings) if (f.kept) counts[f.severity]++;
@@ -174,13 +174,13 @@ const json = <T>(s: string | null, fallback: T): T => {
 };
 
 /**
- * AgentK's code review (docs/design/code-review.md): one review per Open PR of a task, run in a
+ * Kode's code review (docs/design/code-review.md): one review per Open PR of a task, run in a
  * code-review session (a child of the task, sharing its worktree) that starts each pass and scorer as
- * a fresh step on its model tier. The steps report through AgentK's tools; this class keeps their
+ * a fresh step on its model tier. The steps report through Kode's tools; this class keeps their
  * reports in `code_review_steps`, applies the cloud reviewer's rules (merge, sweeps, the refutation
  * gate, keepScored, Validate) and moves the review on at each of its session's turn ends: sweeps,
  * scoring, then the task fixes the findings (re-review rounds) or opens the PR with the
- * `me_ak_review:` line. A review in a running state holds the task's Open PR; a failed one, or one the
+ * `me_kode_review:` line. A review in a running state holds the task's Open PR; a failed one, or one the
  * user cancelled, holds it for the user's Retry or Open anyway (one cancelled because the task left
  * Code doesn't: `reviewHolds`). The user can also run one (`runNow`), in Code or in Pull Request: it
  * sends no PR prompt, and Open PR then sends the PR with its line rather than reviewing again.
@@ -439,7 +439,7 @@ export class CodeReviews {
    * title and description). With the strategy Off it runs the default one. It sends no PR prompt:
    * Open PR sends the PR with its line later.
    *
-   * `by`: the user (the review-run action), or AgentK itself (a workshop's level, src/server/workshops.ts).
+   * `by`: the user (the review-run action), or Kode itself (a workshop's level, src/server/workshops.ts).
    * `describe: false` skips the PR description the task writes first, as a workshop's project always
    * does, since it opens no PR: nothing goes to the task until the findings (queued for its turn's
    * end), so it may be mid-turn. `handOff: false` keeps the findings with the review: shown, never
@@ -450,11 +450,11 @@ export class CodeReviews {
     if (task.kind === 'code-review' || task.kind === 'review-pr') throw new HttpError(409, 'Only a task has a code review.');
     if (task.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     if (task.stage !== 'code' && task.stage !== 'review') throw new HttpError(409, 'The code review runs in Code, or in Pull Request once the PR is open.');
-    if (task.stage === 'review' && !task.pr_number) throw new HttpError(409, "AgentK hasn't found the PR yet. Try again once it has.");
+    if (task.stage === 'review' && !task.pr_number) throw new HttpError(409, "Kode hasn't found the PR yet. Try again once it has.");
     const last = this.latest(task.id);
     if (last && RUNNING.includes(last.state)) throw new HttpError(409, 'A code review is already running.');
     if (this.core.lifecycle.codeReviewPending(task.id)) {
-      throw new HttpError(409, "AgentK hasn't taken the last code review's fixes yet. Run it again once it has.");
+      throw new HttpError(409, "Kode hasn't taken the last code review's fixes yet. Run it again once it has.");
     }
     if (describe) this.core.lifecycle.checkPromptable(await this.core.sessions.awake(task, 'for the code review'));
     const settings = this.settingsFor(task);
@@ -493,8 +493,8 @@ export class CodeReviews {
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, task.id, settings.strategy, settings.rounds, settings.depth, describe ? 'describing' : 'preparing',
     opts.instructions || null, opts.by, opts.lead || null, purpose, stage, opts.handOff === false ? 0 : 1, now, now);
     const how = `${strategyName(settings.strategy)}${settings.depth > 1 ? `, depth ${settings.depth}` : ''}${settings.rounds ? `, up to ${settings.rounds} re-review${settings.rounds === 1 ? '' : 's'}` : ''}`;
-    const started = purpose === 'pr' ? 'Code review started' : opts.handOff === false ? 'AgentK ran a first look (its findings stay with the review)'
-      : opts.by === 'auto' ? 'AgentK ran the code review' : 'You ran the code review';
+    const started = purpose === 'pr' ? 'Code review started' : opts.handOff === false ? 'Kode ran a first look (its findings stay with the review)'
+      : opts.by === 'auto' ? 'Kode ran the code review' : 'You ran the code review';
     this.core.sessions.event(task.id, 'review', `${started} (${how})`);
     this.core.changed();
     if (prev?.session_id) void this.archiveSession(prev.session_id);
@@ -842,8 +842,8 @@ export class CodeReviews {
         name: REVIEW_AGENTS[tier],
         tier,
         model: models[tier],
-        description: `One step of AgentK's code review on the ${tier} model: a review pass or a scorer. Use only when AgentK's prompt names it.`,
-        prompt: 'You are one step of AgentK\'s code review. Do exactly what the file your prompt names says, report with the AgentK tool it names, and change no file.',
+        description: `One step of Kode's code review on the ${tier} model: a review pass or a scorer. Use only when Kode's prompt names it.`,
+        prompt: 'You are one step of Kode\'s code review. Do exactly what the file your prompt names says, report with the Kode tool it names, and change no file.',
       })),
     };
   }
@@ -868,7 +868,7 @@ export class CodeReviews {
       if ('error' in checked) return { text: `The report doesn't fit the schema: ${checked.error}. Fix it and call ${tool} again.`, error: true };
       const report: PassReport = { pass: pass.name, round: r.round, sweep: r.sweep, summary: checked.summary, findings: checked.findings };
       this.keep(r.id, step, report);
-      return { text: `AgentK has the ${pass.name} pass's report (${report.findings.length} finding${report.findings.length === 1 ? '' : 's'}).`, error: false };
+      return { text: `Kode has the ${pass.name} pass's report (${report.findings.length} finding${report.findings.length === 1 ? '' : 's'}).`, error: false };
     }
     const m = /^r(\d+)c(\d+)$/.exec(step);
     const n = m && Number(m[1]) === r.round ? Number(m[2]) : 0;
@@ -877,7 +877,7 @@ export class CodeReviews {
     const checked = checkScore(input.score);
     if ('error' in checked) return { text: `The score doesn't fit the schema: ${checked.error}. Fix it and call ${tool} again.`, error: true };
     this.keep(r.id, step, checked);
-    return { text: `AgentK has the score for finding ${n}.`, error: false };
+    return { text: `Kode has the score for finding ${n}.`, error: false };
   }
 
   /** What the task did with each finding of a round (`review_outcome`), for the panel and the next round. */
@@ -896,8 +896,8 @@ export class CodeReviews {
     this.set(r.id, { findings_json: JSON.stringify(findings) });
     this.core.changed();
     return unknown.length
-      ? { text: `AgentK kept the rest; it has no finding ${unknown.join(', ')}. Use the keys from AgentK's list.`, error: true }
-      : { text: `AgentK has what you did with ${checked.length} finding${checked.length === 1 ? '' : 's'}.`, error: false };
+      ? { text: `Kode kept the rest; it has no finding ${unknown.join(', ')}. Use the keys from Kode's list.`, error: true }
+      : { text: `Kode has what you did with ${checked.length} finding${checked.length === 1 ? '' : 's'}.`, error: false };
   }
 
   private keep(reviewId: string, step: string, report: unknown): void {
@@ -1099,8 +1099,8 @@ export class CodeReviews {
     }
     if (post.length && this.checksFindings(task)) {
       this.set(id, { state: 'triage' });
-      this.core.sessions.event(task.id, 'review', `Round ${r.round}'s findings wait on you: add notes or dismiss some, then send them to AgentK`);
-      this.core.sessions.notifyUser(task.id, 'Code review findings', `Round ${r.round} found ${countsText(roundCounts)}. Check them, then send them to AgentK.`);
+      this.core.sessions.event(task.id, 'review', `Round ${r.round}'s findings wait on you: add notes or dismiss some, then send them to Kode`);
+      this.core.sessions.notifyUser(task.id, 'Code review findings', `Round ${r.round} found ${countsText(roundCounts)}. Check them, then send them to Kode.`);
       this.core.lifecycle.codeReviewWaitsChanged(task.id);
       return;
     }
@@ -1168,7 +1168,7 @@ export class CodeReviews {
       // The PR prompt (the last round's) goes as the user's: they sent it.
       this.set(r.id, { findings_json: JSON.stringify(findings), counts_json: JSON.stringify(keptCounts(findings)), last_kept: sent, ...(auto ? {} : { by: 'you' }) });
       const what = `${sent} finding${sent === 1 ? '' : 's'}${dismissed ? ` (${dismissed} dismissed)` : ''}`;
-      this.core.sessions.event(taskId, 'review', auto ? `Run to merge sent round ${cur.round}'s ${what} to AgentK` : sent ? `You sent ${what} to AgentK` : `You dismissed round ${cur.round}'s findings`);
+      this.core.sessions.event(taskId, 'review', auto ? `Run to merge sent round ${cur.round}'s ${what} to Kode` : sent ? `You sent ${what} to Kode` : `You dismissed round ${cur.round}'s findings`);
       await this.handOff(r.id, true);
       this.core.lifecycle.codeReviewWaitsChanged(taskId);
     });
@@ -1187,7 +1187,7 @@ export class CodeReviews {
    */
   setFinding(taskId: string, key: string, body: unknown): CodeReviewFinding {
     const r = this.latest(taskId);
-    if (r?.state !== 'triage') throw new HttpError(409, "No code review findings wait on you: they've gone to AgentK, or the review stopped.");
+    if (r?.state !== 'triage') throw new HttpError(409, "No code review findings wait on you: they've gone to Kode, or the review stopped.");
     const findings = json<CodeReviewFinding[]>(r.findings_json, []);
     const f = findings.find((x) => x.key === key && x.round === r.round && x.kept);
     if (!f) throw new HttpError(404, `The code review has no finding ${key} waiting on you.`);
@@ -1269,11 +1269,11 @@ export class CodeReviews {
     }).join('\n');
   }
 
-  /** How the task reports what it did with each finding: AgentK's tool when it has it, else in its reply. */
+  /** How the task reports what it did with each finding: Kode's tool when it has it, else in its reply. */
   private outcomeHow(task: SessionRow): string {
     const tool = agentToolName(harnessOf(task.harness), 'review_outcome');
     return this.core.config.tools.enabled && repoConfigTrusted(task)
-      ? `Then report what you did with each finding, by its key in brackets, with AgentK's \`${tool}\` tool: fixed, or declined with why.`
+      ? `Then report what you did with each finding, by its key in brackets, with Kode's \`${tool}\` tool: fixed, or declined with why.`
       : 'Then say what you did with each finding, by its key in brackets: fixed, or declined with why.';
   }
 
@@ -1387,7 +1387,7 @@ export class CodeReviews {
     return missing.length ? this.sendSweep(id, missing) : this.sweepDone(id);
   }
 
-  /** The `review-open-anyway` action: the PR prompt goes without a `me_ak_review:` line. */
+  /** The `review-open-anyway` action: the PR prompt goes without a `me_kode_review:` line. */
   async openAnyway(taskId: string): Promise<void> {
     const r = this.latest(taskId);
     if (!r || (r.state !== 'failed' && r.state !== 'cancelled') || r.purpose === 'demand') throw new HttpError(409, 'There is no stopped code review to open the PR past.');
@@ -1422,7 +1422,7 @@ export class CodeReviews {
     const rows = all<ReviewRow>(this.db, `SELECT * FROM code_reviews WHERE state IN ('describing', 'preparing', 'sweeping', 'scoring')`);
     for (const r of rows) {
       if (r.state === 'describing') {
-        // The task's PR description turn may have ended while AgentK was down: the first round goes on
+        // The task's PR description turn may have ended while Kode was down: the first round goes on
         // with what the task wrote. Not while that turn runs or asks something (needs_input), and not
         // past an interrupt or a lost ask, which wait for the user's Open PR.
         const task = sessionRow(this.db, r.task_id);

@@ -100,7 +100,7 @@ export function GhDialog({ reason, gh, onClose }: { reason: string; gh: GhStatus
     body = (
       <>
         <p>{reason}</p>
-        <p className="muted small">AgentK shows a one-time code to enter on GitHub, from any device.</p>
+        <p className="muted small">Kode shows a one-time code to enter on GitHub, from any device.</p>
       </>
     );
     footer = (
@@ -115,7 +115,7 @@ export function GhDialog({ reason, gh, onClose }: { reason: string; gh: GhStatus
     body = (
       <>
         <p>{reason}</p>
-        <p className="muted small">AgentK installs it for you, without root.</p>
+        <p className="muted small">Kode installs it for you, without root.</p>
       </>
     );
     footer = (

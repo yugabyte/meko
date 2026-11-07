@@ -50,9 +50,9 @@ export interface SessionRow {
   harness: string;
   /** The model its agent runs on, passed on every launch; null for the agent's default. */
   model: string | null;
-  /** AgentK's key for the conversation: Claude Code's session id, and the Meko conversation's key for every harness. */
+  /** Kode's key for the conversation: Claude Code's session id, and the Meko conversation's key for every harness. */
   claude_session_id: string;
-  /** The conversation id a harness picks itself (Kiro's session id), once AgentK has learned it; null for Claude Code. */
+  /** The conversation id a harness picks itself (Kiro's session id), once Kode has learned it; null for Claude Code. */
   agent_session_id: string | null;
   transcript_path: string | null;
   branch: string;
@@ -79,14 +79,14 @@ export interface SessionRow {
   merge_state: string | null;
   seen_review_ids: string;
   initial_prompt: string | null;
-  /** The first line of the prompt the agent's conversation started with, when AgentK passed one (AK_FIRST_PROMPT); NULL otherwise. */
+  /** The first line of the prompt the agent's conversation started with, when Kode passed one (KODE_FIRST_PROMPT); NULL otherwise. */
   first_prompt: string | null;
   auto_continue_at: string;
   last_event_at: number | null;
   created_at: number;
   archived_at: number | null;
   recovered_at: number | null;
-  /** When AgentK stopped its agent for sitting idle (Session.idleStoppedAt); NULL otherwise. */
+  /** When Kode stopped its agent for sitting idle (Session.idleStoppedAt); NULL otherwise. */
   idle_stopped_at: number | null;
   interrupted: number;
   /** 1 for sessions whose Design stage runs in Claude's plan mode (created before designs moved out of it). */
@@ -121,7 +121,7 @@ export interface SessionRow {
   pr_state: 'OPEN' | 'CLOSED' | 'MERGED' | null;
   /** The clone's remote the PR is fetched from (`origin`, or `upstream` for a fork). */
   pr_remote: string | null;
-  /** The user's notes for AgentK, given when the review started. */
+  /** The user's notes for Kode, given when the review started. */
   review_notes: string | null;
   /** The images added in the New session dialog that reached the session: a JSON list of paths. */
   start_images: string | null;
@@ -166,7 +166,7 @@ export function parseSettings(json: string): ProjectSettings {
   }
   // A mode this version doesn't know (from a newer one) falls back to the default.
   if (!Object.hasOwn(REVIEWER_LABELS, s.reviewer)) s.reviewer = DEFAULT_SETTINGS.reviewer;
-  // The AgentK reviewer's login, gone since migration 47, from a page loaded before it.
+  // The Kode reviewer's login, gone since migration 47, from a page loaded before it.
   delete (s as { reviewerLogin?: unknown }).reviewerLogin;
   // Log Meko calls, gone since Meko keeps each call's contents itself.
   delete (s as { mekoLog?: unknown }).mekoLog;
@@ -227,7 +227,7 @@ export function sessionRepo(db: Db, r: SessionRow): string | null {
 }
 
 /**
- * The datapack AgentK writes to for a session: the dedicated one it was launched with, which it
+ * The datapack Kode writes to for a session: the dedicated one it was launched with, which it
  * keeps until it's launched again (a switch leaves running sessions on the old one), else the
  * project's dedicated datapack.
  */

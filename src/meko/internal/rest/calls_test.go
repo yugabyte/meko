@@ -20,7 +20,7 @@ func TestCallRoutes(t *testing.T) {
 	if st := obj(okData(t, e, "GET", settings, nil, 200)); st["keep"] != false || num(st["retention_days"]) != 7 {
 		t.Fatalf("on by default: %v", st)
 	}
-	// The client token (an agent's, or AgentK's) reads calls but can't start keeping them.
+	// The client token (an agent's, or Kode's) reads calls but can't start keeping them.
 	if r := doAs(t, e, testenv.ClientToken, "PUT", settings, map[string]any{"keep": true}); r.Status != 403 {
 		t.Errorf("the client token turned it on: %+v", r)
 	}
@@ -35,14 +35,14 @@ func TestCallRoutes(t *testing.T) {
 	for i := range 3 {
 		e.Service.RecordCall(ctx, store.Call{At: time.Now(), Tool: "context_search", AgentID: "claude_code:a",
 			DatapackID: e.DatapackID, OK: i != 1, ErrorCode: map[bool]string{true: "x"}[i == 1],
-			Client: map[bool]string{true: "agentk"}[i == 2]},
+			Client: map[bool]string{true: "kode"}[i == 2]},
 			json.RawMessage(fmt.Sprintf(`{"query":"q%d"}`, i)), fmt.Sprintf("reply %d", i))
 	}
 	e.Service.RecordCall(ctx, store.Call{At: time.Now(), Tool: "datapack_list", AgentID: "kiro:b", OK: true}, nil, "")
 
 	page := obj(okData(t, e, "GET", "/calls?agent=claude_code:a&limit=2", nil, 200))
 	calls := arr(page["calls"])
-	if len(calls) != 2 || page["more"] != true || obj(calls[0])["client"] != "agentk" ||
+	if len(calls) != 2 || page["more"] != true || obj(calls[0])["client"] != "kode" ||
 		obj(calls[0])["has_contents"] != true || obj(calls[0])["datapack_id"] != e.DatapackID {
 		t.Fatalf("first page %v", page)
 	}
@@ -54,7 +54,7 @@ func TestCallRoutes(t *testing.T) {
 	if len(arr(older["calls"])) != 1 || older["more"] != false {
 		t.Errorf("older page %v", older)
 	}
-	for q, want := range map[string]int{"": 4, "?failed=true": 1, "?client=agentk": 1, "?tool=datapack_list": 1,
+	for q, want := range map[string]int{"": 4, "?failed=true": 1, "?client=kode": 1, "?tool=datapack_list": 1,
 		"?datapack=" + e.DatapackID: 3} {
 		if n := len(arr(obj(okData(t, e, "GET", "/calls"+q, nil, 200))["calls"])); n != want {
 			t.Errorf("/calls%s: %d calls, want %d", q, n, want)

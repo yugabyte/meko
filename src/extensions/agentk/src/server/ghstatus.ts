@@ -6,7 +6,7 @@ import { isLoginPathMissing } from './github.js';
 import { HttpError } from './projects.js';
 
 /**
- * AgentK's prerequisites check (git, curl and a coding agent, and gh when asked; it installs what's
+ * Kode's prerequisites check (git, curl and a coding agent, and gh when asked; it installs what's
  * missing after asking): scripts/deps.sh, which a release has as lib/scripts/deps.sh beside lib/dist.
  */
 export function depsScript(here = dirname(fileURLToPath(import.meta.url))): string {
@@ -48,13 +48,13 @@ function summary(output: string): string {
  * where the server doesn't look (github.ts's `ghMissing` says the same).
  */
 export function ghNeededMessage(what: string, state: GhState, noPath = isLoginPathMissing()): string {
-  if (state === 'signed-out') return `${what} needs gh signed in to GitHub: sign in from AgentK, or run gh auth login.`;
+  if (state === 'signed-out') return `${what} needs gh signed in to GitHub: sign in from Kode, or run gh auth login.`;
   if (state === 'unknown') return `${what} needs gh, which didn't answer in time: try again.`;
   if (noPath) {
     const allow = process.platform === 'darwin' ? ' If macOS asked whether meko may open a folder, allow it (System Settings › Privacy & Security › Files and Folders).' : '';
-    return `${what} needs gh, and AgentK can't find it because it couldn't read PATH from your login shell when it started.${allow} Then run meko kode restart, or install gh from AgentK.`;
+    return `${what} needs gh, and Kode can't find it because it couldn't read PATH from your login shell when it started.${allow} Then run meko kode restart, or install gh from Kode.`;
   }
-  return `${what} needs gh, GitHub's command-line tool, which isn't installed: install it from AgentK, or from https://cli.github.com.`;
+  return `${what} needs gh, GitHub's command-line tool, which isn't installed: install it from Kode, or from https://cli.github.com.`;
 }
 
 /** A command's result: its exit code (null when it couldn't start or was killed), and its output. */
@@ -174,9 +174,9 @@ export interface GhDeps {
 }
 
 /**
- * gh, GitHub's command-line tool, which AgentK needs for everything on GitHub but doesn't need to be
+ * gh, GitHub's command-line tool, which Kode needs for everything on GitHub but doesn't need to be
  * installed: whether it's usable now (`state`, kept while good for GH_CHECK_TTL_MS and checked again
- * by any gate that finds it not good, so gh set up outside AgentK counts at once), the gate every
+ * by any gate that finds it not good, so gh set up outside Kode counts at once), the gate every
  * action that works on GitHub goes through (`require`), and the GitHub dialog's install and sign-in.
  */
 export class GhService {

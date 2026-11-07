@@ -2,14 +2,14 @@ import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { kvGet, kvSet, type Db } from './db.js';
 
-/** Set once the Meko call logs AgentK kept itself are gone. */
+/** Set once the Meko call logs Kode kept itself are gone. */
 const DONE_KEY = 'meko-call-logs-removed';
 
 /** The file each session's Meko call log was in, in its folder under `designs`, before Meko kept call contents itself. */
 const OLD_LOG_FILE = 'meko-calls.jsonl';
 
 /**
- * Deletes every session's Meko call log AgentK kept before it stopped keeping one,
+ * Deletes every session's Meko call log Kode kept before it stopped keeping one,
  * once: they hold what was sent to Meko and what came back, and nothing deletes them any more.
  * Returns how many it deleted. Throws when `designs` can't be read or a log can't be deleted (the
  * first such error, after trying every one); then it isn't marked done and runs again next start.

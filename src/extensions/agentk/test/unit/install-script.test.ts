@@ -83,7 +83,7 @@ const have = (...tools: string[]) => tools.forEach((t) => execFileSync('cp', [jo
 
 function run(args: string[], env: Record<string, string> = {}, script = SCRIPT) {
   const r = spawnSync(join(bin, 'sh'), [script, ...args], {
-    env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '', ...env },
+    env: { PATH: bin, HOME: home, LANG: 'C', KODE_BREW_DIRS: '', ...env },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -98,7 +98,7 @@ describe('deps.sh: installing missing tools', () => {
     expect(r.err).toContain('sudo -n dnf install -y git curl');
     // gh is optional: not in the plan without --install-deps.
     expect(r.err).not.toContain('download gh');
-    expect(r.err).toContain('Run meko extension install agentk -- --install-deps to install them');
+    expect(r.err).toContain('Run meko extension install kode -- --install-deps to install them');
     expect(r.calls).toEqual([]); // nothing was installed
   });
 
@@ -207,7 +207,7 @@ describe('deps.sh: installing missing tools', () => {
     stub(bin, 'dnf', `echo "dnf $*" >> "${log}"; shift; ${installs(repo, bin).replace(/exit 0$/, 'exit 1')}`);
     const r = run(['--non-interactive', '--install-deps']);
     expect(r.code).toBe(1);
-    expect(r.err).toContain('installing git curl failed (see the output above). Install them yourself and run meko extension install agentk again.');
+    expect(r.err).toContain('installing git curl failed (see the output above). Install them yourself and run meko extension install kode again.');
     expect(r.err).not.toContain('going on');
   });
 
@@ -217,7 +217,7 @@ describe('deps.sh: installing missing tools', () => {
     const brewDir = join(root, 'homebrew', 'bin');
     mkdirSync(brewDir, { recursive: true });
     execFileSync('mv', [join(bin, 'brew'), join(brewDir, 'brew')]);
-    const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64', AK_BREW_DIRS: brewDir });
+    const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64', KODE_BREW_DIRS: brewDir });
     expect(r.code).toBe(0);
     expect(r.calls).toContain('brew install gh');
     expect(r.calls.some((c) => c.startsWith('sudo'))).toBe(false);
@@ -225,12 +225,12 @@ describe('deps.sh: installing missing tools', () => {
     expect(r.err).not.toContain(brewDir);
   });
 
-  it('goes on without gh, which AgentK asks for later, unless told to install it', () => {
+  it('goes on without gh, which Kode asks for later, unless told to install it', () => {
     have('git', 'curl');
     for (const args of [['--non-interactive'], ['--no-install-deps']]) {
       const r = run(args);
       expect(r.code).toBe(0);
-      expect(r.err).toContain("gh isn't installed: AgentK asks for it when you open a PR");
+      expect(r.err).toContain("gh isn't installed: Kode asks for it when you open a PR");
       expect(r.calls).toEqual([]);
     }
     const installed = run(['--non-interactive', '--install-deps']);
@@ -290,7 +290,7 @@ describe('deps.sh: installing missing tools', () => {
       // Once the script ends, a shell keeps the terminal open until its last output is read: a pty
       // whose program has exited can lose what it wrote just before.
       const wrap = 'sh "$0"; s=$?; printf "\\n[exited %s]" "$s"; read -r _; exit "$s"';
-      const p = pty.spawn(join(bin, 'sh'), ['-c', wrap, SCRIPT], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '' } });
+      const p = pty.spawn(join(bin, 'sh'), ['-c', wrap, SCRIPT], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', KODE_BREW_DIRS: '' } });
       let out = '';
       const questions: [string, string][] = [[prompt, answer], ...more];
       let seen = 0;
@@ -327,13 +327,13 @@ describe('deps.sh: installing missing tools', () => {
     expect(r.out).toContain('git, curl, gh, Claude Code');
   });
 
-  it("skips gh on no, saying AgentK asks for it later, and asks nothing else when it's all that's missing", async () => {
+  it("skips gh on no, saying Kode asks for it later, and asks nothing else when it's all that's missing", async () => {
     have('git', 'curl');
     const r = await runInTerminal('n', 'Install gh, GitHub');
     expect(r.code).toBe(0);
     expect(r.out).not.toContain('Install them now?');
     expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(false);
-    expect(r.out).toContain("gh isn't installed: AgentK asks for it when you open a PR");
+    expect(r.out).toContain("gh isn't installed: Kode asks for it when you open a PR");
   });
 
   it('installs nothing on no', async () => {
@@ -341,7 +341,7 @@ describe('deps.sh: installing missing tools', () => {
     const r = await runInTerminal('n');
     expect(r.code).toBe(1);
     expect(r.calls).toEqual([]);
-    expect(r.out).toMatch(/Install them and run meko extension install agentk again/);
+    expect(r.out).toMatch(/Install them and run meko extension install kode again/);
   });
 
   it('offers to sign gh in to GitHub', async () => {
@@ -383,10 +383,10 @@ describe('deps.sh: installing missing tools', () => {
 });
 
 describe('install.sh', () => {
-  it("only says Meko installs AgentK now, and fails, for the Mekos and instructions that run it", () => {
+  it("only says Meko installs Kode now, and fails, for the Mekos and instructions that run it", () => {
     const r = run(['--meko-url', 'http://127.0.0.1:7778/mcp', '--meko-key', 'k'], {}, STUB);
     expect(r.code).toBe(1);
-    expect(r.err).toContain('Update Meko first (meko update), then run: meko extension install agentk');
+    expect(r.err).toContain('Update Meko first (meko update), then run: meko extension install kode');
     expect(r.calls).toEqual([]);
     // An older Meko refuses an installer that doesn't mention --meko-url, with a less clear message.
     expect(readFileSync(STUB, 'utf8')).toContain('--meko-url');

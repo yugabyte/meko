@@ -46,9 +46,9 @@ describe('instructions for a move or Open PR', () => {
     const s = (over: Partial<Session>) => ({ status: 'idle', statusDetail: null, ...over }) as Session;
     expect(promptBlocker(s({}))).toBeNull();
     expect(promptBlocker(s({ status: 'needs_input', statusDetail: 'Design ready for your approval' }))).toBeNull();
-    expect(promptBlocker(s({ status: 'needs_input', statusDetail: 'Permission needed for Bash' }))).toBe('AgentK is waiting on you in the terminal. Answer it first.');
+    expect(promptBlocker(s({ status: 'needs_input', statusDetail: 'Permission needed for Bash' }))).toBe('Kode is waiting on you in the terminal. Answer it first.');
     expect(promptBlocker(s({ status: 'exited' }))).toBe('Claude has exited. Resume the session first.');
-    // An agent AgentK stopped for sitting idle starts again for the prompt.
+    // An agent Kode stopped for sitting idle starts again for the prompt.
     expect(promptBlocker(s({ status: 'exited', idleStoppedAt: 1 }))).toBeNull();
   });
 });

@@ -84,9 +84,9 @@ function settingsUrl(c: ClaudeMeko): string {
 }
 
 /**
- * What keeps Meko's capture in Claude Code's sessions off AgentK's Meko, one sentence each; empty
+ * What keeps Meko's capture in Claude Code's sessions off Kode's Meko, one sentence each; empty
  * when nothing does. It reads files only. The token in its settings is checked apart
- * (`claudeSettingsToken`): it may differ from AgentK's, as long as it works.
+ * (`claudeSettingsToken`): it may differ from Kode's, as long as it works.
  */
 export function mekoClaudeGaps(c: ClaudeMeko, url: string): string[] {
   const gaps: string[] = [];
@@ -99,7 +99,7 @@ export function mekoClaudeGaps(c: ClaudeMeko, url: string): string[] {
   return gaps;
 }
 
-/** The token Claude Code's hooks use on AgentK's server (not one for another server: that's a gap of its own), or null. */
+/** The token Claude Code's hooks use on Kode's server (not one for another server: that's a gap of its own), or null. */
 export function claudeSettingsToken(c: ClaudeMeko, url: string): string | null {
   return c.settings.token && sameMekoUrl(settingsUrl(c), url) ? c.settings.token : null;
 }

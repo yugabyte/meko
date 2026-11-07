@@ -155,13 +155,13 @@ export function AskForm({ session, ask, onDone }: { session: Session; ask: AskRe
   );
 }
 
-/** "AgentK asks: …" above the terminal while Claude asks something, opening the questions to answer. */
+/** "Kode asks: …" above the terminal while Claude asks something, opening the questions to answer. */
 export function AskBar({ ask, onOpen }: { ask: AskRequest; onOpen: () => void }) {
   const more = ask.questions.length - 1;
   return (
     <div className="ask-bar" role="status">
       <span className="ask-bar-text">
-        <b>AgentK asks:</b> {ask.questions[0]?.question}
+        <b>Kode asks:</b> {ask.questions[0]?.question}
         {more > 0 && <span className="muted"> (+{more} more)</span>}
       </span>
       <button className="btn small primary" onClick={onOpen}>
@@ -178,11 +178,11 @@ export function AskBar({ ask, onOpen }: { ask: AskRequest; onOpen: () => void })
 export function AskSheet({ session, onClose }: { session: Session; onClose: () => void }) {
   const ask = session.asking;
   return (
-    <Dialog title="AgentK is asking" className="ask-dialog" onClose={onClose}>
+    <Dialog title="Kode is asking" className="ask-dialog" onClose={onClose}>
       {ask ? (
         <AskForm key={ask.id} session={session} ask={ask} onDone={onClose} />
       ) : (
-        <p className="muted">AgentK has its answer: it was given in the terminal, or AgentK moved on.</p>
+        <p className="muted">Kode has its answer: it was given in the terminal, or Kode moved on.</p>
       )}
     </Dialog>
   );

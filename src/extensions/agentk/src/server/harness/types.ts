@@ -33,11 +33,11 @@ export interface LaunchInput {
   systemPrompt: string;
   /** Extra folders the agent may work in (the session's design folder). */
   addDirs: string[];
-  /** AgentK's mod's folder (`modDir`), or null to launch without it. */
+  /** Kode's mod's folder (`modDir`), or null to launch without it. */
   modDir: string | null;
   /** Design in Claude Code's plan mode (sessions from before designs left it). */
   planMode: boolean;
-  /** AgentK's session variables (AK_*, MEKO_*). */
+  /** Kode's session variables (AK_*, MEKO_*). */
   env: Record<string, string>;
   /** The terminal colors the session starts with (`Core.termTheme`), for a CLI that can be told them. */
   termTheme: TermTheme;
@@ -45,7 +45,7 @@ export interface LaunchInput {
   /** The session works on a PR head whose code isn't trusted (headtrust.ts): leave out the repo's own config. */
   untrusted: boolean;
   /**
-   * Launch with AgentK's session tools (tools.ts): the `agentk_sessions` MCP server and its skill, in
+   * Launch with Kode's session tools (tools.ts): the `kode_sessions` MCP server and its skill, in
    * the CLI's own terms. A harness whose agent file is shared by every session (Kiro's) has them in
    * that file instead (`prepare`, `beforeLaunch`), and the tools' route refuses a session without them.
    */
@@ -77,10 +77,10 @@ export interface UsageRead {
 }
 
 /**
- * A coding agent sessions can run on. Each adapter turns what AgentK wants into its CLI's terms:
- * the command line, its hook payloads as AgentK's events (Claude Code's hook shape, which every
+ * A coding agent sessions can run on. Each adapter turns what Kode wants into its CLI's terms:
+ * the command line, its hook payloads as Kode's events (Claude Code's hook shape, which every
  * adapter maps onto), what its guard and context hooks print, where its conversation and usage
- * are on disk, and how it answers Ask AgentK. Code outside the adapters reads a harness's
+ * are on disk, and how it answers Ask Kode. Code outside the adapters reads a harness's
  * differences from here or from `HARNESS_CAPS`, not from its id; docs/design/harnesses.md lists the
  * few places that still name one.
  */
@@ -88,8 +88,8 @@ export interface Harness {
   id: HarnessId;
   caps: HarnessCaps;
   /**
-   * Writes the files its sessions are launched with (AgentK's mod, Kiro's agent file) and reads its
-   * version. Called at server start, in the background, and when it's turned on: AgentK's shared
+   * Writes the files its sessions are launched with (Kode's mod, Kiro's agent file) and reads its
+   * version. Called at server start, in the background, and when it's turned on: Kode's shared
    * hook files are written by Core first, and a harness that fails here only logs.
    */
   prepare(paths: Paths, cfg: Config): Promise<void>;
@@ -99,7 +99,7 @@ export interface Harness {
    */
   beforeLaunch(c: LaunchContext): Promise<void>;
   /**
-   * AgentK's mod's folder for a launch (`--plugin-dir`), or null when it's off: turned off in the
+   * Kode's mod's folder for a launch (`--plugin-dir`), or null when it's off: turned off in the
    * config, its files missing, or the CLI too old. Only a harness with `caps.mod` has it.
    */
   modDir?(paths: Paths, cfg: Config): Promise<string | null>;
@@ -120,7 +120,7 @@ export interface Harness {
   launcher(paths: Paths, cfg: Config, l: LaunchInput): LauncherSpec;
   /** True when the system prompt goes in through the context hook at every start (no flag for it). */
   systemPromptByContext: boolean;
-  /** A hook payload in the CLI's own shape as AgentK's event, or null to ignore it. */
+  /** A hook payload in the CLI's own shape as Kode's event, or null to ignore it. */
   normalize(raw: HookPayload): HookPayload | null;
   /** What the guard hook prints to deny a tool call, with the reason. */
   deny(reason: string): GuardDecision;
@@ -129,7 +129,7 @@ export interface Harness {
   /** The paths a tool call (an event from `normalize`) would write, or null when it isn't a file edit. */
   editedPaths(p: HookPayload): string[] | null;
   /**
-   * For a CLI without AgentK's mod: the key of the Meko tool call a `PreToolUse` or `PostToolUse`
+   * For a CLI without Kode's mod: the key of the Meko tool call a `PreToolUse` or `PostToolUse`
    * event (from `normalize`) is about, the same at its start and its end, or null when it's another
    * tool. The session's dot shows Meko's m while a call is open (`MekoCalls`).
    */
@@ -154,18 +154,18 @@ export interface Harness {
   /** Reads the session's turns since the last read into `usage_messages`. May throw. */
   readUsage(db: Db, row: SessionRow): UsageRead;
   /**
-   * The transcript AgentK sends to the session's Meko conversation (with capture on). Absent when
+   * The transcript Kode sends to the session's Meko conversation (with capture on). Absent when
    * the CLI's own Meko hooks send its turns (Kiro).
    */
   captureTranscript?(row: SessionRow): string;
-  /** Removes what AgentK keeps for a session that can never run again (its project is gone): OpenCode's session folder. */
+  /** Removes what Kode keeps for a session that can never run again (its project is gone): OpenCode's session folder. */
   forget?(row: SessionRow): void;
   /**
    * Meko's URL or key changed, or Meko was turned on or off: drops what was written with the old ones
    * (OpenCode's Meko server file, which holds the key). The next launch writes it again.
    */
   mekoChanged?(paths: Paths): void;
-  /** How it answers Ask AgentK. */
+  /** How it answers Ask Kode. */
   ask: Asker;
   /** Its version and whether sessions could start on it, Meko's connection aside (`Harnesses.statusOf` adds it). */
   status(cfg: Config): CliStatus;

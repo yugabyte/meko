@@ -1,10 +1,10 @@
 # Meko recall and the learn step
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 ## Meko recall at start
 
-Sessions rarely searched Meko on their own, so AgentK searches for them (`src/server/recall.ts`).
+Sessions rarely searched Meko on their own, so Kode searches for them (`src/server/recall.ts`).
 When a session with a task is created in a project with datapacks, the server starts a
 `context_search` on each datapack in the background, before the worktree is made. It shares
 `searchDatapacks()` in `projects.ts` with the project home's search, and the project's Meko
@@ -43,7 +43,7 @@ Nothing waits for the search: the session starts the same when it's slow, fails,
 ## The learn step
 
 Meko's automatic extraction of captured conversations reads only the user's side of each turn, and
-in AgentK sessions that is mostly AgentK's own prompts and the skills Claude loads. What the
+in Kode sessions that is mostly Kode's own prompts and the skills Claude loads. What the
 session found out (how the code works, root causes, gotchas) is in Claude's replies and never
 became a memory. The learn step (`src/server/learn.ts`) saves it to the project's dedicated
 datapack, which the team working on the project shares.
@@ -57,14 +57,14 @@ is written (local paths); on the typed path, and for Claude's own saves, the rul
 PR, the design or the git log: how a subsystem works, decisions and the rejected alternatives,
 root causes, traps and invariants, build/test/CI quirks, measured numbers. Never anything about
 the machine, worktree or environment, one person's preferences, task or PR status, what the diff
-or PR already says, or AgentK's process steps. Search before each save; skip what's known, and
+or PR already says, or Kode's process steps. Search before each save; skip what's known, and
 correct a memory that's now wrong with `memory_update`. No limit. It says it overrides the Meko
 plugin's advice not to call `memory_add`. The Explore prompt ends by saving under it (the rule appended in code, when the project has datapacks).
 
 **When.** At Merge & Close, before the cleanup (`Lifecycle.merged()` asks `Learner.beforeClose`,
 and runs again when any learn step ends there, `afterLearn`), once per session; at Discard, before
 the session ends (`Learner.beforeDiscard`); and when the user asks: the **learn** session action
-(**Save learnings to Meko** in the session's ⋯ menu, or the palette), or `/agentk_learn` in the terminal. It needs
+(**Save learnings to Meko** in the session's ⋯ menu, or the palette), or `/kode_learn` in the terminal. It needs
 Meko on, a dedicated datapack, and Claude there and between turns; asked for otherwise, it's a 409
 that says why (exited: resume it; starting; busy). At Merge & Close or Discard a session whose
 Claude is gone or busy is recorded as skipped and closes as before. One runs at a time per session
@@ -97,7 +97,7 @@ turn in a Claude still running: that turn goes on, and its end discards the sess
 clears `discarding`.
 
 **Its progress.** `Session.learnProgress` says where a running step is: through the mod,
-`extract` (Claude looks back over the session), `search` (AgentK looks up what Meko has on each
+`extract` (Claude looks back over the session), `search` (Kode looks up what Meko has on each
 fact), `check` (the duplicate check) and `save` (`done` of `facts` gone through so far, a failed
 write included); `turn` for a typed step. `Learner.progress()` reads it from the open `meko_learns` row and the step's job, and
 each part pushes the state as it starts (and `save` after each fact), so the labels follow the step
@@ -128,7 +128,7 @@ gets the same list. The duplicate check still runs on what comes back.
    reply, the model and the usage to `/mod/learn`, which answers at once.
 3. The server parses the facts (the first JSON object in the reply; an answer that isn't the number
    of a question it offered is dropped), drops any that name the home
-   folder, AgentK's home, the worktree or the session's repo (`sessionRepo()`), and finds the 3
+   folder, Kode's home, the worktree or the session's repo (`sessionRepo()`), and finds the 3
    saved memories most like each (`MekoClient.similar`: `context_search`, memories only, in
    parallel). It puts a `check` part on the next poll: the duplicate check's prompt
    (`dedupPrompt()`), each fact numbered with those memories and their ids; a skip or an update
@@ -148,20 +148,20 @@ gets the same list. The duplicate check still runs on what comes back.
 The whole step, writes included, has 3 minutes (`LEARN_TIMEOUT_MS`): when they're up the step
 closes as `failed` with the part it reached (what it saved by then counted), no further fact is
 written, and Merge & Close goes on. So does a fork or check that gives no usable reply. A model
-call's usage that comes after AgentK gave up is still recorded. A relaunch, exit or archive closes a running step as `interrupted`, and so
+call's usage that comes after Kode gave up is still recorded. A relaunch, exit or archive closes a running step as `interrupted`, and so
 does a server restart (the job lived in memory). Each model call's usage is stored as a
 `usage_messages` row (`message_id` `learn:<id>:extract|dedup`, agent `agentk:learn`), so the
 session's tokens and cost include it, though it's never in the transcript.
 
 **Without the mod** (older Claude Code, the rollout switch off, `[claude] mod` off, or a mod from
-before protocol 2), AgentK types the `learn` stage prompt instead, and Claude searches and saves
+before protocol 2), Kode types the `learn` stage prompt instead, and Claude searches and saves
 under the saving rule itself. The step ends with that turn (`Lifecycle.onTurnEnd`), counted from
-the Meko calls in the transcript during it. It isn't offered the session's questions: AgentK
+the Meko calls in the transcript during it. It isn't offered the session's questions: Kode
 couldn't tell which of Claude's saves answers which, so it couldn't mark them.
 
 **The datapack's open questions.** A session that found out something Meko couldn't answer has
 the answer in its context, whether it searched for it or another session did. So every step
-through the mod (Save learnings, `/agentk_learn`, Merge & Close and Discard alike) is offered the
+through the mod (Save learnings, `/kode_learn`, Merge & Close and Discard alike) is offered the
 open questions on Meko's [Context Gaps](#mekos-context-gaps) for the datapack it writes to, read
 from Meko with the session's Meko conversation (`MekoQuestions.openQuestions`, `learnQuestions()`
 in `learn.ts`):
@@ -171,8 +171,8 @@ in `learn.ts`):
 - at most 50 in all (`LEARN_QUESTIONS_MAX`), each as last asked, on one line and cut to 300
   characters.
 
-AgentK's own searches (at start, and the step's lookups) are never questions, so none of these is
-a task's text. With no list (AgentK on a Meko Cloud link, a Meko too old to keep questions, or
+Kode's own searches (at start, and the step's lookups) are never questions, so none of these is
+a task's text. With no list (Kode on a Meko Cloud link, a Meko too old to keep questions, or
 Meko not answering) the step runs without questions.
 
 The prompt numbers them in one run, in two lists ("from this session", then "from other sessions
@@ -237,7 +237,7 @@ start brings it back.
   `learnTask()` in `prompts.ts`, with the PR window's first day worked out when the session is made,
   so a relaunch later reads the same PRs, and recovery and Try again need no storage of their own.
   Its first prompt is `seed` (`firstPrompt()` in `sessions.ts`), which a repo can override with
-  `.agent-k/stages/seed.md` like any other.
+  `.kode/stages/seed.md` like any other.
 - **What Claude does.** Maps the project from the brief and the repo's docs (skipping generated,
   vendored and lock files), then reads the PRs
   merged in the window that touch those files (through `git log` or `gh pr list`, then each one's
@@ -250,7 +250,7 @@ start brings it back.
   "(PR #123)", never a summary of the change. Metadata adds `"seed": true` and `"pr"`. It changes no
   files; nothing enforces that beyond the prompt (the edit guard is Design's). The searches it
   makes before each save, while it's in Explore, aren't questions Meko should be taught: when it
-  leaves Explore, AgentK has Meko forget them ([Context Gaps](#mekos-context-gaps)).
+  leaves Explore, Kode has Meko forget them ([Context Gaps](#mekos-context-gaps)).
 - **When it's done, it closes.** Claude writes its summary to `learned.md` beside the design file
   (`SessionManager.learnedPath`, outside the repo), only once it has finished; a session that stops
   to ask something doesn't write it. At each turn's end, a learn session still in Explore whose turn
@@ -275,18 +275,18 @@ The searches Meko found nothing, or nothing relevant, for, grouped by question, 
 what Meko is missing and teach it. Meko keeps them: it judges every search an agent makes on its
 `/mcp` when it answers it, keeps the poor ones per datapack, and lists them on the datapack's
 **Context Gaps** tab in its web UI, with Teach, Dismiss and Restore (Meko's `docs/api.md` and
-`docs/web-ui.md` have the rules and the routes). AgentK reads them and marks them; it no longer
+`docs/web-ui.md` have the rules and the routes). Kode reads them and marks them; it no longer
 judges searches itself. Earlier versions kept their own list, from the agents' transcripts, in
 `state.db`; migration 45 dropped it (its marks, and each search's query and how poor its answer
 was): Meko's list starts empty.
 
-AgentK asks the Meko on this computer (`MekoQuestions` in `mekoquestions.ts`, on its `/api/v1` with
+Kode asks the Meko on this computer (`MekoQuestions` in `mekoquestions.ts`, on its `/api/v1` with
 the client token, as `mekoagents.ts` reads the agents). That includes a linked Meko Cloud's
 datapacks: Meko passes every `/mcp` call on to Meko Cloud and keeps their questions too. Anything
 Meko doesn't answer, or a Meko too old to keep questions (a 404), is no list; nothing that needs it
 fails.
 
-- **AgentK's own searches aren't questions.** Its MCP client sends `X-Meko-Client: agentk` on
+- **Kode's own searches aren't questions.** Its MCP client sends `X-Meko-Client: kode` on
   every request (`MEKO_CLIENT_HEADER` in `meko.ts`), and Meko records no question for those calls:
   the search at start (its query is the task) and the learn step's lookups. A header rather than a
   tool argument, which Meko Cloud refuses.

@@ -1,5 +1,5 @@
 [Unit]
-Description=AgentK web server
+Description=Kode web server
 Documentation=https://github.com/yugabyte/meko
 # The home can be on a shared (NFS) file system that other hosts mount: run only on the
 # host this was installed on, or every host you log into starts its own server on it.
@@ -11,9 +11,9 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-Environment=AK_HOME=@AK_HOME@
+Environment=KODE_HOME=@KODE_HOME@
 # service/me_kode in the home execs app/current/bin/me_kode (bin/agentk in a release from before).
-ExecStart=@AK_HOME@/service/me_kode serve
+ExecStart=@KODE_HOME@/service/me_kode serve
 Restart=always
 RestartSec=2
 # 75: another server holds this home (instance.ts); restarting won't help.

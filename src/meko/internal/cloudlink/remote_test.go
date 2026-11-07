@@ -359,7 +359,7 @@ func TestFailedSaveForgetsTheCachedLink(t *testing.T) {
 	}
 }
 
-// Account is pinned: AgentK works out the same hash for an older Meko's link (core.ts
+// Account is pinned: Kode works out the same hash for an older Meko's link (core.ts
 // mekoCloudAccount), so the two must agree.
 func TestAccount(t *testing.T) {
 	if got := (Link{URL: "https://mcp.example.com/mcp", Key: "mko_tkn_x"}).Account(); got != "8adf4764ab826787" {

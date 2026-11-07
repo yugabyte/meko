@@ -157,7 +157,7 @@ class SessionTerminal {
   /** Sticky Ctrl from the key bar: the next character typed is sent with Ctrl. */
   ctrl = false;
   /**
-   * Set while AgentK has stopped the session's agent for sitting idle (TerminalPane): the first key
+   * Set while Kode has stopped the session's agent for sitting idle (TerminalPane): the first key
    * typed, from the keyboard, the key bar or the compose box, calls it once instead of going out.
    */
   whenTyped: (() => void) | null = null;

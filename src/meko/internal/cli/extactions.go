@@ -18,7 +18,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/update"
 )
 
-// ExtensionUpdates is what the Extensions page (and AgentK's page) shows about an installed
+// ExtensionUpdates is what the Extensions page (and Kode's page) shows about an installed
 // extension's updates (extensionUpdates), with why an automatic update waits.
 func (w *webListener) ExtensionUpdates(name string) server.ExtensionUpdate {
 	u := server.ExtensionUpdate{RolledBack: []string{}}
@@ -208,7 +208,7 @@ func (w *webListener) Installed() []string {
 // (holding the update lock), or run its own start or stop. The output and the error reach a
 // browser, so the client token the installer is given is blanked in both. After an install or a
 // start of one with a web UI, or an update that left it running, it waits for the extension to
-// answer on its socket (AgentK's start returns before its server listens), so the page's next look
+// answer on its socket (Kode's start returns before its server listens), so the page's next look
 // sees it running.
 func (w *webListener) RunExtension(ctx context.Context, name, action string, out io.Writer) error {
 	var tok string

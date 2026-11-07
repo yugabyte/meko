@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { checkMove, HomeMove, isServerArgs, refuseOtherMeko, rememberMekoHome, type MoveCheck } from '../../src/server/movehome.js';
 import { loadConfig } from '../../src/server/config.js';
 import { removeOldHomeLink } from '../../src/server/install.js';
-import { akHome, getPaths, homeIn, mekoHome, MekoHomeError, oldHome } from '../../src/server/paths.js';
+import { akHome, getPaths, homeIn, mekoHome, MekoHomeError, oldHome, oldHomeIn } from '../../src/server/paths.js';
 import { MOVE_JOB, samePath, startMoveJob, type ServiceManager } from '../../src/server/service.js';
 import { tempDir } from '../helpers.js';
 
@@ -52,8 +52,8 @@ describe("Meko's data folder", () => {
   });
 });
 
-describe("AgentK's home", () => {
-  const keys = ['AK_APP_DIR', 'AK_HOME', 'MEKO_HOME', 'HOME'] as const;
+describe("Kode's home", () => {
+  const keys = ['KODE_APP_DIR', 'KODE_HOME', 'MEKO_HOME', 'HOME'] as const;
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   afterEach(() => {
     for (const k of keys) {
@@ -62,11 +62,11 @@ describe("AgentK's home", () => {
     }
   });
 
-  it("is a release's own folder whatever AK_HOME says, else AK_HOME (dev, tests)", () => {
-    process.env.AK_APP_DIR = join(root, 'h', 'app', '0.2.0');
-    process.env.AK_HOME = join(root, 'elsewhere');
+  it("is a release's own folder whatever KODE_HOME says, else KODE_HOME (dev, tests)", () => {
+    process.env.KODE_APP_DIR = join(root, 'h', 'app', '0.2.0');
+    process.env.KODE_HOME = join(root, 'elsewhere');
     expect(akHome()).toBe(join(root, 'h'));
-    delete process.env.AK_APP_DIR;
+    delete process.env.KODE_APP_DIR;
     expect(akHome()).toBe(join(root, 'elsewhere'));
   });
 
@@ -76,8 +76,8 @@ describe("AgentK's home", () => {
     ['only the new one', ['new'], 'new'],
     ['both', ['old', 'new'], 'new'],
   ])('without either set, is the one in Meko\'s data folder unless only the old one is there (%s)', (_what, there, want) => {
-    delete process.env.AK_APP_DIR;
-    delete process.env.AK_HOME;
+    delete process.env.KODE_APP_DIR;
+    delete process.env.KODE_HOME;
     delete process.env.MEKO_HOME;
     process.env.HOME = root;
     const homes = { old: oldHome(root), new: homeIn(join(root, '.meko')) };
@@ -96,7 +96,7 @@ describe('whether the home moves', () => {
   }
 
   const check = (paths: ReturnType<typeof getPaths>, o: Parameters<typeof checkMove>[2] = {}) =>
-    checkMove(paths, structuredClone(DEFAULT_CONFIG), { appDir: app(paths.home), gitVersion: () => 'git version 2.43.7', meko: { ...local, home: root }, mekoHelp: () => null, ...o });
+    checkMove(paths, structuredClone(DEFAULT_CONFIG), { appDir: app(paths.home), gitVersion: () => 'git version 2.43.7', meko: { ...local, home: root }, mekoHelp: () => null, mekoKnowsKode: () => null, ...o });
 
   it('moves a release install into Meko\'s data folder: renamed on one filesystem, copied onto another when there\'s room', () => {
     const paths = release(oldHome(root));
@@ -117,7 +117,7 @@ describe('whether the home moves', () => {
       return {};
     }, /isn't empty/],
     ['git older than 2.30', () => ({ gitVersion: () => 'git version 2.27.0' }), /needs git 2\.30 or later/],
-    ['a Meko whose destroy would delete the moved home with its own', () => ({ mekoHelp: () => 'Usage of meko destroy:\n  -force' }), /older than one whose `meko destroy` keeps AgentK's data/],
+    ['a Meko whose destroy would delete the moved home with its own', () => ({ mekoHelp: () => 'Usage of meko destroy:\n  -force' }), /older than one whose `meko destroy` keeps Kode's data/],
     ['a Meko whose destroy keeps it', () => ({ mekoHelp: () => '  -force\n  -with-extensions' }), { plan: expect.objectContaining({ method: 'rename' }) }],
     ['MEKO_HOME on a network filesystem', () => ({ meko: { home: root, env: { MEKO_HOME: join(root, 'net') }, type: () => 'nfs' } }), /network filesystem/],
   ])('%s', (_what, setup, want) => {
@@ -125,6 +125,17 @@ describe('whether the home moves', () => {
     const r = check(paths, setup(paths));
     if (want instanceof RegExp) expect(r).toEqual({ skip: expect.stringMatching(want) });
     else expect(r).toEqual(want);
+  });
+
+  // Meko called Kode agentk before: its home there moves to extensions/kode beside it, once that Meko
+  // knows the new name.
+  it('moves extensions/agentk to extensions/kode beside it, once Meko knows kode', () => {
+    const old = release(oldHomeIn(join(root, '.meko')));
+    expect(check(old)).toEqual({ plan: { from: old.home, to: homeIn(join(root, '.meko')), method: 'rename' } });
+    expect(check(old, { mekoKnowsKode: () => false })).toEqual({ skip: expect.stringMatching(/knows Kode by its name/) });
+    // Whatever MEKO_HOME names: the move stays in the Meko folder the home is in.
+    expect(check(old, { meko: { home: root, env: { MEKO_HOME: join(root, 'elsewhere') } } }))
+      .toMatchObject({ plan: { to: homeIn(join(root, '.meko')) } });
   });
 
   it("an AK_HOME an install named moves too; a home in Meko's data folder, or linked to it, doesn't", () => {
@@ -186,7 +197,7 @@ describe("telling the home's server by its command line (stopAll)", () => {
     ['a build from source through its npm bin', 'node /usr/local/bin/me_kode serve', true],
     ['one through its name before', 'node /usr/local/bin/me_koder serve', true],
     ['one through its name before that', 'node /usr/local/bin/agentk serve', true],
-    ['one through its name before the rename to AgentK', 'node /usr/local/bin/agent-k-local serve', true],
+    ['one through its name before the rename to Kode', 'node /usr/local/bin/agent-k-local serve', true],
     ['a dev server', 'node --import tsx src/server/cli.ts serve', true],
     ['the session host', 'node /usr/local/bin/me_kode host', false],
     ['another program', 'python3 -m http.server serve', false],
@@ -196,7 +207,7 @@ describe("telling the home's server by its command line (stopAll)", () => {
 });
 
 describe('the move job', () => {
-  const job = () => ({ bin: '/h/app/0.2.0/bin/me_kode', from: '/h', to: '/meko/extensions/agentk' });
+  const job = () => ({ bin: '/h/app/0.2.0/bin/me_kode', from: '/h', to: '/meko/extensions/kode' });
 
   it('runs as a transient systemd unit that restarts after a failure, unless it runs already', () => {
     const calls: string[][] = [];
@@ -207,7 +218,7 @@ describe('the move job', () => {
     };
     startMoveJob('systemd', job(), run);
     const started = calls.find((c) => c[0] === 'systemd-run')!;
-    expect(started).toEqual(expect.arrayContaining(['--unit', MOVE_JOB.systemd, 'Restart=on-failure', 'AK_HOME=/h', '/h/app/0.2.0/bin/me_kode', '_move-home', '--to', '/meko/extensions/agentk']));
+    expect(started).toEqual(expect.arrayContaining(['--unit', MOVE_JOB.systemd, 'Restart=on-failure', 'KODE_HOME=/h', '/h/app/0.2.0/bin/me_kode', '_move-home', '--to', '/meko/extensions/kode']));
     active = true;
     calls.length = 0;
     startMoveJob('systemd', job(), run);
@@ -223,13 +234,13 @@ describe('the move job', () => {
     startMoveJob('launchd', job(), run, root, 501);
     const plist = join(root, 'Library', 'LaunchAgents', `${MOVE_JOB.launchd}.plist`);
     const text = readFileSync(plist, 'utf8');
-    expect(text).toContain('<string>_move-home</string><string>--to</string><string>/meko/extensions/agentk</string>');
+    expect(text).toContain('<string>_move-home</string><string>--to</string><string>/meko/extensions/kode</string>');
     expect(text).toContain('<key>SuccessfulExit</key><false/>');
     expect(calls).toContainEqual(['launchctl', 'bootstrap', 'gui/501', plist]);
   });
 });
 
-describe('what Meko tells AgentK', () => {
+describe('what Meko tells Kode', () => {
   it('keeps the MEKO_HOME Meko runs it with as [meko] home, once there is a config', () => {
     const paths = getPaths(join(root, 'h'));
     rememberMekoHome(paths, { MEKO_HOME: join(root, 'meko') });
@@ -242,17 +253,17 @@ describe('what Meko tells AgentK', () => {
 
   // A release's home stays where it's installed, so a Meko for another folder must not stop it.
   it.each([
-    ['no MEKO_HOME', 'meko/extensions/agentk', undefined, true],
-    ["the home's own Meko", 'meko/extensions/agentk', 'meko', true],
-    ["a link to the home's Meko", 'meko/extensions/agentk', 'link', true],
-    ['another Meko', 'meko/extensions/agentk', 'other', false],
+    ['no MEKO_HOME', 'meko/extensions/kode', undefined, true],
+    ["the home's own Meko", 'meko/extensions/kode', 'meko', true],
+    ["a link to the home's Meko", 'meko/extensions/kode', 'link', true],
+    ['another Meko', 'meko/extensions/kode', 'other', false],
     ["a home that isn't in a Meko folder yet", 'h', 'other', true],
   ])('refuses a command Meko runs only for another Meko: %s', (_what, home, mekoHome, allowed) => {
     mkdirSync(join(root, 'meko'));
     symlinkSync(join(root, 'meko'), join(root, 'link'));
     const run = () => refuseOtherMeko(getPaths(join(root, home)), { MEKO_HOME: mekoHome && join(root, mekoHome) });
     if (allowed) expect(run).not.toThrow();
-    else expect(run).toThrow(`This AgentK belongs to the Meko in ${join(root, 'meko')}, and MEKO_HOME names ${join(root, 'other')}: nothing was done`);
+    else expect(run).toThrow(`This Kode belongs to the Meko in ${join(root, 'meko')}, and MEKO_HOME names ${join(root, 'other')}: nothing was done`);
   });
 
   // A data folder can have two spellings that links don't explain, such as a bind mount (one disk

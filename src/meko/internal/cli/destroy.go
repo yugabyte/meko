@@ -46,7 +46,7 @@ func runDestroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr i
 // o.withExtensions; force alone keeps it; o.uninstall always removes it with Meko's, unasked): removing
 // runs each extension's own uninstall first, then removes the folder as above; keeping moves
 // everything else aside under the lock instead (removeKeepingExtensions), so an extension running
-// from its folder (AgentK's sessions) never loses it. A symlinked data folder loses the folder it
+// from its folder (Kode's sessions) never loses it. A symlinked data folder loses the folder it
 // points to and then the link. A missing or empty folder is nothing to remove, and is left as it is
 // (a link to it too).
 func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.Writer) int {
@@ -155,7 +155,7 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	if keep {
 		fmt.Fprintf(stdout, "Removed Meko's data in %s, and kept the extensions' data in it\n", l.Root)
 		fmt.Fprintln(stdout, "The extensions' Meko key no longer works: after meko start, run meko "+
-			"extension install agentk to point AgentK at the new Meko")
+			"extension install kode to point Kode at the new Meko")
 	} else {
 		fmt.Fprintf(stdout, "Removed %s\n", l.Root)
 	}
@@ -174,7 +174,7 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	return exitOK
 }
 
-// destroyOnlyExtensions handles a data folder that holds extension data but no meko.db (AgentK
+// destroyOnlyExtensions handles a data folder that holds extension data but no meko.db (Kode
 // installed without Meko makes its home there): there's nothing of Meko's to remove, and with
 // o.withExtensions it uninstalls the extensions and removes what's left of their data, and the
 // folder only if that leaves it empty.
@@ -254,15 +254,15 @@ func listExtensionData(exts []extensionData, o destroyOptions, stdout io.Writer)
 	}
 	switch {
 	case o.uninstall:
-		fmt.Fprintln(stdout, "Destroying it uninstalls them too and deletes their data: AgentK's sessions and "+
+		fmt.Fprintln(stdout, "Destroying it uninstalls them too and deletes their data: Kode's sessions and "+
 			"worktrees, with any uncommitted work in them")
 	case o.withExtensions:
-		fmt.Fprintln(stdout, "--with-extensions uninstalls them and deletes their data too: AgentK's "+
+		fmt.Fprintln(stdout, "--with-extensions uninstalls them and deletes their data too: Kode's "+
 			"sessions and worktrees, with any uncommitted work in them")
 	case o.force:
 		fmt.Fprintln(stdout, "--force keeps them, and their data")
 	default:
-		fmt.Fprintln(stdout, "Removing their data too uninstalls them and deletes AgentK's sessions and "+
+		fmt.Fprintln(stdout, "Removing their data too uninstalls them and deletes Kode's sessions and "+
 			"worktrees, with any uncommitted work in them")
 	}
 }
@@ -333,7 +333,7 @@ func removeDataDir(l paths.Layout) error {
 var keptEntries = map[string]bool{"extensions": true, "extensions.json": true}
 
 // removeKeepingExtensions removes a stopped server's data but the extensions' (keptEntries). The
-// folder itself stays, since an extension may be running from its folder in it (AgentK's server and
+// folder itself stays, since an extension may be running from its folder in it (Kode's server and
 // sessions). Holding the lock, it moves every other entry into a sibling folder, run/ (which holds
 // the lock file) last, so no server can start until Meko's data is all gone; a server that starts
 // after that makes a new folder's worth. Then it removes the sibling. If a move fails, it moves back

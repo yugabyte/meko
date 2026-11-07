@@ -13,7 +13,7 @@ export const MAX_DESIGN_MARKDOWN = 1024 * 1024;
 export const MAX_QUESTIONS_FILE = 256 * 1024;
 /** Most questions kept from a design; later ones are dropped. */
 export const MAX_QUESTIONS = 30;
-/** Most of AgentK's own decisions kept from a design, counted apart from the questions. */
+/** Most of Kode's own decisions kept from a design, counted apart from the questions. */
 export const MAX_DECISIONS = 30;
 /** Most options kept per question. */
 export const MAX_OPTIONS = 6;
@@ -74,7 +74,7 @@ export function parseDesignLine(body: string): PrDesignRef | null {
 }
 
 /**
- * True for a well-formed `meko_design:<name>;<hash>` line, the only kind AgentK writes: a mention
+ * True for a well-formed `meko_design:<name>;<hash>` line, the only kind Kode writes: a mention
  * of the format in prose or a code block (`meko_design:<name>;…`) isn't one.
  */
 export function isDesignLine(line: string): boolean {
@@ -164,7 +164,7 @@ function option(v: unknown): DesignQuestionOption | null {
   return label ? { label, detail: str(o.detail ?? o.description, DETAIL_CHARS) } : null;
 }
 
-/** A Meko id as AgentK cites it (a memory's UUID, a knowledge item's id): letters, digits, dashes and underscores. */
+/** A Meko id as Kode cites it (a memory's UUID, a knowledge item's id): letters, digits, dashes and underscores. */
 const MEKO_ID = /^[A-Za-z0-9_-]{1,100}$/;
 
 /** A decision's kind as written: anything but "decision" is a question. */
@@ -172,11 +172,13 @@ function kindOf(v: unknown): DesignQuestion['kind'] {
   return typeof v === 'string' && v.trim().toLowerCase() === 'decision' ? 'decision' : 'question';
 }
 
+/** Who decided a question: the user, or Kode (`agentk` in files written before it was called Kode). */
 function decidedByOf(v: unknown): DesignQuestion['decidedBy'] {
-  return v === 'user' || v === 'agentk' ? v : null;
+  if (v === 'agentk') return 'kode';
+  return v === 'user' || v === 'kode' ? v : null;
 }
 
-/** A Meko reference, or null for one without a kind AgentK knows or a usable id. */
+/** A Meko reference, or null for one without a kind Kode knows or a usable id. */
 function mekoRef(v: unknown): MekoRef | null {
   if (!v || typeof v !== 'object') return null;
   const r = v as Record<string, unknown>;
@@ -202,8 +204,8 @@ function mekoRefs(v: unknown): MekoRef[] {
  * entries without a question or a usable id, and repeated ids, are dropped, text is capped, and
  * a recommendation must point at an option. A decision (`kind: "decision"`) is always resolved,
  * and one without its decision is dropped. A resolved entry that doesn't say who decided it keeps
- * what `prev` (the questions kept before) said: AgentK rewriting the file after the server
- * recorded the user's answers mustn't make them AgentK's, or nobody's. Throws when the JSON or its
+ * what `prev` (the questions kept before) said: Kode rewriting the file after the server
+ * recorded the user's answers mustn't make them Kode's, or nobody's. Throws when the JSON or its
  * shape is wrong.
  */
 export function parseDesignQuestions(text: string, prev: DesignQuestion[] = []): DesignQuestion[] {
@@ -238,8 +240,8 @@ export function parseDesignQuestions(text: string, prev: DesignQuestion[] = []):
       recommended: Number.isInteger(rec) && (rec as number) >= 0 && (rec as number) < options.length ? (rec as number) : null,
       status: resolved ? 'resolved' : 'open',
       decision,
-      // AgentK's own decision is its until the user changes it.
-      decidedBy: resolved ? (decidedByOf(q.decidedBy) ?? before.get(id) ?? (kind === 'decision' ? 'agentk' : null)) : null,
+      // Kode's own decision is its until the user changes it.
+      decidedBy: resolved ? (decidedByOf(q.decidedBy) ?? before.get(id) ?? (kind === 'decision' ? 'kode' : null)) : null,
       meko: mekoRefs(q.meko),
     });
   }
@@ -278,7 +280,7 @@ export function checkToolQuestions(input: unknown, prev: DesignQuestion[] = []):
       if (!str(q.decision, DECISION_CHARS)) problems.push(`${at} is a decision, so it needs its "decision": what you chose.`);
       if (q.status !== undefined && q.status !== 'resolved') problems.push(`${at} is a decision, so its "status" must be "resolved".`);
     }
-    if (q.decidedBy !== undefined && q.decidedBy !== null && q.decidedBy !== 'user' && q.decidedBy !== 'agentk') problems.push(`${at}: "decidedBy" must be "user", "agentk" or null.`);
+    if (q.decidedBy !== undefined && q.decidedBy !== null && q.decidedBy !== 'user' && q.decidedBy !== 'kode' && q.decidedBy !== 'agentk') problems.push(`${at}: "decidedBy" must be "user", "kode" or null.`);
     if (q.meko !== undefined && q.meko !== null) {
       if (!Array.isArray(q.meko)) problems.push(`${at}: "meko" must be a list.`);
       else {
@@ -312,7 +314,7 @@ export function checkToolQuestions(input: unknown, prev: DesignQuestion[] = []):
 }
 
 /**
- * The questions file AgentK writes beside the design: null when there's none (or it's empty);
+ * The questions file Kode writes beside the design: null when there's none (or it's empty);
  * throws when it's too large, can't be read, or isn't questions, so a bad file is never taken
  * for a missing one. `prev` is what `parseDesignQuestions` keeps who decided each from.
  */
@@ -398,7 +400,7 @@ export const ANSWERS_PROMPT_MAX = 50_000;
 
 /**
  * "2 answers to open questions, a change to one of your decisions and other feedback", for the
- * prompt's first line. An answer to one of AgentK's own decisions (in `questions`) is a change to it.
+ * prompt's first line. An answer to one of Kode's own decisions (in `questions`) is a change to it.
  */
 export function answersCount(answers: DesignAnswerInput[], feedback: string, questions: DesignQuestion[] = []): string {
   const decisions = new Set(questions.filter((q) => q.kind === 'decision').map((q) => q.id));
@@ -420,8 +422,8 @@ function answerLines(a: DesignAnswerInput, lead: string): string[] {
 
 /**
  * The answers as markdown for the agent: every open question in the design's order (numbered as
- * the user saw them, Q1…), answered or not, then each of AgentK's own decisions the user changed
- * (D1…), then other feedback. A question without an answer is left to AgentK's recommendation.
+ * the user saw them, Q1…), answered or not, then each of Kode's own decisions the user changed
+ * (D1…), then other feedback. A question without an answer is left to Kode's recommendation.
  */
 export function formatAnswers(answers: DesignAnswerInput[], feedback: string, questions: DesignQuestion[]): string {
   const byId = new Map(answers.map((a) => [a.questionId, a]));
@@ -445,17 +447,17 @@ export function formatAnswers(answers: DesignAnswerInput[], feedback: string, qu
 /**
  * A question resolved by the user's answer (`a`), as the questions file keeps it: the option
  * picked (with any note) or the custom answer as its decision, decided by the user. Without an
- * answer it's left to AgentK, on its recommendation when it has one. One of AgentK's own decisions
+ * answer it's left to Kode, on its recommendation when it has one. One of Kode's own decisions
  * answered this way is the user's change to it.
  */
 export function answeredQuestion(q: DesignQuestion, a: DesignAnswerInput | undefined): DesignQuestion {
   let decision: string;
   if (!a) {
     const rec = q.recommended !== null ? q.options[q.recommended] : undefined;
-    decision = rec ? `Left to AgentK: ${rec.label}` : 'Left to AgentK';
+    decision = rec ? `Left to Kode: ${rec.label}` : 'Left to Kode';
   } else {
     const text = a.text.trim();
     decision = a.label === null ? text : text ? `${a.label} — ${text}` : a.label;
   }
-  return { ...q, status: 'resolved', decision: clip(decision, DECISION_CHARS), decidedBy: a ? 'user' : 'agentk' };
+  return { ...q, status: 'resolved', decision: clip(decision, DECISION_CHARS), decidedBy: a ? 'user' : 'kode' };
 }

@@ -25,7 +25,7 @@ function mekoRegistryEntries(claudeDir: string): [string, unknown][] | null {
 
 /**
  * The Meko plugin's keys (`<plugin>@<marketplace>`) for `enabledPlugins`: those in Claude Code's
- * plugin registry, and the key the Meko installer uses, in case it's installed after AgentK starts.
+ * plugin registry, and the key the Meko installer uses, in case it's installed after Kode starts.
  */
 export function mekoPluginKeys(claudeDir: string = claudeUserDir()): string[] {
   const keys = new Set((mekoRegistryEntries(claudeDir) ?? []).map(([k]) => k));

@@ -585,7 +585,7 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
     setNote(null);
     try {
       const r = await api.sendComments(session.id);
-      if (r.sent) setNote(`Sent ${plural(r.sent, 'comment')} to AgentK.`);
+      if (r.sent) setNote(`Sent ${plural(r.sent, 'comment')} to Kode.`);
       setComments(await api.comments(session.id));
     } catch (e) {
       setNote(errorMessage(e));
@@ -684,8 +684,8 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
             disabled={sending || exited}
             title={
               session.kind === 'review-pr'
-                ? 'Send your draft comments to AgentK, which drafts them as your review comments and posts nothing until you say'
-                : 'Send your draft comments to AgentK'
+                ? 'Send your draft comments to Kode, which drafts them as your review comments and posts nothing until you say'
+                : 'Send your draft comments to Kode'
             }
             onClick={send}
           >
@@ -728,14 +728,14 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
         </div>
       )}
       {session.kind === 'review-pr' && drafts > 0 && !queued && !note && !exited && (
-        <div className="chg-bar">AgentK drafts these as your review comments on the PR, and posts nothing until you say.</div>
+        <div className="chg-bar">Kode drafts these as your review comments on the PR, and posts nothing until you say.</div>
       )}
       {(note || queued > 0 || (exited && drafts > 0)) && (
         <div className="chg-bar" role="status">
           {exited && drafts > 0 && <span>{agentName(session)} has exited. Resume the session to send your comments.</span>}
           {queued > 0 && (
             <span>
-              {plural(queued, 'comment')} queued. {queued === 1 ? 'It goes' : 'They go'} to AgentK when it finishes its turn
+              {plural(queued, 'comment')} queued. {queued === 1 ? 'It goes' : 'They go'} to Kode when it finishes its turn
               {session.stage !== 'explore' && session.stage !== 'code' && session.stage !== 'review' && session.stage !== 'reviewing-pr'
                 ? ' in the Code or Review stage'
                 : ''}

@@ -74,8 +74,8 @@ describe('ci-scope.sh', () => {
     expect(scope('', '--all', 'x').status).toBe(2);
   });
 
-  // A root file AgentK's tests read must run them when it changes.
-  it('runs AgentK for every root file its tests read', () => {
+  // A root file Kode's tests read must run them when it changes.
+  it('runs Kode for every root file its tests read', () => {
     const files = readdirSync(TESTS, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.ts'));
     const reads = new Set<string>();
     for (const f of files) {

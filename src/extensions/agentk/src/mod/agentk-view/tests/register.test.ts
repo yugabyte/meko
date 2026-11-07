@@ -3,12 +3,12 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { EngineInterface, On } from 'claude-code'
 
-const STAGE = 'You are in the Code stage of an AgentK task.\n\nTask: Fix the score\n\nRun the tests.'
-const FIRST = 'You are in the Explore stage of an AgentK task.\n\nTask: Explore\n\nRead the code.'
-const EVENTS = 'AgentK events:\n- Review the score fix: First look done'
-const ENV = { AK_FIRST_PROMPT: 'You are in the Explore stage of an AgentK task.', AK_HIDDEN_PROMPT: 'AgentK events:' }
+const STAGE = 'You are in the Code stage of a Kode task.\n\nTask: Fix the score\n\nRun the tests.'
+const FIRST = 'You are in the Explore stage of a Kode task.\n\nTask: Explore\n\nRead the code.'
+const EVENTS = 'Kode events:\n- Review the score fix: First look done'
+const ENV = { KODE_FIRST_PROMPT: 'You are in the Explore stage of a Kode task.', KODE_HIDDEN_PROMPT: 'Kode events:' }
 
-const AGENTK = { kind: 'plugin', name: 'agentk', asUser: true } as const
+const AGENTK = { kind: 'plugin', name: 'kode', asUser: true } as const
 const TYPED = { kind: 'composer' } as const
 
 type Origin = typeof AGENTK | typeof TYPED | { kind: 'plugin'; name: string; asUser: boolean }
@@ -25,10 +25,10 @@ function row($: EngineInterface, text: string, origin: Origin, isExpanded = fals
 const text = (t: string) => expect.objectContaining({ type: 'Text', children: [t] })
 const hidden = expect.objectContaining({ type: 'Box', props: { display: 'none' } })
 
-test("draws AgentK's prompts as their first line, and in full with ctrl+o", async ($, on) => {
+test("draws Kode's prompts as their first line, and in full with ctrl+o", async ($, on) => {
   mock.env(on, ENV)
   drawn(on)
-  expect(await row($, STAGE, AGENTK)).toEqual(text('You are in the Code stage of an AgentK task. … (+4 lines, ctrl+o to expand)'))
+  expect(await row($, STAGE, AGENTK)).toEqual(text('You are in the Code stage of a Kode task. … (+4 lines, ctrl+o to expand)'))
   expect(await row($, STAGE, AGENTK, true)).toEqual(text(STAGE))
   // One line already: as it is.
   expect(await row($, 'Implement the design.', AGENTK)).toEqual(text('Implement the design.'))
@@ -40,7 +40,7 @@ test("draws AgentK's prompts as their first line, and in full with ctrl+o", asyn
 test("draws the session's first prompt, passed on claude's command line, as its first line", async ($, on) => {
   mock.env(on, ENV)
   drawn(on)
-  expect(await row($, FIRST, TYPED)).toEqual(text('You are in the Explore stage of an AgentK task. … (+4 lines, ctrl+o to expand)'))
+  expect(await row($, FIRST, TYPED)).toEqual(text('You are in the Explore stage of a Kode task. … (+4 lines, ctrl+o to expand)'))
   expect(await row($, FIRST, TYPED, true)).toEqual(text(FIRST))
 })
 
@@ -53,14 +53,14 @@ test("leaves the person's own prompts, and other plugins', as Claude Code draws 
   expect(await row($, STAGE, { kind: 'plugin', name: 'other', asUser: true })).toEqual(text(STAGE))
 })
 
-for (const [why, env] of [['empty', { AK_FIRST_PROMPT: '' }], ['unset', {}]] as const) {
-  test(`folds no typed prompt when the conversation didn't start with AgentK's (AK_FIRST_PROMPT ${why})`, async ($, on) => {
+for (const [why, env] of [['empty', { KODE_FIRST_PROMPT: '' }], ['unset', {}]] as const) {
+  test(`folds no typed prompt when the conversation didn't start with Kode's (KODE_FIRST_PROMPT ${why})`, async ($, on) => {
     mock.env(on, env)
     drawn(on)
     expect(await row($, FIRST, TYPED)).toEqual(text(FIRST))
-    // AgentK's mod's prompts still fold, and with no AK_HIDDEN_PROMPT none is hidden.
-    expect(await row($, STAGE, AGENTK)).toEqual(text('You are in the Code stage of an AgentK task. … (+4 lines, ctrl+o to expand)'))
-    expect(await row($, EVENTS, AGENTK)).toEqual(text('AgentK events: … (+1 line, ctrl+o to expand)'))
+    // Kode's mod's prompts still fold, and with no KODE_HIDDEN_PROMPT none is hidden.
+    expect(await row($, STAGE, AGENTK)).toEqual(text('You are in the Code stage of a Kode task. … (+4 lines, ctrl+o to expand)'))
+    expect(await row($, EVENTS, AGENTK)).toEqual(text('Kode events: … (+1 line, ctrl+o to expand)'))
   })
 }
 

@@ -248,7 +248,7 @@ export function ProjectView({
   useEffect(() => {
     if (designAt) setPanel('design');
   }, [session?.id, designAt]);
-  // And before it's written, to show AgentK at work on it: as the session comes on screen or enters Design.
+  // And before it's written, to show Kode at work on it: as the session comes on screen or enters Design.
   const pendingDesign = designPending(session);
   useEffect(() => {
     if (pendingDesign) setPanel('design');
@@ -280,7 +280,7 @@ export function ProjectView({
   }, [updated]);
   const act = async (action: SessionAction, req?: CloseSessionRequest) => {
     if (!session || actingRef.current) return;
-    // With open questions (or a change to one of AgentK's decisions), approving starts with the
+    // With open questions (or a change to one of Kode's decisions), approving starts with the
     // questions; the approval goes from there.
     if (action === 'approve-design' && (session.designQuestions.open > 0 || changingDecisions(session.id))) {
       setPanel('design');
@@ -333,7 +333,7 @@ export function ProjectView({
     || (session.stage === 'review' && session.canMerge)
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha || rv.designUnread)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
-  // While AgentK can't share (the Meko on this computer), it points to Meko Cloud instead.
+  // While Kode can't share (the Meko on this computer), it points to Meko Cloud instead.
   const canShare = !!dedicated && meko.configured;
   const canLearn = !!session && offersLearn(session, !!dedicated, meko.configured);
   // Merge & Close and Discard save what the session learned first, unless asked not to. The merge's
@@ -427,7 +427,7 @@ export function ProjectView({
       tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
     </span>
   ));
-  // Measured by AgentK's mod after each turn; null without it. The phone's sheet has no tooltips, so it writes the percent too.
+  // Measured by Kode's mod after each turn; null without it. The phone's sheet has no tooltips, so it writes the percent too.
   const contextText = (showPercent: boolean) =>
     session && session.contextPercent !== null && <ContextRing percent={session.contextPercent} showPercent={showPercent} agent={agentName(session)} />;
   const mekoText = (
@@ -818,7 +818,7 @@ function reviewGate(
           {r.state === 'failed' ? 'Code review failed' : 'Code review cancelled'}
         </span>
         {open}
-        <button className="btn small" disabled={blocked} onClick={() => onAct('review-open-anyway')} title="Send the PR prompt without a me_ak_review line">
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-open-anyway')} title="Send the PR prompt without a me_kode_review line">
           Open anyway
         </button>
         <button className="gate" disabled={blocked} onClick={() => onAct('review-retry')} title="Review again, reusing the steps already reported">
@@ -841,7 +841,7 @@ function reviewGate(
     return (
       <span className="gate-group">
         {/* Past an interrupted description turn or a lost ask (`detail`), the review waits for Review now. */}
-        <span className="gate-pill" title={r.detail ?? "AgentK writes the PR's title and description first, for the code review to check the change against"}>
+        <span className="gate-pill" title={r.detail ?? "Kode writes the PR's title and description first, for the code review to check the change against"}>
           {r.detail ? 'Code review waits to start' : <Busy label="Writing the PR description" />}
         </span>
         <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
@@ -854,15 +854,15 @@ function reviewGate(
   if (r.state === 'triage') {
     return (
       <span className="gate-group">
-        <span className="gate-pill warn" title={`Round ${r.round}'s findings wait for you: add notes to them or dismiss some in the findings, then send them to AgentK`}>
+        <span className="gate-pill warn" title={`Round ${r.round}'s findings wait for you: add notes to them or dismiss some in the findings, then send them to Kode`}>
           Findings wait on you
         </span>
         {open}
         <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
           Cancel
         </button>
-        <button className="gate" disabled={blocked} onClick={() => onAct('review-send')} title="Send the findings to AgentK with your notes, leaving out the ones you dismissed">
-          Send to AgentK
+        <button className="gate" disabled={blocked} onClick={() => onAct('review-send')} title="Send the findings to Kode with your notes, leaving out the ones you dismissed">
+          Send to Kode
         </button>
       </span>
     );
@@ -870,7 +870,7 @@ function reviewGate(
   if (r.state === 'fixing') {
     return (
       <span className="gate-group">
-        <span className="gate-pill" title={`AgentK is fixing what round ${r.round} found (${countsText(r.counts)}); round ${r.round + 1} follows`}>
+        <span className="gate-pill" title={`Kode is fixing what round ${r.round} found (${countsText(r.counts)}); round ${r.round + 1} follows`}>
           <Busy label={`Fixing round ${r.round}'s findings`} />
         </span>
         {open}
@@ -982,10 +982,10 @@ function StageBar({
   let gate: ReactNode = null;
   switch (session.stage) {
     case 'explore':
-      reason = midTurn ? 'Wait for AgentK to finish its turn.' : null;
+      reason = midTurn ? 'Wait for Kode to finish its turn.' : null;
       // A learn session closes by itself once it's done (it can still be moved from the stage bar).
       gate = session.purpose === 'learn' ? (
-        <span className="gate-pill" title="AgentK closes this session once it has saved what it learned">
+        <span className="gate-pill" title="Kode closes this session once it has saved what it learned">
           Learning the project
         </span>
       ) : session.purpose === 'guide' ? (
@@ -1009,7 +1009,7 @@ function StageBar({
       if (session.approvalQueued) {
         gate = (
           <span className="gate-group">
-            <span className="gate-pill" title="The approval goes to AgentK when its turn ends, unless the turn changes the design">
+            <span className="gate-pill" title="The approval goes to Kode when its turn ends, unless the turn changes the design">
               ✓ Approved: goes when the turn ends
             </span>
             <button className="btn small" disabled={blocked} onClick={() => onAct('cancel-approval')}>
@@ -1026,7 +1026,7 @@ function StageBar({
         break;
       }
       if (session.queued === 'open-pr') {
-        gate = queuedGate(session, blocked, onAct, onAutoRun, 'The PR prompt goes to AgentK when its turn ends');
+        gate = queuedGate(session, blocked, onAct, onAutoRun, 'The PR prompt goes to Kode when its turn ends');
         break;
       }
       if (noPr) {
@@ -1076,7 +1076,7 @@ function StageBar({
       gate = (
         <span className="gate-group">
           {held.count > 0 && (
-            <button className="btn small held-btn" onClick={onHeld} title={`Held for you: ${held.authors.map((a) => `@${a}`).join(', ')}. Send to AgentK or dismiss.`}>
+            <button className="btn small held-btn" onClick={onHeld} title={`Held for you: ${held.authors.map((a) => `@${a}`).join(', ')}. Send to Kode or dismiss.`}>
               {held.count === 1 ? '1 review for you' : `${held.count} reviews for you`}
             </button>
           )}
@@ -1116,9 +1116,9 @@ function StageBar({
       break;
     case 'reviewing-pr': {
       reason = midTurn
-        ? 'Wait for AgentK to finish its turn.'
+        ? 'Wait for Kode to finish its turn.'
         : session.status === 'needs_input'
-          ? 'AgentK is waiting on you in the terminal.'
+          ? 'Kode is waiting on you in the terminal.'
           : session.status === 'exited' && !idleStopped(session)
             ? 'Resume the session first.'
             : null;

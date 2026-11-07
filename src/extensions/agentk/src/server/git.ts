@@ -733,7 +733,7 @@ export async function remoteOf(repo: string, ghRepo: string): Promise<string | n
 
 /** Where a Review a PR session keeps the PR's head in its repo (outside refs/heads, so no branch list shows it). */
 export function prRef(number: number): string {
-  return `refs/agentk/pr/${number}`;
+  return `refs/kode/pr/${number}`;
 }
 
 /**

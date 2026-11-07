@@ -37,9 +37,9 @@ function clip(s: string, max: number): string {
 const MEKO_LINES_MAX = 6;
 const MEKO_LINE_MAX = 300;
 
-/** A line AgentK's PR prompt ends a description with: the datapack's (`mekoDatapackLineId`), `meko_…:` or `me_ak_review:`. */
+/** A line Kode's PR prompt ends a description with: the datapack's (`mekoDatapackLineId`), `meko_…:` or `me_kode_review:`. */
 function isMekoLine(line: string): boolean {
-  return mekoDatapackLineId(line) !== null || /^\s*(meko_\w+:\S*|me_ak_review:.*)\s*$/.test(line);
+  return mekoDatapackLineId(line) !== null || /^\s*(meko_\w+:\S*|me_kode_review:.*|me_ak_review:.*)\s*$/.test(line);
 }
 
 /**
@@ -113,7 +113,7 @@ about is there. If a question can only be settled by code you cannot reach, say
 so in the finding instead of going to look for it.
 
 You have Read, Grep, and Glob for the code, Meko's search tools for the
-datapacks named below (when there are any), and AgentK's tool for your report:
+datapacks named below (when there are any), and Kode's tool for your report:
 no shell, no git, no write access. Do not try to run commands, change files or
 fetch URLs.`;
 }
@@ -161,7 +161,7 @@ do not apply to you, and following them would stall the review:
 
 ## Output
 
-You report through AgentK's tool, in the shape your assignment's schema gives,
+You report through Kode's tool, in the shape your assignment's schema gives,
 and nothing else you write is read.
 
 Every finding must name a file this change touches and a line inside the diff.
@@ -535,7 +535,7 @@ ${shown.join('\n')}
 /**
  * One pass's prompt: the shared base, the sweep context, then its assignment last (`Pass.Prompt`),
  * and how to report it: one call to `report.tool` with this step's id and a report meeting the
- * pass's schema, called again with the error fixed when AgentK refuses it.
+ * pass's schema, called again with the error fixed when Kode refuses it.
  */
 export function passPrompt(base: string, pass: Pass, sweepCtx: string, report: { tool: string; step: string }): string {
   const footer = pass.alone ? '' : `\n\n${PASS_FOOTER}`;
@@ -622,7 +622,7 @@ through exactly as written, and never build a path yourself:
     directory, so that string is the whole argument.
   - A per-file patch — already absolute and complete. Copy it as it stands.
 
-You have Read, Grep, and Glob, and AgentK's tool for your verdict: no shell, no
+You have Read, Grep, and Glob, and Kode's tool for your verdict: no shell, no
 git, no network, no write access. Use them. A verdict you reach without opening
 the code is a guess, and a guess is worth less than nothing here. If this
 finding can only be settled by code you cannot reach, that is an honest

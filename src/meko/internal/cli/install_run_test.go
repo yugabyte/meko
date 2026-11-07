@@ -113,7 +113,7 @@ func TestInstallRefusesAPortInUse(t *testing.T) {
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
 	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+
-		" is in use by another program (an AgentK from before Meko served it, or another)\n")
+		" is in use by another program (a Kode from before Meko served it, or another)\n")
 	want(t, "install's way to find it", code, exitError, out, "    See what holds it    ")
 	// MEKO_PORT overrides config.toml, so the way out is the variable.
 	want(t, "install's way to move it", code, exitError, out, "    Or move Meko         change or unset MEKO_PORT\n")

@@ -22,7 +22,7 @@ describe('probeLocalMeko', () => {
   const probe = (mekoHome: string | null = null) => probeLocalMeko(mekoHome, { HOME: home, PATH: '/usr/bin:/bin' });
 
   it('reads the URLs and token of a running Meko, asking the Meko whose folder it is given', async () => {
-    // Only the Meko in /data/meko names its web listener: the other is too old to serve AgentK.
+    // Only the Meko in /data/meko names its web listener: the other is too old to serve Kode.
     meko(`w=''; [ -n "$MEKO_HOME" ] && w=',"web_url":"https://box:7777"'
 echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\",\\"running\\":true$w}"`);
     expect(await probe('/data/meko')).toEqual({
@@ -42,7 +42,7 @@ echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\
     // Unlinked: no account and no web app, whatever else it says.
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"linked":false,"web_url":"https://cloud.mekodata.ai","account":"x"}}'`);
     expect((await probe()).cloud).toEqual({ account: '', webUrl: '' });
-    // An older Meko that handed out the link's key, which AgentK no longer uses: no account of its own.
+    // An older Meko that handed out the link's key, which Kode no longer uses: no account of its own.
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"url":"https://mcp.mekodata.ai/mcp","api_key":"mko_tkn_x","web_url":"https://cloud.mekodata.ai","api_url":"https://cloud.mekodata.ai/api/v1"}}'`);
     expect((await probe()).cloud).toEqual({ account: '', webUrl: '' });
     // A web app that isn't http(s) is none.
@@ -69,9 +69,9 @@ echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\
 
 describe('mekoDirOf', () => {
   it.each([
-    ['/home/u/.meko/extensions/agentk', '/home/u/.meko'],
+    ['/home/u/.meko/extensions/kode', '/home/u/.meko'],
     ['/home/u/.agent-k-local', null],
-    ['/data/extensions/agentk-dev', null],
+    ['/data/extensions/kode-dev', null],
   ])('%s → %s', (akHome, want) => {
     expect(mekoDirOf(akHome)).toBe(want);
   });

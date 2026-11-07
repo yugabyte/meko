@@ -4,7 +4,7 @@ import { parsePrInput } from '../shared/github-refs.js';
 import type { RepoVisibility } from './github.js';
 import type { SessionRow } from './store.js';
 
-/** The roles on a repo (GitHub's `authorAssociation`) whose people AgentK trusts. Anyone else can comment on a public repo. */
+/** The roles on a repo (GitHub's `authorAssociation`) whose people Kode trusts. Anyone else can comment on a public repo. */
 export const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
 
 /** How long a repo's visibility is used before it's read again (a private repo can be made public). */
@@ -55,7 +55,7 @@ export class HeadTrust {
   async untrusted(row: Parameters<typeof prHead>[0]): Promise<string | null> {
     const head = prHead(row);
     if (!head) return null;
-    if (!head.repo) return "AgentK doesn't know which repo this PR is on";
+    if (!head.repo) return "Kode doesn't know which repo this PR is on";
     const v = await this.visibility(head.repo);
     if (v === 'private' || v === 'internal') return null;
     return v === 'public' ? `${head.repo} is public` : `GitHub didn't say whether ${head.repo} is public`;
@@ -64,10 +64,10 @@ export class HeadTrust {
 
 /** What an untrusted session's event log says it runs without. */
 export const UNTRUSTED_TEXT = "so anyone can have written this PR's code: the session runs without the repo's own config "
-  + '(its .claude settings, hooks, status line and MCP servers, its Kiro agents, and its .agent-k/stages prompts)';
+  + '(its .claude settings, hooks, status line and MCP servers, its Kiro agents, and its .kode/stages prompts)';
 
 /**
- * Kiro config in a worktree that would take the place of AgentK's: a workspace agent named `agentk`
+ * Kiro config in a worktree that would take the place of Kode's: a workspace agent named `kode`
  * (Kiro uses it over the global one) and workspace MCP servers (`.kiro/settings/mcp.json`, which
  * the agent loads). Kiro has no flag to skip them, so an untrusted session can't start on Kiro while
  * they're there. Paths relative to the worktree.

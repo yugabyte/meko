@@ -11,7 +11,7 @@ function jsonl<T>(env: TestEnv, file: string): T[] {
   return readJsonl<T>(f);
 }
 
-describe("Claude's questions and the design through AgentK's mod (real session host + git, fake claude)", () => {
+describe("Claude's questions and the design through Kode's mod (real session host + git, fake claude)", () => {
   let env: TestEnv;
   afterEach(async () => {
     await env.cleanup();
@@ -34,12 +34,12 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     all<{ text: string }>(env.core.db, 'SELECT text FROM session_events WHERE session_id = ? AND kind = ?', id, kind).map((e) => e.text);
   const slow = (ms: number) => writeFileSync(join(env.fakeDir, 'turn-ms'), String(ms));
 
-  it("shows Claude's question, and its answer from AgentK resumes the turn", async () => {
+  it("shows Claude's question, and its answer from Kode resumes the turn", async () => {
     const id = await start({}, { kind: 'quick' });
     await env.core.sessions.submit(id, 'ASK_USER now');
     const s = await waitFor(() => get(id), (x) => !!x.asking, 10000, 'the question');
     expect(s.status).toBe('needs_input');
-    expect(s.statusDetail).toBe('AgentK asks: Which color?');
+    expect(s.statusDetail).toBe('Kode asks: Which color?');
     expect(s.asking!.questions).toEqual([{
       question: 'Which color?', header: 'Color', multiSelect: false,
       options: [{ label: 'Red', description: 'Warm', preview: null }, { label: 'Blue', description: 'Cool', preview: null }],
@@ -53,7 +53,7 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     await waitFor(() => jsonl(env, 'mod-asks.jsonl'), (a) => a.length === 1, 10000, 'the answer in Claude');
     expect(jsonl(env, 'mod-asks.jsonl')).toEqual([{ by: 'agentk', answers: { 0: 'Blue' } }]);
     await waitFor(() => get(id).status, (st) => st === 'idle', 10000, 'the turn to end');
-    expect(events(id, 'ask')).toEqual(["Answered AgentK's question in the AgentK UI"]);
+    expect(events(id, 'ask')).toEqual(["Answered Kode's question in the Kode UI"]);
   });
 
   it("shows Claude's Meko call while it runs, forgets one whose end never came when the turn ends, and keeps a quick one's m up a while", async () => {
@@ -109,7 +109,7 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     const approve = (b?: unknown) => env.core.sessions.action(id, 'approve-design', b);
     const working = () => waitFor(() => get(id).status, (st) => st === 'working', 10000, 'a turn');
 
-    // Answers sent while AgentK works go now, and Claude takes them when the turn ends; while they
+    // Answers sent while Kode works go now, and Claude takes them when the turn ends; while they
     // wait in Claude, an approval is refused.
     slow(1500);
     await env.core.sessions.submit(id, 'think about it');
@@ -136,7 +136,7 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     await expect(revise({ answers: [], feedback: 'More?' })).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/approved the design/) });
     await waitFor(() => get(id), (x) => !x.approvalQueued && x.status === 'needs_input', 10000, 'the turn to end');
     expect(get(id).stage).toBe('design');
-    expect(events(id, 'design')).toContain('Queued approval dropped: AgentK changed the design during its turn');
+    expect(events(id, 'design')).toContain('Queued approval dropped: Kode changed the design during its turn');
     expect(transcript(id)).not.toContain('The design is approved');
 
     // Withdrawn, then approved again on a turn that leaves the design alone: it goes when the turn ends.
@@ -195,11 +195,11 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     await env.core.sessions.action(id, 'approve-design');
     expect(get(id).approvalQueued).toBe(true);
     await waitFor(() => get(id).stage, (st) => st === 'code', 10000, 'the approval');
-    expect(events(id, 'design')).not.toContain('Queued approval dropped: AgentK changed the design during its turn');
-    // Sent, the approval leaves the question to AgentK: the design's time moves on for that only.
+    expect(events(id, 'design')).not.toContain('Queued approval dropped: Kode changed the design during its turn');
+    // Sent, the approval leaves the question to Kode: the design's time moves on for that only.
     // (The stage moves to Code before the approval reaches Claude, and the question is resolved after.)
     const q = await waitFor(() => env.core.questions.get(row(id)).questions[0], (x) => x.status === 'resolved', 10000, 'the question resolved');
-    expect(q).toMatchObject({ id: 'store', decision: 'Left to AgentK: Datapack' });
+    expect(q).toMatchObject({ id: 'store', decision: 'Left to Kode: Datapack' });
     expect(get(id).designUpdatedAt).toBeGreaterThanOrEqual(at!);
   }, 60_000);
 

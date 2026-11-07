@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// The datapacks AgentK makes: long names, and descriptions that end in a repo's URL.
+// The datapacks Kode makes: long names, and descriptions that end in a repo's URL.
 const (
-	canned1, canned1Project = "adlc/proj/canned-agents/canned-agents", `AgentK project "canned-agents" · repo`
-	canned2, canned2Project = "adlc/proj/canned-agents/canned-agents2", `AgentK project "canned-agents2" · repo`
+	canned1, canned1Project = "adlc/proj/canned-agents/canned-agents", `Kode project "canned-agents" · repo`
+	canned2, canned2Project = "adlc/proj/canned-agents/canned-agents2", `Kode project "canned-agents2" · repo`
 	cannedRepo              = "https://github.com/yugabyte/canned-agents"
 )
 
@@ -39,9 +39,9 @@ func TestNameDescTable(t *testing.T) {
 	}{
 		{"wide enough, one line each", cannedAgents, 140, cannedOneLine},
 		{"descriptions wrap in their column", cannedAgents, 100, "" +
-			`adlc/proj/canned-agents/canned-agents    AgentK project "canned-agents" · repo` + "\n" +
+			`adlc/proj/canned-agents/canned-agents    Kode project "canned-agents" · repo` + "\n" +
 			"                                         https://github.com/yugabyte/canned-agents\n" +
-			`adlc/proj/canned-agents/canned-agents2   AgentK project "canned-agents2" · repo` + "\n" +
+			`adlc/proj/canned-agents/canned-agents2   Kode project "canned-agents2" · repo` + "\n" +
 			"                                         https://github.com/yugabyte/canned-agents\n" +
 			"default                                  Created by Meko on first start.\n" +
 			"team-runbooks\n"},
@@ -59,12 +59,12 @@ func TestNameDescTable(t *testing.T) {
 		{"a name wider than the column gets a line of its own", []nameDesc{
 			{"adlc/proj/canned-agents/canned-agents2", "mine"},
 			{"adlc/proj/some-very-long-project-name/and-an-even-longer-datapack-name",
-				`AgentK project "long-project" · repo https://github.com/yugabyte/long-repo`},
+				`Kode project "long-project" · repo https://github.com/yugabyte/long-repo`},
 			{"default", "Created by Meko on first start."},
 		}, 80, "" +
 			"adlc/proj/canned-agents/canned-agents2   mine\n" +
 			"adlc/proj/some-very-long-project-name/and-an-even-longer-datapack-name\n" +
-			`                                         AgentK project "long-project" · repo` + "\n" +
+			`                                         Kode project "long-project" · repo` + "\n" +
 			"                                         https://github.com/yugabyte/long-repo\n" +
 			"default                                  Created by Meko on first start.\n"},
 		{"whitespace collapses", []nameDesc{{"notes", "two\n  lines\tand  spaces "}}, 80,

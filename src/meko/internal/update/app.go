@@ -21,27 +21,30 @@ import (
 // releases (Present's, in <data folder>/extensions/present/app). Name is the program, which
 // names its binary (<version>/bin/<name>) and its link in ~/.local/bin; empty is meko. Package
 // names its tarballs (<package>-<version>-<os>-<arch>.tar.gz, one folder <package>-<version>/);
-// empty is Name. Present's program is me_present, its package present. OldNames are names the
-// program had before (AgentK's agentk): a version unpacked then has only bin/<old name>, and Adopt
+// empty is Name. Present's program is me_present, its package present. OldPackages are names its
+// package had before (Kode's agentk), which older releases' tarballs carry. OldNames are names the
+// program had before (Kode's agentk): a version unpacked then has only bin/<old name>, and Adopt
 // gives it bin/<name> too, so app/current/bin/<name> and the links to it resolve whichever version is
 // current. Private unpacks
 // releases owner-only (folders and programs 0700, files 0600), as files in Meko's data folder must
 // be: an extension's app folder is in it, Meko's own isn't. Legacy, when set, is a folder that
-// held update-pending.json and bad-versions before they moved into the app folder (AgentK's home):
+// held update-pending.json and bad-versions before they moved into the app folder (Kode's home):
 // a record found there is moved in, and its bad versions count too. Checks are commands run on a
-// staged version's binary, after version --json, before it's moved into place (AgentK's selftest).
+// staged version's binary, after version --json, before it's moved into place (Kode's selftest).
 type App struct {
 	Root     string
 	Name     string
 	OldNames []string
 	Package  string
-	Private  bool
-	Legacy   string
-	Checks   [][]string
+	// OldPackages are the package's names before, newest first.
+	OldPackages []string
+	Private     bool
+	Legacy      string
+	Checks      [][]string
 	// Running are files ({"pid", "appDir", "version"}) in which a running process names the version
-	// it runs from (AgentK's run/host.json): Prune keeps that version while the pid is alive, as it
+	// it runs from (Kode's run/host.json): Prune keeps that version while the pid is alive, as it
 	// keeps one whose in-use lock is held. A process started before meko _launch existed, or not
-	// through it (AgentK's host started by its server without services), holds no lock.
+	// through it (Kode's host started by its server without services), holds no lock.
 	Running []string
 }
 
@@ -58,6 +61,9 @@ func (a App) pkg() string {
 	}
 	return a.Package
 }
+
+// Packages are the names the app's tarballs have had, newest first: Package, then OldPackages.
+func (a App) Packages() []string { return append([]string{a.pkg()}, a.OldPackages...) }
 
 // DefaultRoot is where the installer puts releases: $XDG_DATA_HOME/meko/app, or
 // ~/.local/share/meko/app. It's outside the data folder, so meko destroy, which removes the data

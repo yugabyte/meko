@@ -1,4 +1,4 @@
-// Offering to install AgentK as an app (its own window, with a dock or home screen icon): the
+// Offering to install Kode as an app (its own window, with a dock or home screen icon): the
 // banner in Banners.tsx and the command palette's entry. The manifest and the service worker
 // already make it installable; this only catches the browser's offer and says when to show it.
 import { useEffect, useState } from 'react';

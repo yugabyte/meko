@@ -1,10 +1,10 @@
 # Architecture
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 There are three long-lived pieces on the host: the web server, the session host that owns every
-Claude process, and AgentK's home, the state directory in Meko's data folder
-(`~/.meko/extensions/agentk` by default; [where it lives](projects-and-sessions.md#where-agentk-lives)). The server is stateless enough to
+Claude process, and Kode's home, the state directory in Meko's data folder
+(`~/.meko/extensions/kode` by default; [where it lives](projects-and-sessions.md#where-kode-lives)). The server is stateless enough to
 be killed at any time. The session host and the on-disk state are what carry your work.
 
 ```mermaid
@@ -14,17 +14,17 @@ flowchart LR
   end
   subgraph Host["Devserver (headless) or your Mac"]
     MW["Meko's port<br/>:7777, local or remote access"]
-    S["AgentK server<br/>web.sock (unix socket)"]
+    S["Kode server<br/>web.sock (unix socket)"]
     H["hook.sock<br/>unix socket"]
     T["session host<br/>own service (systemd or launchd)"]
     C1["claude in worktree A"]
     C2["claude in worktree B"]
-    ST[("~/.meko/extensions/agentk<br/>state, app versions")]
+    ST[("~/.meko/extensions/kode<br/>state, app versions")]
   end
   M["Meko MCP"]
   MU["Meko: updates<br/>meko _launch"]
   GH["GitHub Releases"]
-  B -- "HTTP(S) + WebSocket, /ext/agentk/" --> MW
+  B -- "HTTP(S) + WebSocket, /ext/kode/" --> MW
   MW -- "prefix stripped, Host and Origin kept" --> S
   S -- "host.sock: requests, attach streams" --> T
   T -- "pty" --> C1
@@ -54,8 +54,8 @@ foreground, 11 background, which the headless xterm doesn't answer) with the col
 started it with (`spawn`'s `colors`: the terminal colors a browser last reported, `Core.termTheme`;
 a host from before them ignores the field and answers none), so Claude gets one
 answer whether or not anyone is watching; the viewers' own answers are dropped (a browser's, and a
-real terminal's with `meko kode attach`). Sessions don't inherit this install's `AK_HOME`,
-`AK_APP_DIR` or `AK_VERSION`, so a checkout run inside one never takes them as its own. A pane counts
+real terminal's with `meko kode attach`). Sessions don't inherit this install's `KODE_HOME`,
+`KODE_APP_DIR` or `KODE_VERSION`, so a checkout run inside one never takes them as its own. A pane counts
 as live only once its program has started. It listens only on
 `host.sock` (beside `hook.sock`, owner-only, bound under a temporary name and renamed into place),
 one JSON request per connection: `hello`, `list`, `spawn` (never over a live pane), `kill`,
@@ -74,22 +74,22 @@ under `/net`, the automounter's `-hosts` map, even in auto mode, and no permissi
 `--add-dir` or setting lifts that. A home there (`/net/<host>/data/you`) would stop a session on
 every file in its worktree, its design file, its pasted images and its own `~/.claude`. When the
 machine is that host, the same folder is mounted locally without the prefix (`/data/you`), so
-everything AgentK hands Claude goes through `claudePath()` (`src/server/paths.ts`), which drops
+everything Kode hands Claude goes through `claudePath()` (`src/server/paths.ts`), which drops
 the prefix when the two are the same folder (the same device and inode of the export root; only
 this machine's own `/net/<host>` is checked, by host name, since a stat into another host's
 mount can hang while that host is down):
-the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, `AK_HOOK_SOCK`
+the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, `KODE_HOOK_SOCK`
 (Claude Code refuses a mod's `$.http.fetch` to a socket under `/net`, "a network location is not
-reached from here", so the mod would never reach AgentK), the allow rules in the hooks settings
+reached from here", so the mod would never reach Kode), the allow rules in the hooks settings
 file, the design file, questions file and image paths in prompts, and the worktree and folder a
 code review's steps are told (one Read through `/net` stops the review at a permission prompt). What
-AgentK stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
+Kode stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
 so the Design guard checks an edit against both, the learn step leaves out a fact that names
 either (a path counts only whole, so a short local spelling such as `/data` doesn't catch
 `src/database.ts`), and a session's transcript is looked up under both (a session started before
 keeps its transcript: a resume from the local spelling finds it). Started by the local spelling,
 a worktree isn't tied back to its repo for folder trust (its `.git` file names the stored
-spelling), so AgentK also trusts that exact folder in `~/.claude.json` before launching.
+spelling), so Kode also trusts that exact folder in `~/.claude.json` before launching.
 The project's main checkout keeps its path, and paths on other hosts stay under `/net`.
 
 **Sizing.** A pane has one size: the active viewer's. A viewer is active when it has just
@@ -131,8 +131,8 @@ in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or ju
 name it lists them). `Ctrl+\` detaches, and Claude keeps running.
 
 **Status path.** Each session starts with `claude --settings` pointing at an agent-k hooks file
-(a Kiro session as the `agentk` agent, whose inline hooks run the same scripts; an OpenCode session
-with AgentK's plugin, loaded through `OPENCODE_CONFIG_CONTENT`, which posts to the same socket; their
+(a Kiro session as the `kode` agent, whose inline hooks run the same scripts; an OpenCode session
+with Kode's plugin, loaded through `OPENCODE_CONFIG_CONTENT`, which posts to the same socket; their
 events are mapped onto Claude Code's by their adapters: see [Agents](harnesses.md)).
 The `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 `Notification`, `Stop` and `SessionEnd` hooks (and the status line relay) post to a unix socket,
@@ -140,7 +140,7 @@ which drives the badges in the rail. Your global Claude settings stay untouched.
 `/resume` inside Claude) switches conversations, `SessionStart` carries the new session id, and
 Resume and recovery continue that conversation. `SessionStart` has a second hook, `context.sh`,
 which asks the socket's `/context` route for context to start with and prints it for Claude Code
-(what AgentK's Meko search found: see [Meko recall at start](recall-and-learn.md#meko-recall-at-start)). Like the
+(what Kode's Meko search found: see [Meko recall at start](recall-and-learn.md#meko-recall-at-start)). Like the
 edit guard, it prints nothing when the server can't be reached, and its curl gives up after 4 seconds.
 
 The hook forwarder gives up quietly when the socket isn't there, so the server makes sure it is.
@@ -155,7 +155,7 @@ until neither is left, since each can start the other. Not the PR poll's sync of
 line, which it leaves running.
 
 **Interrupted turns.** Claude Code fires no `Stop` hook for a turn you interrupt (Ctrl+C or Esc), so
-AgentK's mod reports it (`/mod/turn`) and the server ends the turn as a `Stop` would
+Kode's mod reports it (`/mod/turn`) and the server ends the turn as a `Stop` would
 (`SessionManager.endTurn`): the session is idle again, the activity log says *You interrupted the
 turn*, and what waited for the turn's end goes at once (review comments, a queued Open PR or
 approval, review prompts). It isn't a turn Claude died in, so it's never continued by itself

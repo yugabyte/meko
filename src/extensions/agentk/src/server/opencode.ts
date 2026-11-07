@@ -9,9 +9,9 @@ import { serverMekoTool } from './mekousage.js';
 import type { Paths } from './paths.js';
 
 /**
- * OpenCode outside the adapter: AgentK's plugin (the hooks of its sessions), the config a session
+ * OpenCode outside the adapter: Kode's plugin (the hooks of its sessions), the config a session
  * starts with, a session's folder (its instructions file, and the usage log the plugin writes), the
- * Meko MCP server AgentK gives its sessions, its one-shot output (Ask AgentK), and deleting a session.
+ * Meko MCP server Kode gives its sessions, its one-shot output (Ask Kode), and deleting a session.
  * Nothing here writes to OpenCode's own config.
  */
 
@@ -19,8 +19,8 @@ import type { Paths } from './paths.js';
 export const OPENCODE_SESSION_MARKERS = ['OPENCODE', 'OPENCODE_PID'];
 
 /**
- * What `[opencode] disable_tracking` adds to the environment of the OpenCode AgentK runs (sessions and
- * Ask AgentK), read from OpenCode 2.1.4's code: no OpenTelemetry export (to an OTLP endpoint the user's
+ * What `[opencode] disable_tracking` adds to the environment of the OpenCode Kode runs (sessions and
+ * Ask Kode), read from OpenCode 2.1.4's code: no OpenTelemetry export (to an OTLP endpoint the user's
  * environment names), no update check (it sends the version to opencode.ai at every start), and none of
  * OpenCode Zen's free models, whose providers may train on prompts. Sharing needs nothing: OpenCode 2
  * removed it and reads neither `OPENCODE_DISABLE_SHARE` nor OpenCode 1's `experimental.openTelemetry`.
@@ -31,15 +31,15 @@ export const OPENCODE_NO_TRACKING_ENV: Readonly<Record<string, string>> = {
   OPENCODE_DISABLE_FREE_MODELS: '1',
 };
 
-/** The agent Ask AgentK runs as, defined in the ask's own config. */
-export const OPENCODE_ASK_AGENT = 'agentk-ask';
+/** The agent Ask Kode runs as, defined in the ask's own config. */
+export const OPENCODE_ASK_AGENT = 'kode-ask';
 
-/** AgentK's files for OpenCode, under the run folder. */
+/** Kode's files for OpenCode, under the run folder. */
 export function openCodeDir(paths: Paths): string {
   return join(paths.run, 'opencode');
 }
 
-/** AgentK's plugin: a folder named by its contents (`writeOpenCodePlugin`). */
+/** Kode's plugin: a folder named by its contents (`writeOpenCodePlugin`). */
 export function openCodePluginPath(paths: Paths): string {
   return join(openCodeDir(paths), PLUGIN_DIR);
 }
@@ -53,7 +53,7 @@ export function openCodeMessagesFile(paths: Paths, sessionId: string): string {
   return join(openCodeSessionDir(paths, sessionId), 'messages.jsonl');
 }
 
-/** The config file with AgentK's Meko server (owner-only: it holds the key). */
+/** The config file with Kode's Meko server (owner-only: it holds the key). */
 export function openCodeMekoFile(paths: Paths): string {
   return join(openCodeDir(paths), 'meko.json');
 }
@@ -79,22 +79,22 @@ export function openCodeCommand(command: string, home = homedir(), path = proces
 }
 
 /**
- * AgentK's plugin, loaded only into the sessions AgentK starts (`OPENCODE_CONFIG_CONTENT`), as an
+ * Kode's plugin, loaded only into the sessions Kode starts (`OPENCODE_CONFIG_CONTENT`), as an
  * OpenCode 2 plugin: a folder whose default export is `{ id, setup }`. It forwards OpenCode's hooks
  * and events to the hook socket under the names `normalizeOpenCode` maps (`chat.message` for a
  * prompt, `session.idle` for the end of a turn, which OpenCode 2 reports as `session.execution.*`,
  * with the work the turn left running in the background: its bash commands' shells still running,
- * from `shell.created` and `shell.exited`, and its own subagents mid-turn; `agentk.background` when
+ * from `shell.created` and `shell.exited`, and its own subagents mid-turn; `kode.background` when
  * one of those ends between turns), asks the guard before a file edit and throws its reason, adds
- * AgentK's Meko recall to a new session's system prompt, and logs each finished step's tokens to the session's `messages.jsonl`.
- * It never holds OpenCode up for long, and without AgentK's session variables it does nothing. A
+ * Kode's Meko recall to a new session's system prompt, and logs each finished step's tokens to the session's `messages.jsonl`.
+ * It never holds OpenCode up for long, and without Kode's session variables it does nothing. A
  * subagent's session sends its events without its id, so they never become the session's
  * conversation, and not its turn's end, so it never ends the turn; its tool calls and permission
  * asks still count (one waiting on the user needs the user).
  */
-const PLUGIN = `// Written by AgentK and never rewritten: OpenCode reloads a plugin whose files change, so a new
-// version goes in a folder of its own. AgentK loads it into the OpenCode sessions it starts;
-// without AgentK's session variables it does nothing.
+const PLUGIN = `// Written by Kode and never rewritten: OpenCode reloads a plugin whose files change, so a new
+// version goes in a folder of its own. Kode loads it into the OpenCode sessions it starts;
+// without Kode's session variables it does nothing.
 import { appendFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { join } from 'node:path';
@@ -107,11 +107,11 @@ const MEKO_TEXT_MAX = 1024 * 1024;
 const TURN_ENDS = new Set(['session.execution.succeeded', 'session.execution.failed', 'session.execution.interrupted']);
 
 export default {
-  id: 'agentk',
+  id: 'kode',
   setup: async (ctx) => {
-    const sock = process.env.AK_HOOK_SOCK;
-    const token = process.env.AK_HOOK_TOKEN;
-    const dir = process.env.AK_OPENCODE_DIR;
+    const sock = process.env.KODE_HOOK_SOCK ?? process.env.AK_HOOK_SOCK;
+    const token = process.env.KODE_HOOK_TOKEN ?? process.env.AK_HOOK_TOKEN;
+    const dir = process.env.KODE_OPENCODE_DIR ?? process.env.AK_OPENCODE_DIR;
     if (!sock || !token) return;
     const cwd = (ctx && ctx.location && ctx.location.directory) || process.cwd();
     const headers = { 'X-AK-Token': token, 'Content-Type': 'application/json' };
@@ -143,7 +143,7 @@ export default {
       queue = queue.then(() => post('hook', body, 3000));
     };
     // The session the user last prompted (a resumed one's from the start); subagents' sessions apart.
-    let main = process.env.AK_OPENCODE_SESSION || null;
+    let main = process.env.KODE_OPENCODE_SESSION || process.env.AK_OPENCODE_SESSION || null;
     // Subagents' sessions, each with the session that started it.
     const children = new Map();
     const checked = new Set();
@@ -160,9 +160,9 @@ export default {
       }
       return children.has(id);
     };
-    const source = process.env.AK_OPENCODE_SOURCE || 'startup';
-    const recall = source === 'startup' ? post('context', { hook_event_name: 'agentk.start', source }, 5000) : Promise.resolve('');
-    send({ hook_event_name: 'agentk.start', source, ...(main ? { session_id: main } : {}) });
+    const source = process.env.KODE_OPENCODE_SOURCE || process.env.AK_OPENCODE_SOURCE || 'startup';
+    const recall = source === 'startup' ? post('context', { hook_event_name: 'kode.start', source }, 5000) : Promise.resolve('');
+    send({ hook_event_name: 'kode.start', source, ...(main ? { session_id: main } : {}) });
     const ids = (id) => (id && id === main ? { session_id: id } : {});
     const isMain = (id) => !!id && id === main;
 
@@ -179,7 +179,7 @@ export default {
       ...[...subagents].filter(isMainChild).map(() => ({ type: 'subagent', description: 'subagent' })),
     ];
     const backgroundEnded = (gone) => {
-      if (gone && between && main) send({ hook_event_name: 'agentk.background', session_id: main, background_tasks: background() });
+      if (gone && between && main) send({ hook_event_name: 'kode.background', session_id: main, background_tasks: background() });
     };
 
     await ctx.session.hook('prompt', async (e) => {
@@ -212,7 +212,7 @@ export default {
       send({ hook_event_name: 'tool.execute.after', tool: e.tool, call_id: e.id, ...ids(e.sessionID) });
       if (dir && typeof e.tool === 'string' && MEKO_TOOL.test(e.tool)) logMeko(e);
     });
-    // A Meko call with its reply, for AgentK's Meko counts (meko_calls).
+    // A Meko call with its reply, for Kode's Meko counts (meko_calls).
     const logMeko = (e) => {
       const key = e.id + ':' + e.tool;
       const starts = mekoStarts.get(key) || [];
@@ -249,7 +249,7 @@ export default {
     const on = (ev) => {
       const p = ev.data || {};
       if (TURN_ENDS.has(ev.type)) {
-        // An interrupted turn (Esc) says so: AgentK handles it as Claude Code's mod reports one.
+        // An interrupted turn (Esc) says so: Kode handles it as Claude Code's mod reports one.
         if (isMain(p.sessionID) && once(ev)) {
           between = true;
           send({
@@ -336,19 +336,19 @@ export default {
 `;
 
 /** The plugin's manifest, which OpenCode reads too. */
-const PLUGIN_MANIFEST = JSON.stringify({ name: 'agentk-opencode-plugin', private: true, type: 'module', main: 'server.js' }, null, 2) + '\n';
+const PLUGIN_MANIFEST = JSON.stringify({ name: 'kode-opencode-plugin', private: true, type: 'module', main: 'server.js' }, null, 2) + '\n';
 
 /**
  * The plugin's folder name changes with its files' text (the plugin and its manifest), so a folder
  * once written never changes (see `writeOpenCodePlugin`).
  */
-const PLUGIN_DIR = `agentk-plugin-${createHash('sha256').update(PLUGIN_MANIFEST).update('\0').update(PLUGIN).digest('hex').slice(0, 8)}`;
+const PLUGIN_DIR = `kode-plugin-${createHash('sha256').update(PLUGIN_MANIFEST).update('\0').update(PLUGIN).digest('hex').slice(0, 8)}`;
 
 /**
- * Writes AgentK's plugin folder when it isn't there yet, and never over one: OpenCode watches a
+ * Writes Kode's plugin folder when it isn't there yet, and never over one: OpenCode watches a
  * loaded plugin's files and runs its setup again when they change, even to the same text, which
  * would restart the plugin in every running session. Older folders stay for the sessions still
- * running on them; the plugin file of AgentK before OpenCode 2 (`agentk-plugin.js`) goes.
+ * running on them; the plugin file of releases before OpenCode 2 (`agentk-plugin.js`) goes.
  */
 export function writeOpenCodePlugin(paths: Paths): void {
   const dir = openCodePluginPath(paths);
@@ -362,9 +362,9 @@ export function writeOpenCodePlugin(paths: Paths): void {
 
 /**
  * The config a session starts with, as `OPENCODE_CONFIG_CONTENT`, merged by OpenCode over the user's
- * own (its `plugin` and `instructions` lists are added to theirs): AgentK's plugin, the session's
+ * own (its `plugin` and `instructions` lists are added to theirs): Kode's plugin, the session's
  * instructions file, and the folders outside the worktree it works in (its design folder),
- * writable without asking. `tools`: AgentK's session tools (`openCodeTools` in tools.ts: their MCP
+ * writable without asking. `tools`: Kode's session tools (`openCodeTools` in tools.ts: their MCP
  * server, their skill's folder, and their permission rules beside the folders').
  */
 export function openCodeSessionConfig(o: {
@@ -400,31 +400,31 @@ export function openCodeSessionConfig(o: {
 
 /**
  * The CLI (TUI) config a session starts with, as `OPENCODE_CLI_CONFIG_CONTENT`, merged by OpenCode
- * over the user's `cli.json`: session tabs off, so the pane holds the one conversation AgentK
+ * over the user's `cli.json`: session tabs off, so the pane holds the one conversation Kode
  * follows (the plugin's main session is the one last prompted, and the tabs OpenCode keeps for the
  * worktree's folder would bring back an earlier session's). `mode` from OpenCode 2.0.20, `enabled`
  * before it; 2.0.0 to 2.0.5 don't read the variable and keep their tabs.
  */
 export const OPENCODE_SESSION_CLI_CONFIG = JSON.stringify({ tabs: { mode: 'off', enabled: false } });
 
-/** What an Ask AgentK run keeps of the user's own OpenCode config: which model it answers on, and the providers that serve it. */
+/** What an Ask Kode run keeps of the user's own OpenCode config: which model it answers on, and the providers that serve it. */
 const ASK_KEPT_KEYS = ['model', 'small_model', 'provider', 'enabled_providers', 'disabled_providers'];
 
 /**
- * The global config of one Ask AgentK run, which takes the place of the user's (`openCodeAskEnv`):
- * the `agentk-ask` agent, with AgentK's instructions and every tool denied, so it has nothing to act
+ * The global config of one Ask Kode run, which takes the place of the user's (`openCodeAskEnv`):
+ * the `kode-ask` agent, with Kode's instructions and every tool denied, so it has nothing to act
  * with, and of the user's config only the model and providers (`own`), so their plugins (hooks) and
  * MCP servers are left out.
  */
 export function openCodeAskConfig(prompt: string, own: Json = readOpenCodeConfig()): string {
   return JSON.stringify({
     ...Object.fromEntries(ASK_KEPT_KEYS.filter((k) => k in own).map((k) => [k, own[k]])),
-    agent: { [OPENCODE_ASK_AGENT]: { description: "AgentK's Ask AgentK: answers in JSON, with no tools.", mode: 'primary', prompt, permission: 'deny' } },
+    agent: { [OPENCODE_ASK_AGENT]: { description: "Kode's Ask Kode: answers in JSON, with no tools.", mode: 'primary', prompt, permission: 'deny' } },
   });
 }
 
 /**
- * Writes an Ask AgentK run's config into `cwd` and returns the variables the run (and deleting its
+ * Writes an Ask Kode run's config into `cwd` and returns the variables the run (and deleting its
  * session) takes: OpenCode's global config read from there instead of the user's, no project config,
  * and no Claude Code files (CLAUDE.md, skills). Its sign-ins and sessions, in its data folder, stay.
  * `noTracking`: `[opencode] disable_tracking` (`OPENCODE_NO_TRACKING_ENV`).
@@ -436,7 +436,7 @@ export function openCodeAskEnv(cwd: string, prompt: string, noTracking = false):
   return vars;
 }
 
-/** The variables of an Ask AgentK run in `cwd` (`openCodeAskEnv`), without writing its config. */
+/** The variables of an Ask Kode run in `cwd` (`openCodeAskEnv`), without writing its config. */
 export function openCodeAskVars(cwd: string, noTracking = false): Record<string, string> & { XDG_CONFIG_HOME: string } {
   return {
     XDG_CONFIG_HOME: join(cwd, 'opencode-config'), OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1',
@@ -505,14 +505,14 @@ export function readOpenCodeConfig(dir = openCodeConfigDir()): Json {
   return out;
 }
 
-/** Whether the user's own OpenCode config has an MCP server named `meko`, which AgentK then leaves alone. */
+/** Whether the user's own OpenCode config has an MCP server named `meko`, which Kode then leaves alone. */
 export function openCodeHasOwnMeko(dir = openCodeConfigDir()): boolean {
   const cfg = readOpenCodeConfig(dir);
   return isObject(cfg.mcp) && 'meko' in cfg.mcp;
 }
 
 /**
- * Writes the config file with AgentK's Meko as a remote MCP server named `meko` (owner-only, since
+ * Writes the config file with Kode's Meko as a remote MCP server named `meko` (owner-only, since
  * it holds the key), for `OPENCODE_CONFIG`: in a file, not the session's environment, so the
  * commands OpenCode runs never see the key. Rewritten only when it changes.
  */
@@ -698,7 +698,7 @@ export function readOpenCodeRun(stdout: string): { text: string; sessionId: stri
 /** The session deletes still running, for `openCodeDeletesSettled`. */
 const deleting = new Set<Promise<void>>();
 
-/** Deletes one of OpenCode's sessions (an Ask AgentK run's, with the run's variables), in the background; never throws. */
+/** Deletes one of OpenCode's sessions (an Ask Kode run's, with the run's variables), in the background; never throws. */
 export function deleteOpenCodeSession(command: string, id: string, cwd: string, env: Record<string, string> = {}): void {
   if (!ID.test(id)) return;
   const done = new Promise<void>((resolve) => {

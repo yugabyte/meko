@@ -50,7 +50,7 @@ describe('Set up Meko, while there is none', () => {
 });
 
 describe("the projects pane's Meko link", () => {
-  it("opens Meko's main page, at the root of AgentK's origin, in this tab", () => {
+  it("opens Meko's main page, at the root of Kode's origin, in this tab", () => {
     const html = renderToStaticMarkup(createElement(MekoHomeLink));
     expect(html).toMatch(/^<a [^>]*href="\/"/);
     expect(html).not.toContain('target=');

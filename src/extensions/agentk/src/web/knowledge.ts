@@ -60,7 +60,7 @@ export function mekoSummary(results: MekoResult[]): string {
 export function knowledgeNotice(ev: Extract<ServerEvent, { type: 'knowledge' }>): string {
   if (ev.result === 'indexed') return `${ev.filename} is in the knowledge base.`;
   if (ev.result === 'failed') return `Meko couldn’t index ${ev.filename}. Check that it opens and holds text, then drop it again.`;
-  return `AgentK couldn’t tell whether Meko indexed ${ev.filename}. Search the knowledge base for it later.`;
+  return `Kode couldn’t tell whether Meko indexed ${ev.filename}. Search the knowledge base for it later.`;
 }
 
 /** Opens the browser's file picker (from a click or tap) and resolves with what was picked; nothing on cancel. */

@@ -51,7 +51,7 @@ func (a App) ReadPending() (*Pending, error) {
 }
 
 // importLegacyPending moves a legacy update-pending.json into the app folder, unless one is there:
-// AgentK's {from, to, attempts, at} with at in milliseconds. A damaged one is dropped.
+// Kode's {from, to, attempts, at} with at in milliseconds. A damaged one is dropped.
 func (a App) importLegacyPending() error {
 	if a.Legacy == "" {
 		return nil

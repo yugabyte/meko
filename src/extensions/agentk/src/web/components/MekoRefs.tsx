@@ -17,7 +17,7 @@ export function MekoBadge() {
 }
 
 /**
- * The Meko items a design decision rests on, as AgentK cited them: the words it relied on, and
+ * The Meko items a design decision rests on, as Kode cited them: the words it relied on, and
  * the item's kind, datapack and id, with Copy id to find it in Meko later. Nothing is read from
  * Meko, so they show with Meko off too. All of it is plain text: shared datapacks are written by
  * other people.

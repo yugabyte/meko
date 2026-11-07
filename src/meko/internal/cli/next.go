@@ -33,19 +33,19 @@ type nextState struct {
 	claude     bool         // Claude Code is installed: memory extraction runs through it
 	extracting bool         // memory extraction is on
 	linked     bool         // Meko Cloud is linked
-	agentK     bool         // AgentK is installed for this Meko
-	agentKRead bool         // the extensions' registry could be read, so agentK says which
-	// agentKOther is this Meko's data folder when it isn't the one meko kode uses by default
+	kode       bool         // Kode is installed for this Meko
+	kodeRead   bool         // the extensions' registry could be read, so kode says which
+	// kodeOther is this Meko's data folder when it isn't the one meko kode uses by default
 	// (MEKO_HOME, or ~/.meko), so meko kode is given it: "" for the default.
-	agentKOther string
-	added       string // the extension install's picker just added, offered first
+	kodeOther string
+	added     string // the extension install's picker just added, offered first
 }
 
 // nextSteps is the commands to run next, each with what it does, for the command that ends with it.
 // The first is the one to run now (report.next shows it as the call to action): opening the
 // extension install's picker just added (after meko ui start while the web UI is off, since its page
 // needs it), or the web UI. Then it offers Meko's uses in order: in an
-// agent, learning from conversations, sharing through Meko Cloud, and AgentK; meko status comes
+// agent, learning from conversations, sharing through Meko Cloud, and Kode; meko status comes
 // last, and after install names meko uninstall too.
 func nextSteps(s nextState, kind nextFor) [][2]string {
 	var out [][2]string
@@ -53,9 +53,9 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 	switch {
 	case s.added != "" && s.webOff: // its page needs the web UI
 		add("meko ui start", "turn the web UI on, when you want it")
-		add(openExtension(s.added, s.agentKOther))
+		add(openExtension(s.added, s.kodeOther))
 	case s.added != "":
-		add(openExtension(s.added, s.agentKOther))
+		add(openExtension(s.added, s.kodeOther))
 	case kind == nextConnect:
 		if !s.running {
 			add("meko start", "start Meko")
@@ -78,11 +78,11 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 		add("meko cloud-link", "share with your team through Meko Cloud")
 	}
 	switch {
-	case !s.agentKRead, s.added == "agentk": // just added: opening it came first
-	case s.agentK:
-		add(openExtension("agentk", s.agentKOther))
+	case !s.kodeRead, s.added == "kode": // just added: opening it came first
+	case s.kode:
+		add(openExtension("kode", s.kodeOther))
 	default:
-		add("meko extension install agentk", "add AgentK, which runs coding agents from task to merged PR")
+		add("meko extension install kode", "add Kode, which runs coding agents from task to merged PR")
 	}
 	switch kind {
 	case nextInstall:
@@ -93,15 +93,15 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 	return out
 }
 
-// openExtension is the command that opens extension name's own page, and what it does: AgentK's
+// openExtension is the command that opens extension name's own page, and what it does: Kode's
 // meko kode ui, given this Meko's data folder when other names one; the others' from Meko's web UI,
 // whose sidebar lists them.
 func openExtension(name, other string) (string, string) {
 	title := extensionTitle(name)
 	switch {
-	case name == "agentk" && other != "":
+	case name == "kode" && other != "":
 		return "meko kode --data-dir " + shellQuote([]string{other}) + " ui", "open " + title
-	case name == "agentk":
+	case name == "kode":
 		return "meko kode ui", "open " + title
 	}
 	return "meko ui", "open the web UI, then " + title + " in its sidebar"
@@ -129,10 +129,10 @@ func readNextState(l paths.Layout, c *client) nextState {
 	s := nextState{running: c != nil, connected: true, extracting: true, linked: true}
 	s.agent, _ = agents.Lookup("claude")
 	if reg, err := extensions.Load(l.Root); err == nil {
-		_, s.agentK = reg.Entries["agentk"]
-		s.agentKRead = true
-		if s.agentK && !isDefaultDataDir(l.Root) {
-			s.agentKOther = l.Root
+		_, s.kode = reg.Entries["kode"]
+		s.kodeRead = true
+		if s.kode && !isDefaultDataDir(l.Root) {
+			s.kodeOther = l.Root
 		}
 	}
 	if m, _, _, err := agentManager(l); err == nil {

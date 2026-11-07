@@ -34,8 +34,8 @@ describe('canRunReview', () => {
   const review = (state: CodeReviewSummary['state']) => ({ state, detail: null }) as CodeReviewSummary;
   it.each([
     ['a task in Code', s({}), { offered: true, ready: true, wait: null }],
-    ['mid-turn', s({ status: 'working' }), { offered: true, ready: false, wait: "After AgentK's turn" }],
-    ['waiting on the user', s({ status: 'needs_input' }), { offered: true, ready: false, wait: 'Answer AgentK in the terminal first' }],
+    ['mid-turn', s({ status: 'working' }), { offered: true, ready: false, wait: "After Kode's turn" }],
+    ['waiting on the user', s({ status: 'needs_input' }), { offered: true, ready: false, wait: 'Answer Kode in the terminal first' }],
     ['exited', s({ status: 'exited' }), { offered: true, ready: false, wait: 'Resume the session first' }],
     ['past a finished review', s({ codeReview: review('done') }), { offered: true, ready: true, wait: null }],
     ['while one runs', s({ codeReview: review('sweeping') }), { offered: false, ready: false, wait: null }],

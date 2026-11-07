@@ -159,13 +159,13 @@ export function ReviewPrPicker({
       </div>
       {pickedIsTyped && picked?.otherDatapackId && attach !== 'done' && (
         <div className="pr-pick-note">
-          <span>This PR's project datapack isn't in this project, so AgentK can't read its design.</span>
+          <span>This PR's project datapack isn't in this project, so Kode can't read its design.</span>
           <button type="button" className="btn small" disabled={attach === 'busy'} onClick={() => void attachDatapack(picked.otherDatapackId!)}>
             {attach === 'busy' ? <Busy label="Attaching" /> : 'Attach it'}
           </button>
         </div>
       )}
-      {attach === 'done' && <span className="ok-text">Attached. AgentK searches it in this review.</span>}
+      {attach === 'done' && <span className="ok-text">Attached. Kode searches it in this review.</span>}
       <span className="hint">
         Open PRs in any repo whose description names this project's datapack. For any other PR, type its number or link.{' '}
         <button type="button" className="link-btn" onClick={onReload}>

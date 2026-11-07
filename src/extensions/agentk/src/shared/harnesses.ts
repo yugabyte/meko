@@ -1,6 +1,6 @@
 /**
  * The coding agents (harnesses) a session can run on, and what each can do. The server gates
- * AgentK's mod and Artifact designs on these capabilities, and the server and the web UI both read
+ * Kode's mod and Artifact designs on these capabilities, and the server and the web UI both read
  * a session's usage as tokens or credits from them. The adapters are in `src/server/harness/`.
  */
 
@@ -17,7 +17,7 @@ export interface HarnessCaps {
   short: string;
   /** The command that signs it in, for what Settings says when it doesn't answer: "kiro-cli login". */
   login: string;
-  /** AgentK's mod (src/mod/agentk) runs in it: prompts mid-turn, AskUserQuestion, the learn fork, interrupted turns. */
+  /** Kode's mod (src/mod/agentk) runs in it: prompts mid-turn, AskUserQuestion, the learn fork, interrupted turns. */
   mod: boolean;
   /** It has the Artifact tool, so a design can be a published page. */
   artifacts: boolean;
@@ -42,7 +42,7 @@ export interface HarnessCaps {
   /**
    * How a code review runs its steps (docs/design/code-review.md): `subagents`, each pass and
    * scorer as a subagent defined for the review session, on its tier's model; `turns`, each as a
-   * prompt of its own after clearing the conversation, for a CLI with no subagents AgentK can define.
+   * prompt of its own after clearing the conversation, for a CLI with no subagents Kode can define.
    */
   reviewSteps: 'subagents' | 'turns';
   /**
@@ -52,7 +52,7 @@ export interface HarnessCaps {
    */
   models: readonly ModelChoice[] | 'cli';
   /**
-   * AgentK connects it to Meko by itself, once (`autoConnectDue`, `HarnessStatus.autoConnect`): its
+   * Kode connects it to Meko by itself, once (`autoConnectDue`, `HarnessStatus.autoConnect`): its
    * `meko` server is a file Meko edits. Not Claude Code, whose Meko setup changes only when the user asks.
    */
   autoConnect: boolean;
@@ -76,7 +76,7 @@ const CLAUDE_MODELS: readonly ModelChoice[] = [
 export const MODEL_MAX = 200;
 
 /**
- * Why `model` can't be passed to an agent, or null when it can: AgentK checks only its form (a
+ * Why `model` can't be passed to an agent, or null when it can: Kode checks only its form (a
  * name the CLI doesn't know fails in the CLI). Letters, digits and `._:/@[]-`, not starting with
  * `-` (it would read as an option), at most MODEL_MAX characters: an alias (`opus`), a full id
  * (`claude-opus-5-5`, `opus[1m]`) or OpenCode's `provider/model`.
@@ -107,9 +107,9 @@ export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
     userModels: false, minVersion: '2.32.0', loads: 'its agent and MCP servers', reviewSteps: 'turns', models: 'cli', autoConnect: true },
 };
 
-/** Why nothing can start when no harness is available: a new session, Ask AgentK, the banner. */
+/** Why nothing can start when no harness is available: a new session, Ask Kode, the banner. */
 export const NO_AGENT =
-  'No coding agent is available: install Claude Code, OpenCode or Kiro CLI where AgentK runs, or turn one on in Settings → Harness.';
+  'No coding agent is available: install Claude Code, OpenCode or Kiro CLI where Kode runs, or turn one on in Settings → Harness.';
 
 /** Why an agent that's otherwise ready isn't offered: Meko doesn't report it connected (`HarnessStatus.meko`). */
 export function notConnectedText(id: HarnessId): string {
@@ -124,7 +124,7 @@ export function noAgentText(notConnected: HarnessId[]): string {
 /**
  * Meko's report keeps an agent from new sessions: its `meko` MCP server is `none`, `stale` or
  * `elsewhere`. Not `missing`: Meko looks for agents only on its own PATH and a few folders, never at
- * AgentK's `[<id>] command`, so an agent AgentK runs can be missing from its list with nothing to fix.
+ * Kode's `[<id>] command`, so an agent Kode runs can be missing from its list with nothing to fix.
  */
 export function mekoGates(meko: { state: string } | null): boolean {
   return !!meko && meko.state !== 'connected' && meko.state !== 'missing';
@@ -136,7 +136,7 @@ export function onlyMekoBlocks(h: { enabled: boolean; version: string | null; mi
 }
 
 /**
- * An agent AgentK connects to Meko by itself, unless it already tried: one it may
+ * An agent Kode connects to Meko by itself, unless it already tried: one it may
  * (`HarnessCaps.autoConnect`), ready
  * but for Meko (`onlyMekoBlocks`), and with no `meko` server or a stale one of Meko's own. Never one
  * pointing elsewhere, which a connect would replace.

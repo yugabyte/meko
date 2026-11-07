@@ -5,7 +5,7 @@ import { withLocalBin } from './paths.js';
 
 /**
  * A Meko running on this computer: its MCP URL, the client token its clients send, and its web
- * listener's URL, where browsers find AgentK at /ext/agentk/ (null from a Meko too old to serve it,
+ * listener's URL, where browsers find Kode at /ext/kode/ (null from a Meko too old to serve it,
  * or while its web UI is off: `webOff`, after `meko ui stop`).
  */
 export interface LocalMeko {
@@ -16,10 +16,10 @@ export interface LocalMeko {
 }
 
 /**
- * What AgentK needs of the Meko Cloud link Meko keeps (`cloud` in `meko token --json`, Meko's
- * docs/cloud.md). Meko keeps the key and passes calls on to Meko Cloud itself, so AgentK doesn't
+ * What Kode needs of the Meko Cloud link Meko keeps (`cloud` in `meko token --json`, Meko's
+ * docs/cloud.md). Meko keeps the key and passes calls on to Meko Cloud itself, so Kode doesn't
  * know or ask whether it's linked. `account` names the account behind it without its key ('' while
- * unlinked): a new one is another account, whose invites aren't AgentK's. `webUrl` is the web app
+ * unlinked): a new one is another account, whose invites aren't Kode's. `webUrl` is the web app
  * Meko names for share links ('' when none).
  */
 export interface MekoCloudLink {
@@ -58,9 +58,9 @@ const TIMEOUT_MS = 5000;
 /**
  * The Meko on this computer, as `meko token --json` reports it (`meko` on PATH or in ~/.local/bin,
  * where Meko's installer links it), asked about the Meko in `mekoHome` when given: the data folder
- * AgentK's home is in (`mekoDirOf` in movehome.ts), else `[meko] home`. With neither (a dev or
+ * Kode's home is in (`mekoDirOf` in movehome.ts), else `[meko] home`. With neither (a dev or
  * test home), `meko` finds its own folder. Meko keeps its
- * token in the Keychain on macOS and knows whether its server runs, so AgentK asks it rather than
+ * token in the Keychain on macOS and knows whether its server runs, so Kode asks it rather than
  * reading its files. `none`: no `meko` at all. `failed`: `meko` is there but failed, took too long,
  * or answered with something that isn't what Meko prints.
  */
@@ -94,7 +94,7 @@ export function probeLocalMeko(mekoHome: string | null, env: NodeJS.ProcessEnv =
 
 /**
  * Whether the server's every-minute look for the Meko on this computer runs: while there's no Meko
- * at all (Meko normally starts AgentK; this covers a boot where it didn't), and, with a Meko Cloud
+ * at all (Meko normally starts Kode; this covers a boot where it didn't), and, with a Meko Cloud
  * link, while there's no `meko` here, so the banner asking to install it goes once it's installed.
  * Once found, it isn't looked at again until the next read (a restart, Settings, Meko's notice of a
  * change to the link).
@@ -141,9 +141,9 @@ export class LocalMekoReader {
   constructor(private probe: () => Promise<LocalMekoProbe>) {}
 
   /**
-   * Reads it again; true when what AgentK would use changed (Meko started or stopped, a new port or
+   * Reads it again; true when what Kode would use changed (Meko started or stopped, a new port or
    * token, another Meko Cloud link). A read that couldn't ask `meko`, or whose link Meko couldn't
-   * read, keeps the link last read, so a slow `meko` or a locked Keychain doesn't move AgentK to
+   * read, keeps the link last read, so a slow `meko` or a locked Keychain doesn't move Kode to
    * another Meko.
    */
   refresh(): Promise<boolean> {

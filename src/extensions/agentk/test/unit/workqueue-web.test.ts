@@ -47,7 +47,7 @@ describe('the work queue page', () => {
   });
 
   it.each<[Partial<WorkSync>, string]>([
-    [{}, 'Not synced since AgentK started'],
+    [{}, 'Not synced since Kode started'],
     [{ at: 0, github: { ok: true, added: 2, error: null }, slack: null }, 'Synced just now · GitHub: 2 new · Slack: only when you press Sync'],
     [{ at: 0, github: { ok: false, added: 0, error: 'gh is signed out' }, slack: { ok: true, added: 0, error: null }, slackAuto: true }, 'Synced just now · GitHub: gh is signed out · Slack: nothing new'],
     [{ sources: { github: false, slack: false } }, 'Sync is off (Settings › Work queue)'],

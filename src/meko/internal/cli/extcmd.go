@@ -14,7 +14,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 )
 
-// extensionOfVerb is the extension whose commands meko <verb> runs (Catalog.Verb): kode, AgentK's;
+// extensionOfVerb is the extension whose commands meko <verb> runs (Catalog.Verb): kode, Kode's;
 // present, Present's.
 func extensionOfVerb(verb string) (string, bool) {
 	for name, cat := range extensions.Known {

@@ -1,5 +1,5 @@
 /**
- * The shapes a review's steps report in, and the checks AgentK runs on what arrives: a pass's report
+ * The shapes a review's steps report in, and the checks Kode runs on what arrives: a pass's report
  * (`review_report`), a scorer's verdict (`review_score`) and the task's outcome for each finding
  * (`review_outcome`). The schemas are the agent-k reviewer's (`review_schema.json`,
  * `dependents_schema.json`, `claims_schema.json`, `score_schema.json`), except that a finding's

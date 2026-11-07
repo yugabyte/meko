@@ -19,16 +19,16 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/tlscert"
 )
 
-// An AgentK from before Meko served it hands over at Meko's start: its remote access goes into
+// A Kode from before Meko served it hands over at Meko's start: its remote access goes into
 // web.toml (never its port: Meko's is [server] port) and its self-signed certificate comes along.
-// Meko then takes its port again on every address and serves AgentK at /ext/agentk/ over HTTPS
+// Meko then takes its port again on every address and serves Kode at /ext/kode/ over HTTPS
 // with no login (its owner is ignored), while the CLI keeps plain HTTP on 127.0.0.1. A second start
 // changes nothing.
 func TestHandoff(t *testing.T) {
 	dir, port := setup(t)
 	webPort := os.Getenv("MEKO_PORT")
 
-	// AgentK's side: its socket, its own certificate, and its old login.
+	// Kode's side: its socket, its own certificate, and its old login.
 	agentk := shortDir(t)
 	sock := filepath.Join(agentk, "web.sock")
 	ln, err := net.Listen("unix", sock)
@@ -46,17 +46,18 @@ func TestHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	const oldHash = "scrypt$16384$8$1$c2FsdA$aGFzaA" //nolint:gosec // G101: a made-up hash, which Meko ignores
-	handoff, _ := json.Marshal(extensions.Handoff{Socket: sock, Legacy: &extensions.Legacy{Bind: "0.0.0.0",
-		Port: 7777, TLS: &extensions.LegacyTLS{Cert: filepath.Join(agentk, "certs", tlscert.CertName),
-			Key: filepath.Join(agentk, "certs", tlscert.KeyName), SelfSigned: true},
-		Owner: &extensions.LegacyOwner{Username: "ana", PWScrypt: oldHash}}})
+	handoff, _ := json.Marshal(extensions.Handoff{Socket: sock, Path: "/ext/kode/",
+		Legacy: &extensions.Legacy{Bind: "0.0.0.0",
+			Port: 7777, TLS: &extensions.LegacyTLS{Cert: filepath.Join(agentk, "certs", tlscert.CertName),
+				Key: filepath.Join(agentk, "certs", tlscert.KeyName), SelfSigned: true},
+			Owner: &extensions.LegacyOwner{Username: "ana", PWScrypt: oldHash}}})
 	cmd := filepath.Join(agentk, "agentk")
 	script := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = _handoff ] && { printf '%%s\\n' '%s'; exit 0; }\nexit 0\n", handoff)
 	if err = os.WriteFile(cmd, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script
 		t.Fatal(err)
 	}
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: cmd, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: cmd, InstalledByMeko: true}
 	if err = reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func TestHandoff(t *testing.T) {
 		t.Fatalf("config after the handoff: %+v %v", c.Web, err)
 	}
 	if raw, _ := os.ReadFile(config.WebFile(paths.New(dir).Config)); strings.Contains(string(raw), "port") {
-		t.Errorf("web.toml got AgentK's port:\n%s", raw)
+		t.Errorf("web.toml got Kode's port:\n%s", raw)
 	}
 
 	//nolint:gosec // G402: the test's own self-signed certificate
@@ -80,16 +81,26 @@ func TestHandoff(t *testing.T) {
 	client := &http.Client{Timeout: 5 * time.Second, Transport: insecure,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	base := "https://127.0.0.1:" + webPort
-	resp, err := client.Get(base + "/ext/agentk/hello") //nolint:gosec // G704: the test's own server
+	resp, err := client.Get(base + "/ext/kode/hello") //nolint:gosec // G704: the test's own server
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if resp.StatusCode != 200 || string(b) != "agentk /hello" {
-		t.Fatalf("AgentK through Meko: %d %q", resp.StatusCode, b)
+		t.Fatalf("Kode through Meko: %d %q", resp.StatusCode, b)
 	}
-	// There's no login to sign in to, AgentK's or any other.
+	// Its path from when Meko called it agentk sends a browser to the one its handoff named.
+	resp, err = client.Get(base + "/ext/agentk/p/1?x=1") //nolint:gosec // G704: as above
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect || resp.Header.Get("Location") != "/ext/kode/p/1?x=1" ||
+		resp.Header.Get("Cache-Control") != "no-store" {
+		t.Errorf("the old path: %d %q %q", resp.StatusCode, resp.Header.Get("Location"), resp.Header.Get("Cache-Control"))
+	}
+	// There's no login to sign in to, Kode's or any other.
 	resp, err = client.Post(base+"/api/v1/auth/login", "application/json", //nolint:gosec // G704: as above
 		strings.NewReader(`{"username":"ana","password":"a long password"}`))
 	if err != nil {
@@ -104,7 +115,7 @@ func TestHandoff(t *testing.T) {
 	if raw, _ := os.ReadFile(paths.New(dir).Config); strings.Contains(string(raw), "[web]") {
 		t.Errorf("config.toml got a [web] table:\n%s", raw)
 	}
-	// The handoff happens once: AgentK keeps reporting its old settings, and a web.toml the owner
+	// The handoff happens once: Kode keeps reporting its old settings, and a web.toml the owner
 	// removed (to go back to the defaults) doesn't come back.
 	if err = os.Remove(config.WebFile(paths.New(dir).Config)); err != nil {
 		t.Fatal(err)
@@ -126,7 +137,7 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("%s didn't come up in time", what)
 }
 
-// Present is served like AgentK: registered, it names its socket at Meko's start, and the web
+// Present is served like Kode: registered, it names its socket at Meko's start, and the web
 // listener serves it at /ext/present/ and lists it for the sidebar.
 func TestPresentBesideMeko(t *testing.T) {
 	dir, port := setup(t)

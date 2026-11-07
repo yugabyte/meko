@@ -1,11 +1,11 @@
 /**
- * AgentK's session tools as an agent sees them: the `agentk_sessions` MCP server's tools, with
+ * Kode's session tools as an agent sees them: the `kode_sessions` MCP server's tools, with
  * their descriptions and input schemas. Kept on their own, with no imports, so `me_kode mcp`
  * (mcp.ts) loads nothing else; the server answers them in actions.ts (`SessionTools.call`).
  */
 
-/** The MCP server's name in every harness's config: Claude Code's tools are `mcp__agentk_sessions__<tool>`, Kiro's `@agentk_sessions/<tool>`. */
-export const TOOLS_SERVER = 'agentk_sessions';
+/** The MCP server's name in every harness's config: Claude Code's tools are `mcp__kode_sessions__<tool>`, Kiro's `@kode_sessions/<tool>`. */
+export const TOOLS_SERVER = 'kode_sessions';
 
 /** The tools' input, and the server's answers, change only in ways this version number tells apart. */
 export const TOOLS_VERSION = 1;
@@ -27,16 +27,16 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'list',
     readOnly: true,
     description:
-      "Lists AgentK's open projects (id, name, repo folder and GitHub owner/name) and their running sessions (id, name, stage, " +
+      "Lists Kode's open projects (id, name, repo folder and GitHub owner/name) and their running sessions (id, name, stage, " +
       'status, branch, PR), with this session marked self, and the agents new sessions can start on (the default marked, with ' +
-      'the models each takes). Call it first, and use only the ids it gives; see the agentk-sessions ' +
+      'the models each takes). Call it first, and use only the ids it gives; see the kode-sessions ' +
       'skill for how to use these tools.',
     inputSchema: { type: 'object', properties: { projectId: { type: 'string', description: 'Only this project.' } } },
   },
   {
     name: 'start_sessions',
     description:
-      'Starts up to 8 AgentK sessions in one call, in order. Each is either a GitHub issue or PR (ref: owner/name#N or its link; ' +
+      'Starts up to 8 Kode sessions in one call, in order. Each is either a GitHub issue or PR (ref: owner/name#N or its link; ' +
       'for a bare #N use the project\'s github from list), which starts a task on the issue or a review of the PR, or a task ' +
       "(name and prompt, the user's words kept). Each runs on the default agent and its own model unless the user names " +
       "another (agent, model; list names the agents and their models). Returns one line per session: what started, or why it didn't.",
@@ -71,7 +71,7 @@ export const TOOL_DEFS: ToolDef[] = [
               },
               autoRun: {
                 type: 'boolean',
-                description: 'Run to merge: AgentK opens the PR when the coding turn ends and merges it once nothing blocks it. ' +
+                description: 'Run to merge: Kode opens the PR when the coding turn ends and merges it once nothing blocks it. ' +
                   'Only when the user asks for it, and only for a task (or an issue) with stage code.',
               },
               review: {
@@ -79,7 +79,7 @@ export const TOOL_DEFS: ToolDef[] = [
                 description: "The task's own code review before its PR opens, only what the user asked for (the rest keeps the " +
                   'project\'s settings): strategy (off for no review, sirius-1.0, or sagittarius-3.0), rounds (re-reviews after the ' +
                   'first, 0 to 5), depth (sweeps per review, 1 to 5: "3 deep reviews" is depth 3) and check (false: the findings go to ' +
-                  'AgentK without waiting for the user to check them).',
+                  'Kode without waiting for the user to check them).',
                 properties: {
                   strategy: { type: 'string', enum: ['off', 'sirius-1.0', 'sagittarius-3.0'] },
                   rounds: { type: 'integer', minimum: 0, maximum: 5 },
@@ -97,7 +97,7 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'move_session',
     description:
-      "Moves an AgentK session to another stage (explore, design, code, or review for Pull Request), as the user's move dialog " +
+      "Moves a Kode session to another stage (explore, design, code, or review for Pull Request), as the user's move dialog " +
       "does. This session's own move goes once this turn ends, so ask for it last. instructions: what the user asked for in " +
       'that stage, if anything.',
     inputSchema: {
@@ -113,7 +113,7 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'open_pr',
     description:
-      "Opens the PR of another AgentK session in Code, as its Open PR does. Not for this session: the user opens this session's PR. " +
+      "Opens the PR of another Kode session in Code, as its Open PR does. Not for this session: the user opens this session's PR. " +
       'instructions: what the user asked for the PR, if anything.',
     inputSchema: {
       type: 'object',
@@ -124,7 +124,7 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'open_project',
     description:
-      'Opens an AgentK project on a repo: a repo folder AgentK scans, GitHub owner/name (cloned when there is no clone), or a clone URL. ' +
+      'Opens a Kode project on a repo: a repo folder Kode scans, GitHub owner/name (cloned when there is no clone), or a clone URL. ' +
       'datapack: new (a new Meko datapack, the default), none, or a datapack id.',
     inputSchema: {
       type: 'object',
@@ -140,7 +140,7 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'review_report',
     readOnly: true,
     description:
-      "One pass of AgentK's code review reports what it found. Only for a review step whose file names this tool: " +
+      "One pass of Kode's code review reports what it found. Only for a review step whose file names this tool: " +
       'step is the step id the file gives, report the JSON its schema asks for. An error says what to fix; call again.',
     inputSchema: { type: 'object', properties: { step: { type: 'string' }, report: { type: 'object' } }, required: ['step', 'report'] },
   },
@@ -148,7 +148,7 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'review_score',
     readOnly: true,
     description:
-      "A scorer of AgentK's code review reports its verdict on one finding. Only for a step whose file names this tool: " +
+      "A scorer of Kode's code review reports its verdict on one finding. Only for a step whose file names this tool: " +
       'step is the step id the file gives, score the JSON its schema asks for. An error says what to fix; call again.',
     inputSchema: { type: 'object', properties: { step: { type: 'string' }, score: { type: 'object' } }, required: ['step', 'score'] },
   },
@@ -156,7 +156,7 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'review_outcome',
     readOnly: true,
     description:
-      "Tells AgentK what you did with each finding of its code review, by the key AgentK gave it ([1:2]: key 1:2): " +
+      "Tells Kode what you did with each finding of its code review, by the key Kode gave it ([1:2]: key 1:2): " +
       'status fixed or declined, and note: what you changed, or why the finding is wrong.',
     inputSchema: {
       type: 'object',

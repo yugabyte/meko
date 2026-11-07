@@ -282,7 +282,7 @@ type preflightError struct{ s string }
 
 func (e *preflightError) Error() string { return e.s }
 
-// The port nobody chose is left alone while an AgentK is on this computer: one from before Meko
+// The port nobody chose is left alone while a Kode is on this computer: one from before Meko
 // served it holds that port until it's updated, and Meko takes the port over then rather than
 // moving off it.
 func TestInstallLeavesAnAgentKsPortAlone(t *testing.T) {

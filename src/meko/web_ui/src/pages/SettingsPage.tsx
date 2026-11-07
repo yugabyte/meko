@@ -32,7 +32,7 @@ export function SettingsPage({ auth }: { auth: AuthStatus }) {
       <Card className="space-y-2 p-4">
         <h3 className="font-medium">Meko Cloud</h3>
         <p className="text-sm text-muted-foreground">
-          Link Meko Cloud for your extensions, such as AgentK, to keep their memory there instead of on this computer.
+          Link Meko Cloud for your extensions, such as Kode, to keep their memory there instead of on this computer.
         </p>
         <PageLink to={MEKO_CLOUD} icon={<Cloud className="size-3.5" />} label="Meko Cloud" />
       </Card>

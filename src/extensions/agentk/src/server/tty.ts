@@ -14,7 +14,7 @@ function paint(code: string, s: string, stream: NodeJS.WriteStream = process.std
  * The blue of the dots and links, picked for the terminal's background as Meko's rows pick it
  * (src/meko/internal/spin/background.go): #79aeff on dark, #1f5fd1 on light, or the nearest of the
  * 256 colors without 24-bit color (the theme's own blue on a terminal with only 16). The background is MEKO_TERM_BG, which Meko's installer and
- * `meko extension install` pass on, else COLORFGBG's last field, else dark: AgentK doesn't ask the
+ * `meko extension install` pass on, else COLORFGBG's last field, else dark: Kode doesn't ask the
  * terminal itself.
  */
 export function blueCode(env: NodeJS.ProcessEnv = process.env): string {

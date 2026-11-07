@@ -34,7 +34,7 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
       symlinkSync(from, join(links, name));
       views.push({ from, to: join(links, name) });
     }
-    // Claude Code's folder trust lives here; with no file, AgentK records none.
+    // Claude Code's folder trust lives here; with no file, Kode records none.
     mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
     writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, '.claude.json'), JSON.stringify({ projects: {} }));
     await env.core.start();
@@ -54,8 +54,8 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
     // HOME in the local spelling (launcher-local-path.test runs a launcher for the worktree and flags).
     const launcher = readFileSync(join(env.core.paths.run, `${s.id}.sh`), 'utf8');
     expect(launcher).toContain(`export HOME='${local(homedir())}'`);
-    // The hook socket too: Claude Code refuses a mod's fetch to a socket under /net, so the mod would never reach AgentK.
-    expect(launcher).toContain(`export AK_HOOK_SOCK='${local(env.core.paths.hookSock)}'`);
+    // The hook socket too: Claude Code refuses a mod's fetch to a socket under /net, so the mod would never reach Kode.
+    expect(launcher).toContain(`export KODE_HOOK_SOCK='${local(env.core.paths.hookSock)}'`);
 
     // Started there, the worktree isn't tied back to its repo's trust, so it's trusted itself.
     const trusted = JSON.parse(readFileSync(join(process.env.CLAUDE_CONFIG_DIR!, '.claude.json'), 'utf8')).projects;

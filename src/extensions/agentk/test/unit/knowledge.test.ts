@@ -28,9 +28,9 @@ describe('knowledge-base files', () => {
 
   it.each([
     [new MekoApiError(403, 'FORBIDDEN', 'forbidden'), 403, /only its owner and maintainers can/],
-    [new MekoApiError(401, 'UNAUTHORIZED', 'invalid or expired token'), 502, /^Meko didn't accept AgentK's token\. Run meko restart/],
-    [new MekoApiError(403, 'INSUFFICIENT_SCOPE', 'needs write'), 502, /^Meko didn't accept AgentK's token\. Run meko restart/],
-    [new MekoApiError(404, 'HTTP_404', 'Meko answered 404.'), 502, /doesn't take uploads from AgentK yet\. Add the file from Meko's web app/],
+    [new MekoApiError(401, 'UNAUTHORIZED', 'invalid or expired token'), 502, /^Meko didn't accept Kode's token\. Run meko restart/],
+    [new MekoApiError(403, 'INSUFFICIENT_SCOPE', 'needs write'), 502, /^Meko didn't accept Kode's token\. Run meko restart/],
+    [new MekoApiError(404, 'HTTP_404', 'Meko answered 404.'), 502, /doesn't take uploads from Kode yet\. Add the file from Meko's web app/],
     [new MekoApiError(404, 'NOT_FOUND', 'datapack not found'), 502, /^Meko couldn't find adlc\/proj\/r\/p: datapack not found\. Check the project's datapack/],
     [new MekoApiError(500, 'INTERNAL', 'boom.'), 502, /^Meko couldn't add the file: boom\. Try again in a minute/],
     [new MekoApiError(413, 'FILE_TOO_LARGE', 'Free plans take files up to 5 MB'), 413, /^Free plans take files up to 5 MB$/],

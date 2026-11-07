@@ -18,7 +18,7 @@ describe('ReviewPrGate', () => {
   it('animates Update to latest, and takes no second press, while it runs', () => {
     expect(render(false)).toContain('>Update to latest</button>');
     const html = render(true);
-    expect(html).toContain('<button class="gate" disabled="" title="Check out the PR&#x27;s latest commits; AgentK sums up what changed"><span class="busy">Updating');
+    expect(html).toContain('<button class="gate" disabled="" title="Check out the PR&#x27;s latest commits; Kode sums up what changed"><span class="busy">Updating');
     expect(html).not.toContain('Update to latest');
   });
 });

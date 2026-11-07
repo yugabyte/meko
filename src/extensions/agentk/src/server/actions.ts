@@ -21,7 +21,7 @@ import type { SessionRow } from './store.js';
 import type { ToolName } from './tooldefs.js';
 
 /**
- * The actions Ask AgentK proposes and AgentK's session tools take (`tools.ts`), and running them:
+ * The actions Ask Kode proposes and Kode's session tools take (`tools.ts`), and running them:
  * one vocabulary and one set of checks for both, each action run through the same core call the
  * UI's own route makes, so neither can do anything the user couldn't do in the UI.
  */
@@ -58,14 +58,14 @@ function autoRunFor(r: Record<string, unknown>, stage: string, what: string, not
   return false;
 }
 /**
- * The agent and model a proposed start asks for (`harness`, `model`: AgentK's session tools give
+ * The agent and model a proposed start asks for (`harness`, `model`: Kode's session tools give
  * them), or null when either can't be used, with a note naming `what`. Whether the agent is
  * available is the start's to say (`Harnesses.pick`), as for the New session dialog.
  */
 function agentFor(r: Record<string, unknown>, what: string, notes: string[]): { harness?: HarnessId; model?: string } | null {
   const harness = r.harness == null || r.harness === '' ? undefined : r.harness;
   if (harness !== undefined && !isHarnessId(harness)) {
-    notes.push(`Left out ${what}: ${typeof harness === 'string' ? harness : 'that'} isn't an agent AgentK runs (${HARNESS_IDS.join(', ')}).`);
+    notes.push(`Left out ${what}: ${typeof harness === 'string' ? harness : 'that'} isn't an agent Kode runs (${HARNESS_IDS.join(', ')}).`);
     return null;
   }
   const model = str(r.model);
@@ -165,7 +165,7 @@ export function checkActions(raw: unknown, projects: ActionProject[], max = ACTI
         } else if (view === 'session') {
           if (session) actions.push({ type: 'go', view, projectId: session.projectId, sessionId: session.id });
           else notes.push('Left out a session that isn\'t running.');
-        } else notes.push('Left out a place AgentK can\'t open.');
+        } else notes.push('Left out a place Kode can\'t open.');
         break;
       }
       case 'move': {
@@ -193,13 +193,13 @@ export function checkActions(raw: unknown, projects: ActionProject[], max = ACTI
         break;
       }
       default:
-        notes.push('Left out an action AgentK doesn\'t have.');
+        notes.push('Left out an action Kode doesn\'t have.');
     }
   }
   return { actions, notes };
 }
 
-/** Who asked for a run: a session's agent through the session tools, or the user (Ask AgentK's Do all). */
+/** Who asked for a run: a session's agent through the session tools, or the user (Ask Kode's Do all). */
 export interface ActionCaller {
   session: SessionRow | null;
 }
@@ -302,7 +302,7 @@ async function runOne(core: Core, a: Exclude<AskAgentkAction, { type: 'go' }>, b
     }
     case 'openPr': {
       // A session's own PR stays the user's gate.
-      if (by.session?.id === a.sessionId) throw new HttpError(403, "a session doesn't open its own PR: the user does, with Open PR in AgentK");
+      if (by.session?.id === a.sessionId) throw new HttpError(403, "a session doesn't open its own PR: the user does, with Open PR in Kode");
       const s = await core.sessions.action(a.sessionId, 'open-pr', a.instructions ? { instructions: a.instructions } : undefined);
       return { ok: true, text: `Opening the PR for "${s.name}".`, projectId: s.projectId, sessionId: s.id };
     }
@@ -358,7 +358,7 @@ async function openProject(core: Core, a: Extract<AskAgentkAction, { type: 'open
   }
 }
 
-// ---- AgentK's session tools: the calls `me_kode mcp` makes (tools.ts, tooldefs.ts) ----
+// ---- Kode's session tools: the calls `me_kode mcp` makes (tools.ts, tooldefs.ts) ----
 
 /** The answer to a tool call: the text the agent reads, marked as an error when nothing was done. */
 function answer(text: string, isError = false): ModReply {
@@ -366,7 +366,7 @@ function answer(text: string, isError = false): ModReply {
 }
 
 /** The answer to a call still running when the hook socket closes (a stop, a restart, a rebind). */
-const CLOSING_TEXT = "AgentK is restarting, so it couldn't wait for this. What it started may still finish: call list in a minute to see what's there now.";
+const CLOSING_TEXT = "Kode is restarting, so it couldn't wait for this. What it started may still finish: call list in a minute to see what's there now.";
 
 /** A promise and what settles it. */
 function closingSignal(): { promise: Promise<void>; resolve: () => void } {
@@ -450,11 +450,11 @@ export class SessionTools {
       const r = this.core.reviews.onTool(row, reviewTool, isObject(body.input) ? body.input : {});
       return answer(r.text, r.error);
     }
-    if (!this.core.config.tools.enabled) return answer("AgentK's session tools are turned off (Settings → General in AgentK).", true);
+    if (!this.core.config.tools.enabled) return answer("Kode's session tools are turned off (Settings → General in Kode).", true);
     // A PR head from a public repo could be steering the agent: it gets no say over other sessions.
     // Not checked yet (a PR linked since the launch) counts as untrusted, as the launch has it.
     if (!repoConfigTrusted(row)) {
-      return answer("This session works on a PR from a public repo, or one AgentK hasn't checked yet, so AgentK's session tools are off in it. Ask the user to do this in AgentK.", true);
+      return answer("This session works on a PR from a public repo, or one Kode hasn't checked yet, so Kode's session tools are off in it. Ask the user to do this in Kode.", true);
     }
     const tool = str(body.tool) as ToolName;
     const input = isObject(body.input) ? body.input : {};
@@ -483,10 +483,10 @@ export class SessionTools {
         case 'open_project':
           return this.run(row, [{ type: 'openProject', repo: input.repo, name: input.name, datapack: input.datapack }], projects);
         default:
-          return answer(`AgentK has no tool ${tool || '(none named)'}: this session may run a newer me_kode mcp than the server. Update AgentK.`, true);
+          return answer(`Kode has no tool ${tool || '(none named)'}: this session may run a newer me_kode mcp than the server. Update Kode.`, true);
       }
     } catch (e) {
-      return answer(`AgentK couldn't do that: ${errMsg(e)}`, true);
+      return answer(`Kode couldn't do that: ${errMsg(e)}`, true);
     }
   }
 

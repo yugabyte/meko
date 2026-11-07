@@ -98,7 +98,7 @@ func TestCloudRoutesForBrowsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := extproxy.New("agentk", "AgentK", func() string { return sock }, slog.New(slog.DiscardHandler))
+	p := extproxy.New("kode", "Kode", func() string { return sock }, slog.New(slog.DiscardHandler))
 	cloud.Changed = func(ctx context.Context) { _ = p.Notify(ctx, "cloud") }
 	s := New(Options{Info: Info{Version: "test"}, Port: tcpPort(t, ln2), Logger: slog.New(slog.DiscardHandler),
 		Cloud: cloud, Web: &Web{Access: config.AccessLocal,

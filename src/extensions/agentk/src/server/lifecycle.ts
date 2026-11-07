@@ -108,16 +108,16 @@ const GATE_NAMES: Record<QueuedGate, string> = { 'open-pr': 'Open PR', merge: 'm
 
 /** The merge blocker while a code review the user ran in Pull Request runs, or its fixes wait to be taken. */
 const CODE_REVIEW_RUNNING = 'The code review is still running.';
-const CODE_REVIEW_WAITS = "The code review's findings wait on you: send them to AgentK or dismiss them.";
+const CODE_REVIEW_WAITS = "The code review's findings wait on you: send them to Kode or dismiss them.";
 
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
 
-/** Merge blockers AgentK works on by itself in Pull Request (the CI and merge conflict watchers). */
+/** Merge blockers Kode works on by itself in Pull Request (the CI and merge conflict watchers). */
 const CI_FAILING = 'CI is failing.';
 const CONFLICTING = 'The branch has merge conflicts.';
 /** The merge blocker for a question in the terminal, which already notified the user as Needs you. */
-const IN_TERMINAL = 'AgentK is waiting on you in the terminal.';
+const IN_TERMINAL = 'Kode is waiting on you in the terminal.';
 /** GitHub's own BLOCKED on a new head when nothing else blocks: required checks not reported yet. */
 const CHECKS_PENDING = "GitHub's required checks haven't reported on the latest push yet.";
 
@@ -135,7 +135,7 @@ type QueuedPrompt = (typeof QUEUE_ORDER)[number] | (typeof REVIEWING_ORDER)[numb
 /** What each queued prompt starts an agent stopped for sitting idle again for, in its activity ("Resumed for …"). */
 const QUEUED_FOR: Record<QueuedPrompt, string> = {
   'review-people': 'for a review on the PR',
-  'review-held': 'for the reviews you sent to AgentK',
+  'review-held': 'for the reviews you sent to Kode',
   'local-review': "for the code review's findings",
   conflicts: 'to resolve merge conflicts',
   ci: 'for a failing CI check',
@@ -233,7 +233,7 @@ export class Lifecycle {
   /** Sessions whose design changed during the current turn. */
   private designChanged = new Set<string>();
   /**
-   * Approvals given while AgentK was busy (with the mod live), waiting for the turn to end: the
+   * Approvals given while Kode was busy (with the mod live), waiting for the turn to end: the
    * user's answers to the design's questions, or null. In memory only, like the answers.
    */
   private queuedApprovals = new Map<string, CheckedAnswers | null>();
@@ -510,7 +510,7 @@ export class Lifecycle {
     const row = sessionRow(this.db, id);
     const open = row ? this.core.questions.get(row).open : 0;
     if (approvalDropped) {
-      this.sessions.notifyUser(id, 'Design changed', "AgentK changed the design during its turn, so your approval wasn't sent. Review it and approve again.");
+      this.sessions.notifyUser(id, 'Design changed', "Kode changed the design during its turn, so your approval wasn't sent. Review it and approve again.");
       return;
     }
     if (this.sessions.promptsHeld(id) > 0) return;
@@ -532,7 +532,7 @@ export class Lifecycle {
     try {
       changed = this.core.questions.set(row, checked.questions);
     } catch (e) {
-      return fail(`AgentK couldn't save the questions (${errMsg(e)}). Write them to ${this.sessions.questionsFile(row)} instead.`);
+      return fail(`Kode couldn't save the questions (${errMsg(e)}). Write them to ${this.sessions.questionsFile(row)} instead.`);
     }
     // The same questions again change nothing. Before there's a design they're only saved, to
     // show with it when it comes.
@@ -551,7 +551,7 @@ export class Lifecycle {
     return {
       status: 200,
       body: {
-        text: `Saved ${n === 1 ? '1 question' : `${n} questions`} (${open} open)${decisions}${meko} to ${this.sessions.questionsFile(row)}. The user sees them beside the design in AgentK.`,
+        text: `Saved ${n === 1 ? '1 question' : `${n} questions`} (${open} open)${decisions}${meko} to ${this.sessions.questionsFile(row)}. The user sees them beside the design in Kode.`,
       },
     };
   }
@@ -565,9 +565,9 @@ export class Lifecycle {
     row = await this.sessions.awake(row, 'for the design approval');
     const answers = designAnswers(body, this.core.questions.get(row).questions);
     if (row.plan_mode) {
-      if (answers) throw new HttpError(409, 'AgentK is in plan mode, so the approval is a choice in its terminal. Type your answers there.');
+      if (answers) throw new HttpError(409, 'Kode is in plan mode, so the approval is a choice in its terminal. Type your answers there.');
       if (!this.sessions.planPending.has(row.id)) {
-        throw new HttpError(409, "AgentK hasn't presented a design for approval yet. Ask it to finish the design, or approve it in the terminal.");
+        throw new HttpError(409, "Kode hasn't presented a design for approval yet. Ask it to finish the design, or approve it in the terminal.");
       }
       // Claude's plan dialog has "Yes" selected by default.
       await this.core.host.sendKeys(row.tmux_name, 'Enter');
@@ -576,28 +576,28 @@ export class Lifecycle {
       return;
     }
     if (!get(this.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) {
-      throw new HttpError(409, "AgentK hasn't written a design yet. Wait for it to finish, or ask it in the terminal.");
+      throw new HttpError(409, "Kode hasn't written a design yet. Wait for it to finish, or ask it in the terminal.");
     }
     if (row.status === 'exited') throw new HttpError(409, `${agentName(row)} has exited. Resume the session first.`);
-    if (row.status === 'starting') throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
+    if (row.status === 'starting') throw new HttpError(409, 'Kode is still working. Wait for the turn to finish.');
     // Answers sent during a turn wait in Claude, and run before anything sent now: the approval
-    // would move to Code while AgentK revises the design.
+    // would move to Code while Kode revises the design.
     if (this.sessions.promptsHeld(row.id) > 0) {
-      throw new HttpError(409, 'AgentK has answers from you to take first. Approve once it has revised the design.');
+      throw new HttpError(409, 'Kode has answers from you to take first. Approve once it has revised the design.');
     }
     // Mid-turn, a turn may still change the design: with the mod, the approval waits for its end.
     if (this.sessions.midTurn(row.id)) {
       if (!this.sessions.modLive(row.id)) {
-        throw new HttpError(409, row.status === 'working' ? 'AgentK is still working. Wait for the turn to finish.' : 'AgentK is waiting on you in the terminal. Answer it first.');
+        throw new HttpError(409, row.status === 'working' ? 'Kode is still working. Wait for the turn to finish.' : 'Kode is waiting on you in the terminal. Answer it first.');
       }
       this.queuedApprovals.set(row.id, answers);
-      this.sessions.event(row.id, 'design', 'Approval queued: it goes when AgentK finishes its turn, if the design stays the same');
+      this.sessions.event(row.id, 'design', 'Approval queued: it goes when Kode finishes its turn, if the design stays the same');
       this.core.changed();
       return;
     }
     // Any other question (a permission prompt, a parked recovery) would take a typed approval as its answer.
     if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) {
-      throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
+      throw new HttpError(409, 'Kode is waiting on you in the terminal. Answer it first.');
     }
     this.queuedApprovals.delete(row.id);
     await this.sendApproval(row.id, answers);
@@ -611,7 +611,7 @@ export class Lifecycle {
       const lead = answers && this.sessions.prompt(cur, 'approved-answers', { answers: answers.text });
       await this.sessions.submit(id, [lead, this.sessions.prompt(cur, 'approved')].filter(Boolean).join('\n\n'));
       if (answers) this.sessions.event(id, 'design', `Approved with ${answers.count}`);
-      if (cur.auto_run) this.sessions.event(id, 'auto-run', 'Approved with Run to merge: AgentK opens the PR when this turn ends, and merges it by itself');
+      if (cur.auto_run) this.sessions.event(id, 'auto-run', 'Approved with Run to merge: Kode opens the PR when this turn ends, and merges it by itself');
     } catch (e) {
       if (this.sessions.row(id).stage === 'code') this.sessions.setStage(id, 'design', 'auto');
       throw new HttpError(502, `Couldn't send the approval to Claude: ${errMsg(e)}. Try again.`);
@@ -622,8 +622,8 @@ export class Lifecycle {
   /**
    * Once the user's answers have gone to Claude, marks the questions they answered resolved, with
    * their answers (`all`: every open one, see DesignQuestionStore.record), so the Questions tab
-   * shows what they sent. It isn't a change AgentK made in its turn. A questions file that can't be
-   * read or written is logged and left alone: the answers went, and AgentK is asked to resolve them.
+   * shows what they sent. It isn't a change Kode made in its turn. A questions file that can't be
+   * read or written is logged and left alone: the answers went, and Kode is asked to resolve them.
    */
   private recordAnswers(id: string, answers: CheckedAnswers | null, all: boolean): void {
     this.questionsUpdate(id, 'Recording the user\'s answers in', (row) => this.core.questions.record(row, answers?.answers ?? [], answers?.questions ?? [], all));
@@ -661,7 +661,7 @@ export class Lifecycle {
 
   /** Withdraws an approval waiting for the turn to end. */
   cancelApproval(row: SessionRow): void {
-    if (!this.queuedApprovals.delete(row.id)) throw new HttpError(409, 'There is no approval waiting for AgentK.');
+    if (!this.queuedApprovals.delete(row.id)) throw new HttpError(409, 'There is no approval waiting for Kode.');
     this.sessions.event(row.id, 'design', 'Queued approval withdrawn');
     this.core.changed();
   }
@@ -687,7 +687,7 @@ export class Lifecycle {
     const row = sessionRow(this.db, id);
     if (!row || row.desired !== 'running' || row.stage !== 'design') return null;
     if (changed) {
-      this.sessions.event(id, 'design', "Queued approval dropped: AgentK changed the design during its turn");
+      this.sessions.event(id, 'design', "Queued approval dropped: Kode changed the design during its turn");
       return 'dropped';
     }
     // Claude is at its prompt now.
@@ -716,7 +716,7 @@ export class Lifecycle {
     if (this.queuedApprovals.has(row.id)) throw new HttpError(409, 'You approved the design: the approval goes when this turn ends. Cancel it to send answers instead.');
     // With the mod, answers sent mid-turn wait in Claude for the turn to end.
     if (this.sessions.modLive(row.id) && this.sessions.midTurn(row.id)) {
-      if (this.sessions.runtime(row.id).busy) throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
+      if (this.sessions.runtime(row.id).busy) throw new HttpError(409, 'Kode is still working. Wait for the turn to finish.');
     } else {
       this.checkPromptable(row);
     }
@@ -727,8 +727,8 @@ export class Lifecycle {
     } catch (e) {
       throw new HttpError(502, `Couldn't send your answers to Claude: ${errMsg(e)}. Try again.`);
     }
-    this.sessions.event(row.id, 'design', `Sent ${answers.count} to AgentK`);
-    // Mid-turn, AgentK may have changed the questions already: read them first, so that counts as
+    this.sessions.event(row.id, 'design', `Sent ${answers.count} to Kode`);
+    // Mid-turn, Kode may have changed the questions already: read them first, so that counts as
     // its change and the answers go on top of it.
     this.collectQuestions(row);
     this.recordAnswers(row.id, answers, false);
@@ -744,7 +744,7 @@ export class Lifecycle {
   // ---- PR ----
 
   /**
-   * Sends the PR prompt, or, while AgentK is mid-turn (or Claude is starting), queues it for the
+   * Sends the PR prompt, or, while Kode is mid-turn (or Claude is starting), queues it for the
    * turn's end (takeQueuedPr). A queued Open PR is cleared once the prompt is about to go. Pressed
    * again with instructions (blank ones included) while one is queued, they replace its own.
    */
@@ -756,7 +756,7 @@ export class Lifecycle {
     row = await this.sessions.awake(row, 'for Open PR');
     if (row.desired === 'running' && !this.sessions.runtime(row.id).busy && this.turnRunning(row)) {
       if (row.queued_gate !== 'open-pr') {
-        const text = given ? 'Open PR queued with your instructions: it goes when AgentK finishes its turn' : 'Open PR queued: it goes when AgentK finishes its turn';
+        const text = given ? 'Open PR queued with your instructions: it goes when Kode finishes its turn' : 'Open PR queued: it goes when Kode finishes its turn';
         this.queueGate(row.id, 'open-pr', text, given ?? '');
       } else if (given !== null && given !== (row.queued_instructions ?? '')) {
         // Pressed with instructions, Run to merge's Open PR is the user's now: stopping it keeps it.
@@ -787,7 +787,7 @@ export class Lifecycle {
       if (queued && r.queued_gate !== 'open-pr') throw new QueueWithdrawn();
       if (r.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
       this.checkPromptable(r);
-      if (this.sessions.promptsHeld(id) > 0) throw new HttpError(409, 'AgentK has prompts from you to take first. Open the PR once it has.');
+      if (this.sessions.promptsHeld(id) > 0) throw new HttpError(409, 'Kode has prompts from you to take first. Open the PR once it has.');
       if (r.queued_gate === 'open-pr') this.setQueued(id, null);
     };
   }
@@ -968,7 +968,7 @@ export class Lifecycle {
   /** Refuses while Claude can't take a prompt: mid-turn, waiting on the user (a ready design aside), or exited. */
   checkPromptable(row: SessionRow): void {
     this.checkBetweenTurns(row);
-    if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
+    if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) throw new HttpError(409, 'Kode is waiting on you in the terminal. Answer it first.');
     if (row.status === 'exited') throw new HttpError(409, `${agentName(row)} has exited. Resume the session first.`);
   }
 
@@ -1111,7 +1111,7 @@ export class Lifecycle {
 
   /**
    * A task's code review is done (or the user opened the PR past a stopped one): the PR prompt goes,
-   * led by the last round's findings when it had some, with the `me_ak_review:` line (none past a
+   * led by the last round's findings when it had some, with the `me_kode_review:` line (none past a
    * stopped review), after a move's `moved` line still waiting on the review (the ask for the PR description
    * normally took it), and pointing at the PR description file the task wrote (`description`).
    * False when it couldn't go: a finished review's goes when the task's turn ends, when it's mid-turn
@@ -1133,13 +1133,13 @@ export class Lifecycle {
     } catch (e) {
       // Withdrawn while sendPr waited: whatever withdrew it said so in the activity log, and Open PR sends it.
       if (e instanceof QueueWithdrawn) return false;
-      // A prompt of the user's (or AgentK's) went while the review ran: the PR prompt goes when the turn
+      // A prompt of the user's (or Kode's) went while the review ran: the PR prompt goes when the turn
       // ends, as an Open PR queued then would. Open anyway's (no line) is pressed between turns, and Run
       // to merge's goes by itself only while Run to merge is on (stopping it couldn't drop the gate after).
       const cur = this.sessions.row(row.id);
       if (o.line !== null && (o.by === 'you' || cur.auto_run) && this.waitsForTurn(cur)) {
         if (cur.queued_gate !== 'open-pr') this.setQueued(row.id, 'open-pr', '', o.by === 'auto');
-        this.sessions.event(row.id, 'review', 'The code review is done: the PR prompt goes when AgentK finishes its turn');
+        this.sessions.event(row.id, 'review', 'The code review is done: the PR prompt goes when Kode finishes its turn');
         return false;
       }
       this.warn(row.id, 'Sending the PR prompt after the code review', e);
@@ -1162,7 +1162,7 @@ export class Lifecycle {
 
   /**
    * After the PR is found, or a code review the user ran in Pull Request is done: a task whose code
-   * review finished has the review's `me_ak_review:` line in the description, written in by AgentK
+   * review finished has the review's `me_kode_review:` line in the description, written in by Kode
    * when Claude left it out. Never throws.
    */
   async syncReviewLine(id: string): Promise<void> {
@@ -1183,7 +1183,7 @@ export class Lifecycle {
 
   private checkBetweenTurns(row: SessionRow): void {
     if (row.status === 'working' || row.status === 'starting' || this.sessions.runtime(row.id).busy) {
-      throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
+      throw new HttpError(409, 'Kode is still working. Wait for the turn to finish.');
     }
   }
 
@@ -1272,19 +1272,19 @@ export class Lifecycle {
       if (cur.stage === 'code' || cur.stage === 'review') this.core.reviews.leftStage(id, cur.stage);
       if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
       this.sessions.setStage(id, stage, 'you');
-      // Back in Design, what an approval left to AgentK is open again.
+      // Back in Design, what an approval left to Kode is open again.
       if (stage === 'design') this.questionsUpdate(id, 'Reopening', (row) => this.core.questions.reopen(row));
     }
     if (!send && !instructions) return;
     const row = this.sessions.row(id);
-    // The stage's start prompt names the task; that's right only for one just given. Otherwise AgentK
+    // The stage's start prompt names the task; that's right only for one just given. Otherwise Kode
     // carries on from the conversation, which may have moved on from the first prompt.
     const body = send ? this.sessions.prompt(row, newTask ? this.sessions.firstPrompt(row) : movePrompt(stage)) : '';
     try {
       await this.sessions.submit(id, [this.movedLine(row), body, this.instructionsPrompt(row, instructions)].filter(Boolean).join('\n\n'));
     } catch (e) {
       const what = send ? `the ${STAGE_LABELS[stage]} prompt` : 'your instructions';
-      throw new HttpError(502, `Moved to ${STAGE_LABELS[stage]}, but couldn't send ${what} to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
+      throw new HttpError(502, `Moved to ${STAGE_LABELS[stage]}, but couldn't send ${what} to Claude: ${errMsg(e)}. Ask Kode in the terminal.`);
     }
   }
 
@@ -1321,7 +1321,7 @@ export class Lifecycle {
       // As for Open PR: the user's prompts go first, and a stopped code review holds the PR. Outside
       // Code an earlier review holds nothing (its Retry and Open anyway are Code's).
       if (cur.stage !== 'code') this.core.reviews.leftStage(cur.id, 'code');
-      if (this.sessions.promptsHeld(cur.id) > 0) throw new HttpError(409, 'AgentK has prompts from you to take first. Move the session once it has.');
+      if (this.sessions.promptsHeld(cur.id) > 0) throw new HttpError(409, 'Kode has prompts from you to take first. Move the session once it has.');
       this.core.reviews.checkNotHeld(cur.id);
     }
     if ((!adopt || !pr) && this.core.reviews.applies(cur)) {
@@ -1353,7 +1353,7 @@ export class Lifecycle {
       await this.sessions.submit(row.id, `${this.movedLine(this.sessions.row(row.id))}\n\n${this.instructionsPrompt(cur, instructions)}`);
     } catch (e) {
       this.sessions.setBusy(row.id, false);
-      throw new HttpError(502, `Moved to Pull Request, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
+      throw new HttpError(502, `Moved to Pull Request, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask Kode in the terminal.`);
     }
   }
 
@@ -1375,7 +1375,7 @@ export class Lifecycle {
     if (row.stage !== 'code') {
       if (row.stage === 'design') this.leaveDesign(row.id, true);
       this.sessions.setStage(row.id, 'code', 'you', { event: false });
-      this.sessions.event(row.id, 'stage', 'Moved to Code: AgentK reviews the change locally before it opens the PR');
+      this.sessions.event(row.id, 'stage', 'Moved to Code: Kode reviews the change locally before it opens the PR');
       lead = this.movedLine(this.sessions.row(row.id));
     }
     await this.core.reviews.openPr(this.sessions.row(row.id), { instructions, by: 'you', lead });
@@ -1477,8 +1477,8 @@ export class Lifecycle {
     // A Discard that waited for it goes now, and nothing else for the session does.
     if (this.sessions.row(id).discarding) return this.afterLearn(id);
     // Esc on a turn is the user stepping in: Run to merge stops before a queued Open PR could go.
-    if (interrupted && (row.stage === 'code' || row.stage === 'pr' || row.stage === 'review')) this.stopAutoRun(id, 'you interrupted AgentK');
-    // A move the session's own agent asked for (AgentK's session tools) goes now, and gives it its next turn.
+    if (interrupted && (row.stage === 'code' || row.stage === 'pr' || row.stage === 'review')) this.stopAutoRun(id, 'you interrupted Kode');
+    // A move the session's own agent asked for (Kode's session tools) goes now, and gives it its next turn.
     if (await this.core.tools.turnEnded(id, interrupted)) return;
     // A learn session that wrote its summary is done, and closes.
     if (row.stage === 'explore' && row.purpose === 'learn' && !interrupted) {
@@ -1923,14 +1923,14 @@ export class Lifecycle {
   }
 
   /**
-   * Run to merge keeps its merge queued through blockers that don't clear by themselves. AgentK works
+   * Run to merge keeps its merge queued through blockers that don't clear by themselves. Kode works
    * on failing CI and merge conflicts (their watchers tell the user when they hand them over), and a
    * question in the terminal was told as Needs you; for the rest, the user is told once per new set.
    */
   private autoRunWaits(id: string, info: MergeInfo): void {
     if (info.hard.length) this.autoRunBlocked.add(id);
     else this.autoRunBlocked.delete(id);
-    // Failing CI and conflicts AgentK handed over had their watchers' notification (a question in
+    // Failing CI and conflicts Kode handed over had their watchers' notification (a question in
     // the terminal, its own Needs you, is never in the list).
     const yours = info.yoursWithAutoRun.filter((b) => b !== CI_FAILING && !(b === CONFLICTING && this.core.config.pr.resolveConflicts));
     const key = yours.join('\n');
@@ -1938,7 +1938,7 @@ export class Lifecycle {
     this.autoRunTold.set(id, key);
     if (!yours.length) return;
     this.sessions.event(id, 'auto-run', `Run to merge waits on you: ${yours.join(' ')}`);
-    this.sessions.notifyUser(id, 'Run to merge waits on you', `${yours.join(' ')} AgentK merges the PR once that's cleared.`);
+    this.sessions.notifyUser(id, 'Run to merge waits on you', `${yours.join(' ')} Kode merges the PR once that's cleared.`);
   }
 
   /** Reviews' REST ids, links and inline comments, or null (retry at the next poll) when GitHub can't say. */
@@ -1951,7 +1951,7 @@ export class Lifecycle {
     }
   }
 
-  /** Keeps reviews for the user to send to AgentK or dismiss, logs them and tells the user once. */
+  /** Keeps reviews for the user to send to Kode or dismiss, logs them and tells the user once. */
   private hold(row: SessionRow, found: { review: github.PrReview; kind: HeldReviewAuthor }[], details: Map<string, ReviewDetails>): void {
     // One GitHub has no review for any more (deleted since the poll) has nothing to send or show.
     const held = found.filter((h) => details.has(h.review.id));
@@ -1968,7 +1968,7 @@ export class Lifecycle {
     if (inside) this.sessions.event(row.id, 'review', `Review from ${inside} (held for you)`);
     if (outside) this.sessions.event(row.id, 'review', `Review from ${outside} (held for you; not a collaborator on the repo)`);
     const one = held.length === 1;
-    this.sessions.notifyUser(row.id, 'Review held', `From ${loginList(held.map((h) => h.review))}. Send ${one ? 'it' : 'them'} to AgentK or dismiss ${one ? 'it' : 'them'}.`);
+    this.sessions.notifyUser(row.id, 'Review held', `From ${loginList(held.map((h) => h.review))}. Send ${one ? 'it' : 'them'} to Kode or dismiss ${one ? 'it' : 'them'}.`);
   }
 
   /** The reviews on the session's PR held for the user, oldest first. */
@@ -1988,7 +1988,7 @@ export class Lifecycle {
       const row = this.sessions.row(id);
       if (!row.pr_number) throw new HttpError(409, 'This session has no PR, so it has no held reviews.');
       if (req.action === 'send' && (row.stage !== 'review' || row.desired !== 'running')) {
-        throw new HttpError(409, 'Held reviews go to AgentK in Pull Request. Move the session back there first, or dismiss them.');
+        throw new HttpError(409, 'Held reviews go to Kode in Pull Request. Move the session back there first, or dismiss them.');
       }
       const done = decideHeld(this.db, id, row.pr_number, req.ids, req.action === 'send' ? 'sent' : 'dismissed');
       if (!done.length) throw new HttpError(409, 'Those reviews were already sent or dismissed.');
@@ -1996,7 +1996,7 @@ export class Lifecycle {
       if (req.action === 'send') {
         this.enqueueHeld(id, heldPromptLines(done));
         this.sessions.update(id, { review_state: 'addressing' });
-        this.sessions.event(id, 'review', `Sent ${what} to AgentK`);
+        this.sessions.event(id, 'review', `Sent ${what} to Kode`);
         // Before the look at GitHub, so the prompt goes even while GitHub can't be reached.
         await this.deliverNext(id).catch((e) => this.warn(id, 'Sending a queued prompt', e));
       } else {
@@ -2038,7 +2038,7 @@ export class Lifecycle {
       return;
     }
     if (ci.state !== 'failure' || !head || row.stage !== 'review' || st.state !== 'OPEN') return;
-    // AgentK's last attempt ended on this head without a fix (no push): handed over like a new head.
+    // Kode's last attempt ended on this head without a fix (no push): handed over like a new head.
     const lastTried = row.ci_fixes === MAX_CI_FIXES && !q.ci;
     if (row.ci_fix_head === head && !lastTried) return;
     let since = this.ciFailSince.get(id);
@@ -2058,8 +2058,8 @@ export class Lifecycle {
     const checks = ci.failed.map((c) => `- ${c.name}: ${c.conclusion.toLowerCase()}${c.url ? ` (${c.url})` : ''}`).join('\n');
     this.enqueue(id, 'ci', { sha: head, checks });
     const next = this.queue(id);
-    const later = reviewQueued(next) ? 'AgentK will fix it after the review.'
-      : next.conflicts ? 'AgentK will look at it after resolving the merge conflicts.' : 'AgentK is fixing it.';
+    const later = reviewQueued(next) ? 'Kode will fix it after the review.'
+      : next.conflicts ? 'Kode will look at it after resolving the merge conflicts.' : 'Kode is fixing it.';
     this.notifyProgress(id, 'CI failed', `${names}. ${later}`);
   }
 
@@ -2086,7 +2086,7 @@ export class Lifecycle {
       return;
     }
     if (!on || st.mergeable !== 'CONFLICTING' || !head || row.stage !== 'review' || st.state !== 'OPEN' || unpushed) return;
-    // AgentK's last attempt ended on this head and it still conflicts: handed over like a new head.
+    // Kode's last attempt ended on this head and it still conflicts: handed over like a new head.
     if (row.conflict_head === head && !(row.conflict_fixes === MAX_CONFLICT_FIXES && !q.conflicts)) return;
     const base = row.base_branch;
     if (row.conflict_fixes >= MAX_CONFLICT_FIXES) {
@@ -2101,7 +2101,7 @@ export class Lifecycle {
     this.enqueue(id, 'conflicts', { sha: head });
     const next = this.queue(id);
     const afterReview = reviewQueued(next);
-    this.notifyProgress(id, 'Merge conflicts', `PR #${st.number} conflicts with ${base}. ${afterReview ? 'AgentK will resolve them after the review.' : 'AgentK is resolving them.'}`);
+    this.notifyProgress(id, 'Merge conflicts', `PR #${st.number} conflicts with ${base}. ${afterReview ? 'Kode will resolve them after the review.' : 'Kode is resolving them.'}`);
   }
 
   /** A requested merge that didn't happen: the PR was closed, or is still open well after the request. */
@@ -2176,10 +2176,10 @@ export class Lifecycle {
   }
 
   /**
-   * What blocks the merge, in plain words. A blocker that clears by itself (`waits`: AgentK at
+   * What blocks the merge, in plain words. A blocker that clears by itself (`waits`: Kode at
    * work, CI running) lets the merge be queued; any other one doesn't,
    * and drops a queued merge, mid-turn or not. Unpushed commits and uncommitted files wait only
-   * mid-turn (`turnAtStart`: when they were measured, or now), where they're AgentK's work in
+   * mid-turn (`turnAtStart`: when they were measured, or now), where they're Kode's work in
    * progress; a question in the terminal only during a turn; findings being addressed only while
    * Claude runs. A queued merge also waits up to CI_START_MS for CI to show up on a new head
    * (`newHead`), even when a fast check already passed, so it never goes before CI has started on a
@@ -2187,10 +2187,10 @@ export class Lifecycle {
    * reported yet); after that it's left to GitHub, as it can't be told from a required merge queue.
    *
    * The hard blockers only the user can clear, for the Needs you dot (`Session.waitsOnYou`) and Run
-   * to merge's notification: `yours`, a held review, and failing CI or merge conflicts AgentK handed
+   * to merge's notification: `yours`, a held review, and failing CI or merge conflicts Kode handed
    * over on this head (watchCi, watchConflicts) or, for conflicts, doesn't resolve; and
    * `yoursWithAutoRun`, those and, while Run to merge is on, every other one but a question in the
-   * terminal (already Needs you) and changes requested while AgentK addresses a review. Both are
+   * terminal (already Needs you) and changes requested while Kode addresses a review. Both are
    * kept so that turning Run to merge off or on shows at once, without a look at the PR.
    */
   mergeInfo(row: SessionRow, st: github.PrStatus, opts: MergeChecks = {}): MergeInfo {
@@ -2216,20 +2216,20 @@ export class Lifecycle {
     const codeReview = !triage && (this.core.reviews.runningIn(row.id, 'review') || this.codeReviewPending(row.id));
     const reviewWaits = (codeReview && row.status !== 'exited') || triage;
     if (st.state !== 'OPEN') block('The PR is not open.');
-    if (working) block('AgentK is still working.', true);
+    if (working) block('Kode is still working.', true);
     else if (row.status === 'needs_input') block(IN_TERMINAL, turn, 'never');
     if (triage) block(CODE_REVIEW_WAITS, false, 'always');
     else if (codeReview) block(CODE_REVIEW_RUNNING, reviewWaits);
     if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn || !!opts.turnAtStart || reviewWaits);
     if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn || !!opts.turnAtStart || reviewWaits);
     const ci = github.ciState(st.statusCheckRollup);
-    // AgentK's to fix until it hands it over.
+    // Kode's to fix until it hands it over.
     if (ci === 'failure') block(CI_FAILING, false, handedOver(row.ci_fixes, MAX_CI_FIXES, row.ci_fix_head) ? 'always' : 'never');
     else if (ci === 'pending') block('CI is still running.', true);
     // A fast check (another workflow's) can pass before CI's own jobs show up, so passed checks hold too.
     else if ((ci === 'none' || ci === 'success') && opts.newHead && row.queued_gate === 'merge') block("CI hasn't started on the latest push yet.", true);
     // With Claude exited, the turn addressing them is gone until a Resume.
-    if (row.review_state === 'addressing') block('AgentK is addressing review findings.', row.status !== 'exited');
+    if (row.review_state === 'addressing') block('Kode is addressing review findings.', row.status !== 'exited');
     const held = heldSummary(this.db, row.id, row.pr_number);
     if (held.count) block(heldBlocker(held.authors), false, 'always');
     if (st.reviewDecision === 'CHANGES_REQUESTED') block('Changes were requested.', false, row.review_state === 'addressing' ? 'never' : 'auto-run');
@@ -2364,9 +2364,9 @@ export class Lifecycle {
   }
 
   /**
-   * Update to latest: checks out the PR's head in a Review a PR session and has AgentK sum up what
+   * Update to latest: checks out the PR's head in a Review a PR session and has Kode sum up what
    * changed since the commit reviewed so far (queued until Claude is between turns). Refused while
-   * AgentK is busy, the worktree has uncommitted files, or the branch has commits of the user's own.
+   * Kode is busy, the worktree has uncommitted files, or the branch has commits of the user's own.
    */
   async updatePr(row: SessionRow): Promise<void> {
     if (row.kind !== 'review-pr' || row.stage !== 'reviewing-pr' || !row.pr_number || !row.pr_repo || !row.review_sha) {
@@ -2377,8 +2377,8 @@ export class Lifecycle {
     await this.serial(row.id, async () => {
       const cur = this.sessions.row(row.id);
       if (cur.desired !== 'running') throw new HttpError(409, 'This session is archived.');
-      if (cur.status === 'working' || cur.status === 'starting' || this.sessions.runtime(cur.id).busy) throw new HttpError(409, 'Wait for AgentK to finish its turn.');
-      if (cur.status === 'needs_input') throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
+      if (cur.status === 'working' || cur.status === 'starting' || this.sessions.runtime(cur.id).busy) throw new HttpError(409, 'Wait for Kode to finish its turn.');
+      if (cur.status === 'needs_input') throw new HttpError(409, 'Kode is waiting on you in the terminal. Answer it first.');
       if (cur.status === 'exited') throw new HttpError(409, `${agentName(cur)} has exited. Resume the session first.`);
       const n = cur.pr_number!;
       const old = cur.review_sha!;
@@ -2404,7 +2404,7 @@ export class Lifecycle {
       }
       if (sha === old) {
         this.sessions.update(cur.id, { pr_head_sha: sha, pr_new_commits: 0 });
-        // No new commits, but a design AgentK hasn't read: it reads that alone.
+        // No new commits, but a design Kode hasn't read: it reads that alone.
         const news = this.takePrDesignNews(cur.id);
         if (news) {
           this.enqueue(cur.id, 'review-pr-design', { design: news });
@@ -2469,7 +2469,7 @@ export class Lifecycle {
     }
   }
 
-  /** A turn is running (or a gate action is in flight): AgentK working, or Claude asking during a turn. */
+  /** A turn is running (or a gate action is in flight): Kode working, or Claude asking during a turn. */
   private inTurn(row: SessionRow): boolean {
     return row.status === 'working' || this.sessions.runtime(row.id).busy || this.sessions.midTurn(row.id);
   }
@@ -2524,8 +2524,8 @@ export class Lifecycle {
     }
     this.sessions.update(row.id, { auto_run: 1 });
     this.sessions.event(row.id, 'auto-run', row.stage === 'design'
-      ? 'Run to merge on: once you approve the design, AgentK opens the PR and merges it by itself'
-      : 'Run to merge on: AgentK opens the PR and merges it by itself');
+      ? 'Run to merge on: once you approve the design, Kode opens the PR and merges it by itself'
+      : 'Run to merge on: Kode opens the PR and merges it by itself');
     this.core.changed();
     // Findings waiting on the user go as they are, before the gates: Run to merge doesn't wait on anyone.
     // Their PR prompt (the last round's) may have moved the session on.
@@ -2553,7 +2553,7 @@ export class Lifecycle {
   }
 
   /**
-   * A notification of progress AgentK handles by itself (a review arrived, CI failed, merging): left
+   * A notification of progress Kode handles by itself (a review arrived, CI failed, merging): left
    * out while Run to merge is on, which tells the user only when it's done or needs them.
    */
   private notifyProgress(id: string, title: string, body: string): void {
@@ -2668,7 +2668,7 @@ export class Lifecycle {
     if (row.desired === 'running' && (row.status === 'working' || row.status === 'starting' || this.sessions.runtime(row.id).busy)) {
       // Stopping Claude mid-turn could lose its work: onTurnEnd closes the session when the turn ends.
       if (!announced) {
-        this.sessions.event(row.id, 'merged', `PR #${st.number} merged; closing when AgentK finishes`, { url: st.url });
+        this.sessions.event(row.id, 'merged', `PR #${st.number} merged; closing when Kode finishes`, { url: st.url });
         await this.recordPrStats(row, st);
         this.autoRunDone(row, st);
       }

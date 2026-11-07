@@ -70,7 +70,7 @@ export function workSyncText(sync: WorkSync, now = Date.now()): string {
   const source = (name: string, r: WorkSourceResult) => (r.ok ? `${name}: ${r.added ? `${r.added} new` : 'nothing new'}` : `${name}: ${r.error ?? 'failed'}`);
   if (!sync.sources.github && !sync.sources.slack) return 'Sync is off (Settings › Work queue)';
   return [
-    sync.at ? `Synced ${relativeTime(sync.at, now)}` : 'Not synced since AgentK started',
+    sync.at ? `Synced ${relativeTime(sync.at, now)}` : 'Not synced since Kode started',
     sync.github && source('GitHub', sync.github),
     sync.slack ? source('Slack', sync.slack) : sync.sources.slack && !sync.slackAuto && sync.at ? 'Slack: only when you press Sync' : null,
   ].filter(Boolean).join(' · ');

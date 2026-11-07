@@ -52,10 +52,10 @@ function answer(res: ServerResponse, v: Record<string, unknown> | string | null)
   else res.writeHead(204).end();
 }
 
-/** The routes AgentK's mod in Claude calls (src/mod/agentk); see modlink.ts. */
+/** The routes Kode's mod in Claude calls (src/mod/agentk); see modlink.ts. */
 export const MOD_ROUTES = ['/mod/hello', '/mod/poll', '/mod/ack', '/mod/measure', '/mod/held', '/mod/ask', '/mod/ask/done', '/mod/questions', '/mod/learn', '/mod/learn/start', '/mod/meko', '/mod/turn'];
 
-/** The route AgentK's session tools call (`me_kode mcp`, src/server/mcp.ts), answered like the mod's routes. */
+/** The route Kode's session tools call (`me_kode mcp`, src/server/mcp.ts), answered like the mod's routes. */
 export const TOOLS_ROUTE = '/tools';
 
 /** The routes that take a JSON body and answer JSON (`onMod`): the mod's and the session tools'. */
@@ -73,7 +73,7 @@ export interface ModReply {
  * `/hook` events are answered at once and handled afterwards; `/guard` and `/context`
  * requests wait for the answer: JSON for Claude Code, plain text for a harness whose hook prints
  * what it gets (Kiro's guard reason and context), 204 when there is none.
- * The `/mod/*` routes are AgentK's mod in Claude: `onMod` answers them, and may hold a
+ * The `/mod/*` routes are Kode's mod in Claude: `onMod` answers them, and may hold a
  * `/mod/poll` open (its signal aborts when the mod's connection closes). `onMod` also answers
  * `/tools`, the session tools' calls from `me_kode mcp` in any harness's session.
  *

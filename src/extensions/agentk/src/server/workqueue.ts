@@ -85,7 +85,7 @@ export function checkLinks(v: unknown): WorkLink[] {
   for (const t of typed) {
     if (t.length > WORK_LINK_MAX) throw new HttpError(400, `Keep each link to ${WORK_LINK_MAX} characters.`);
     const l = parseWorkLink(t);
-    if (!l) throw new HttpError(400, `"${t.slice(0, 80)}" isn't a link AgentK can read. Paste a GitHub, Jira or Slack link, or any https:// link.`);
+    if (!l) throw new HttpError(400, `"${t.slice(0, 80)}" isn't a link Kode can read. Paste a GitHub, Jira or Slack link, or any https:// link.`);
     if (!out.has(l.key)) out.set(l.key, l);
   }
   return [...out.values()];
@@ -274,7 +274,7 @@ export class WorkQueue {
   byLink(link: unknown): WorkLinkMatch[] {
     if (typeof link !== 'string' || link.length > WORK_LINK_MAX) throw new HttpError(400, 'Give one link as text.');
     const key = workLinkKey(link) ?? parseWorkLink(link)?.key;
-    if (!key) throw new HttpError(400, "That isn't a link AgentK can read.");
+    if (!key) throw new HttpError(400, "That isn't a link Kode can read.");
     const rows = all<ItemRow>(this.db,
       `SELECT w.* FROM work_items w JOIN work_item_links l ON l.item_id = w.id WHERE l.key = ?
         ORDER BY w.status = 'closed', w.closed_at DESC, w.position LIMIT ?`, key, BY_LINK_MAX);

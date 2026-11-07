@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { kiroDefaultAgentName, kiroHome, readKiroAgent } from './kiro.js';
 
 /**
- * The names of the Meko servers a Kiro session can call, for the `agentk` agent's hook matchers
+ * The names of the Meko servers a Kiro session can call, for the `kode` agent's hook matchers
  * (`@<name>`): those named `meko`, or starting with it, in Kiro's MCP config (left out when
  * `disabled`) and in the agent's own `mcpServers` (`agentMcp`); `meko` when there's none. Reads files only.
  */
@@ -37,7 +37,7 @@ export function kiroAgentLoadsMcp(home = kiroHome()): boolean {
 }
 
 /**
- * What keeps Kiro's sessions from Meko's tools that's AgentK's to check, one sentence each: the
+ * What keeps Kiro's sessions from Meko's tools that's Kode's to check, one sentence each: the
  * agent Kiro sessions are built from doesn't load Kiro's MCP config (`loadsMcp`), where Meko puts
  * its server. What Meko's setup for Kiro fixes, as it makes its own agent the default. Kiro's `meko`
  * MCP server itself is Meko's to report (`mekoagents.ts`). Meko's capture hooks aren't checked: they

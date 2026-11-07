@@ -12,13 +12,13 @@ describe("the session tools' files", () => {
     const paths = getPaths(join(tempDir('akl-tools-'), 'ak'));
     expect(toolsReady(paths, true)).toBe(false);
     expect(writeToolFiles(paths)).toBe(true);
-    const server = JSON.parse(readFileSync(toolsMcpConfigPath(paths), 'utf8')).mcpServers.agentk_sessions;
+    const server = JSON.parse(readFileSync(toolsMcpConfigPath(paths), 'utf8')).mcpServers.kode_sessions;
     expect(server).toMatchObject({ type: 'stdio', command: process.execPath });
     expect(server.args.at(-1)).toMatch(/mcpmain\.ts$/);
     const skill = readFileSync(join(toolsPluginDir(paths), 'skills', 'sessions', 'SKILL.md'), 'utf8');
-    expect(skill).toMatch(/^---\nname: agentk-sessions\n/);
+    expect(skill).toMatch(/^---\nname: kode-sessions\n/);
     expect(readFileSync(skillPath(paths), 'utf8')).toBe(skill);
-    expect(JSON.parse(readFileSync(join(toolsPluginDir(paths), '.claude-plugin', 'plugin.json'), 'utf8')).name).toBe('agentk-sessions');
+    expect(JSON.parse(readFileSync(join(toolsPluginDir(paths), '.claude-plugin', 'plugin.json'), 'utf8')).name).toBe('kode-sessions');
     expect([toolsReady(paths, true), toolsReady(paths, false)]).toEqual([true, false]);
   });
 
@@ -39,7 +39,7 @@ describe("the session tools' files", () => {
 });
 
 describe("start_sessions' agent", () => {
-  it('offers every harness AgentK runs (tooldefs.ts imports nothing, so it lists them itself)', () => {
+  it('offers every harness Kode runs (tooldefs.ts imports nothing, so it lists them itself)', () => {
     const start = TOOL_DEFS.find((t) => t.name === 'start_sessions')!;
     const item = (start.inputSchema.properties as { sessions: { items: { properties: { agent: { enum: string[] } } } } }).sessions.items;
     expect(item.properties.agent.enum).toEqual([...HARNESS_IDS]);

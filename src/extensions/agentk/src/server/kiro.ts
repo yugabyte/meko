@@ -9,31 +9,33 @@ import type { Paths } from './paths.js';
 import { writeScript } from './scriptfile.js';
 
 /**
- * Kiro CLI (`kiro-cli`), what AgentK needs of it outside the adapter (src/server/harness/kiro.ts):
- * its home, the agent files AgentK writes there, the guard script, its session store, and its
+ * Kiro CLI (`kiro-cli`), what Kode needs of it outside the adapter (src/server/harness/kiro.ts):
+ * its home, the agent files Kode writes there, the guard script, its session store, and its
  * version. Checked against kiro-cli 2.32.0, whose default engine runs only the selected agent's
  * inline hooks (`agentSpawn`, `userPromptSubmit`, `preToolUse`, `postToolUse`, `stop`), each given
  * the event as JSON on stdin with `hook_event_name`, `cwd` and `session_id`.
  */
 
-/** Variables Kiro sets in its children's environment; an AgentK started inside Kiro must not pass them on. */
+/** Variables Kiro sets in its children's environment; a Kode started inside Kiro must not pass them on. */
 export const KIRO_SESSION_MARKERS = ['KIRO_SESSION_ID', 'KIRO_CLI_IS_CHILD_PROCESS', 'KIRO_CLI_ACP_CLIENT_NAME', 'KIRO_HOST_PID'];
 
-/** The agent Kiro sessions run as (`--agent`), derived from the user's default agent with AgentK's hooks added. */
-export const AGENTK_AGENT = 'agentk';
+/** The agent Kiro sessions run as (`--agent`), derived from the user's default agent with Kode's hooks added. */
+export const AGENTK_AGENT = 'kode';
+/** Their names before Kode was called Kode, which `removeOldKiroAgents` takes away. */
+export const OLD_AGENTS = ['agentk', 'agentk-trusted'] as const;
 /**
- * The agent Kiro 3.0 sessions run as with `[kiro] trust_tools`: `agentk` with a rule that allows
+ * The agent Kiro 3.0 sessions run as with `[kiro] trust_tools`: `kode` with a rule that allows
  * every tool (`ALLOW_ALL`), since Kiro 3.0's engine ignores `--trust-tools`. Only while that's on.
  */
-export const AGENTK_TRUSTED_AGENT = 'agentk-trusted';
-/** The agent Ask AgentK runs as: no tools, no MCP servers, no hooks. */
-export const ASK_AGENT = 'agentk-ask';
+export const AGENTK_TRUSTED_AGENT = 'kode-trusted';
+/** The agent Ask Kode runs as: no tools, no MCP servers, no hooks. */
+export const ASK_AGENT = 'kode-ask';
 /** The agent the plan usage read (`/usage`) runs as, likewise inert. */
-export const USAGE_AGENT = 'agentk-usage';
-/** In the description of every agent file AgentK writes, so it's never mistaken for the user's own. */
-const MARK = 'Written by AgentK, which rewrites it: edit your default agent instead.';
-/** The mark while the product was AgentK Local, on agent files written before the rename. */
-const OLD_MARK = 'Written by AgentK Local, which rewrites it';
+export const USAGE_AGENT = 'kode-usage';
+/** In the description of every agent file Kode writes, so it's never mistaken for the user's own. */
+const MARK = 'Written by Kode, which rewrites it: edit your default agent instead.';
+/** The marks while the product was AgentK, and AgentK Local before, on agent files written then. */
+const OLD_MARKS = ['Written by AgentK, which rewrites it', 'Written by AgentK Local, which rewrites it'];
 
 /** Kiro's home (`KIRO_HOME`, else `~/.kiro`), which every one of its global files is under. */
 export function kiroHome(): string {
@@ -51,10 +53,13 @@ export function kiroGuardScriptPath(paths: Paths): string {
  * write go ahead when the server can't be reached.
  */
 const KIRO_GUARD_SCRIPT = `#!/bin/sh
-# Written by AgentK. Asks the server whether a Kiro file write may go ahead.
-[ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
-reason=$(curl -sf --max-time 3 --unix-socket "$AK_HOOK_SOCK" \\
-  -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
+# Written by Kode. Asks the server whether a Kiro file write may go ahead.
+# AK_*: their names in a session launched before Kode was called Kode.
+[ -n "\${KODE_HOOK_TOKEN:-}" ] || KODE_HOOK_TOKEN=\${AK_HOOK_TOKEN:-}
+[ -n "\${KODE_HOOK_SOCK:-}" ] || KODE_HOOK_SOCK=\${AK_HOOK_SOCK:-}
+[ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
+reason=$(curl -sf --max-time 3 --unix-socket "$KODE_HOOK_SOCK" \\
+  -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
   --data-binary @- http://localhost/guard 2>/dev/null)
 [ -n "$reason" ] || exit 0
 printf '%s\\n' "$reason" >&2
@@ -84,13 +89,13 @@ export function kiroDefaultAgentName(home = kiroHome()): string | null {
   return typeof name === 'string' && name.trim() ? name.trim() : null;
 }
 
-/** Whether an agent's config is one AgentK wrote (its description says so). */
+/** Whether an agent's config is one Kode wrote (its description says so). */
 const ours = (a: Json | null) =>
-  !!a && typeof a.description === 'string' && (a.description.includes(MARK) || a.description.includes(OLD_MARK));
+  !!a && typeof a.description === 'string' && [MARK, ...OLD_MARKS].some((m) => (a.description as string).includes(m));
 
 /**
  * A global agent's config by its name: `<name>.json` in Kiro's agents folder, else the file there
- * whose `name` it is. Never one AgentK wrote.
+ * whose `name` it is. Never one Kode wrote.
  */
 export function readKiroAgent(name: string, home = kiroHome()): Json | null {
   const dir = join(home, 'agents');
@@ -111,7 +116,7 @@ export function readKiroAgent(name: string, home = kiroHome()): Json | null {
 
 /**
  * Kiro's built-in default agent as `kiro-cli agent create --from kiro_default` writes it (kept in
- * the run folder), or, before that has run, the parts of it AgentK's sessions need: every tool, the
+ * the run folder), or, before that has run, the parts of it Kode's sessions need: every tool, the
  * user's MCP servers, and the project files it reads.
  *
  * The export copies the servers in Kiro's MCP config (`settings/mcp.json`) into its `mcpServers`,
@@ -138,9 +143,9 @@ export function builtinKiroAgent(paths: Paths): Json {
 export function exportBuiltinKiroAgent(command: string, paths: Paths): Promise<boolean> {
   const dir = mkdtempSync(join(tmpdir(), 'akl-kiro-'));
   return new Promise<boolean>((resolve) => {
-    execFile(command, ['agent', 'create', 'agentk-base', '--from', 'kiro_default', '--directory', dir],
+    execFile(command, ['agent', 'create', 'kode-base', '--from', 'kiro_default', '--directory', dir],
       { timeout: 20_000, env: { ...process.env, NO_COLOR: '1', EDITOR: 'true', VISUAL: 'true' } }, () => {
-        const a = readJson(join(dir, 'agentk-base.json'));
+        const a = readJson(join(dir, 'kode-base.json'));
         if (a) {
           mkdirSync(paths.run, { recursive: true });
           writeAtomic(join(paths.run, 'kiro-default.json'), JSON.stringify(a, null, 2));
@@ -158,7 +163,7 @@ export interface KiroHook {
   timeout_ms?: number;
 }
 
-/** AgentK's hooks for each Kiro event, added after the base agent's own. */
+/** Kode's hooks for each Kiro event, added after the base agent's own. */
 export type KiroHooks = Partial<Record<'agentSpawn' | 'userPromptSubmit' | 'preToolUse' | 'postToolUse' | 'stop', KiroHook[]>>;
 
 /** Kiro 3.0's permission rule that allows every tool (its `allow-all` preset). */
@@ -170,7 +175,7 @@ function allowsAll(a: Json): boolean {
   return Array.isArray(rules) && rules.some((r) => isDeepStrictEqual(r, ALLOW_ALL));
 }
 
-/** AgentK's session tools in the `agentk` agent: their MCP server and their skill. */
+/** Kode's session tools in the `kode` agent: their MCP server and their skill. */
 export interface KiroTools {
   name: string;
   server: Json;
@@ -179,14 +184,14 @@ export interface KiroTools {
 
 /**
  * The agent Kiro sessions run as: the user's default agent (`base`, which is Meko's `meko-default`
- * when Meko's setup for Kiro ran, so its MCP server and capture hooks carry over) with AgentK's hooks
- * added to each event's list, its own kept first, and AgentK's session tools (`tools`: their MCP
+ * when Meko's setup for Kiro ran, so its MCP server and capture hooks carry over) with Kode's hooks
+ * added to each event's list, its own kept first, and Kode's session tools (`tools`: their MCP
  * server, their skill as a `skill://` resource, and their read-only `list` allowed). Kiro's upgrade
  * bookkeeping is left out. It grants nothing else the base doesn't: `[kiro] trust_tools` is a flag
- * on AgentK's launch (kiroArgs), so a chat someone starts as `agentk` outside AgentK asks as their
- * own agent would (and the tools there say it isn't an AgentK session).
+ * on Kode's launch (kiroArgs), so a chat someone starts as `kode` outside Kode asks as their
+ * own agent would (and the tools there say it isn't a Kode session).
  *
- * With `trustAll`, it's `agentk-trusted` instead, the agent AgentK launches Kiro 3.0 as with
+ * With `trustAll`, it's `kode-trusted` instead, the agent Kode launches Kiro 3.0 as with
  * `[kiro] trust_tools` on: the same, with `ALLOW_ALL` after the base's own permission rules. Kiro
  * 3.0 settles a call by a matching deny, then an ask, before an allow, so the user's own deny and
  * ask rules still hold.
@@ -219,7 +224,7 @@ export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boo
 /** Meko's hook handler for Kiro (its `meko-default` agent's hooks run it). */
 const MEKO_CAPTURE = /kiro-handler\.js/;
 
-/** The agent Ask AgentK runs as: its instructions, and nothing it could act with. */
+/** The agent Ask Kode runs as: its instructions, and nothing it could act with. */
 export function askAgent(prompt: string, name = ASK_AGENT): Json {
   return {
     name, description: MARK, prompt, mcpServers: {}, tools: [], toolAliases: {}, allowedTools: [], resources: [],
@@ -260,9 +265,9 @@ function hookLines(hooks: unknown): string[] {
 }
 
 /**
- * Whether an agent file runs what `agent` would, in the parts AgentK owns, whichever format it's
+ * Whether an agent file runs what `agent` would, in the parts Kode owns, whichever format it's
  * in: the same hooks (with this home's script paths), the same MCP servers, and every tool allowed
- * only when `agent` allows it (`agentk-trusted`, which Kiro 3.0 doesn't upgrade, since it has
+ * only when `agent` allows it (`kode-trusted`, which Kiro 3.0 doesn't upgrade, since it has
  * `permissions`: should a later Kiro drop the rule, it's written again).
  */
 function runsAsWritten(file: Json, agent: Json): boolean {
@@ -271,15 +276,15 @@ function runsAsWritten(file: Json, agent: Json): boolean {
 }
 
 /**
- * Writes a global agent file AgentK owns, only when its content changed (so a running Kiro isn't
+ * Writes a global agent file Kode owns, only when its content changed (so a running Kiro isn't
  * made to reload it for nothing). True when it wrote. Throws when the folder can't be written.
  *
- * With `written` (a file of AgentK's own that keeps a copy of what it last wrote), a file that
- * differs is left alone while AgentK would still write what that copy holds and the file is still
- * AgentK's agent running the same hooks and MCP servers: Kiro 3.0 upgrades an agent file in place
- * to its own format (`kiro-cli agent upgrade`), and writing AgentK's again over it would have every
- * running session reload it, and fall back to Kiro's default agent without AgentK's hooks and
- * tools. Another AgentK home's agent (other script paths), or an older release's (other hooks), is
+ * With `written` (a file of Kode's own that keeps a copy of what it last wrote), a file that
+ * differs is left alone while Kode would still write what that copy holds and the file is still
+ * Kode's agent running the same hooks and MCP servers: Kiro 3.0 upgrades an agent file in place
+ * to its own format (`kiro-cli agent upgrade`), and writing Kode's again over it would have every
+ * running session reload it, and fall back to Kiro's default agent without Kode's hooks and
+ * tools. Another Kode home's agent (other script paths), or an older release's (other hooks), is
  * written over.
  */
 export function writeKiroAgent(agent: Json, home = kiroHome(), written?: string): boolean {
@@ -302,21 +307,32 @@ export function writeKiroAgent(agent: Json, home = kiroHome(), written?: string)
 }
 
 /**
- * Removes the agents AgentK wrote in Kiro's home (uninstall). Ask AgentK's `agentk-ask` is a
- * workspace agent in AgentK's own run folder, which goes with the home.
+ * Removes the agents Kode wrote in Kiro's home (uninstall). Ask Kode's `kode-ask` is a
+ * workspace agent in Kode's own run folder, which goes with the home.
  */
 export function removeKiroAgent(home = kiroHome()): void {
   for (const name of [AGENTK_AGENT, AGENTK_TRUSTED_AGENT]) rmSync(join(home, 'agents', `${name}.json`), { force: true });
+  removeOldKiroAgents(home);
 }
 
-/** Whether a global agent file AgentK wrote is there (and still AgentK's). */
+/**
+ * Removes the agent files Kode wrote under its names before it was called Kode (`agentk`,
+ * `agentk-trusted`), when they're still Kode's: sessions run as `kode` now. True when it removed one.
+ */
+export function removeOldKiroAgents(home = kiroHome()): boolean {
+  let removed = false;
+  for (const name of OLD_AGENTS) removed = removeOwnKiroAgent(name, home) || removed;
+  return removed;
+}
+
+/** Whether a global agent file Kode wrote is there (and still Kode's). */
 export function ownKiroAgentExists(name: string, home = kiroHome()): boolean {
   return ours(readJson(join(home, 'agents', `${name}.json`)));
 }
 
 /**
- * Removes a global agent file AgentK wrote when it's there and still AgentK's (`agentk-trusted`
- * once `[kiro] trust_tools` is off), and AgentK's copy of what it last wrote there (`written`) in
+ * Removes a global agent file Kode wrote when it's there and still Kode's (`kode-trusted`
+ * once `[kiro] trust_tools` is off), and Kode's copy of what it last wrote there (`written`) in
  * any case. True when it removed the agent file.
  */
 export function removeOwnKiroAgent(name: string, home = kiroHome(), written?: string): boolean {
@@ -425,7 +441,7 @@ export interface KiroMekoCall {
   id: string;
   /** The Meko tool (`context_search`). */
   tool: string;
-  /** When its turn started (its prompt), or when AgentK read it when the read didn't see the prompt. */
+  /** When its turn started (its prompt), or when Kode read it when the read didn't see the prompt. */
   at: number;
   input: Json;
   text: string;
@@ -534,7 +550,7 @@ export function readKiroRun(stdout: string): { text: string; ok: boolean; sessio
 
 /**
  * The arguments for reading Kiro's plan allowance: its `/usage` command in a one-shot run, which
- * bills nothing, as the inert `agentk-usage` agent (written in the run's folder), so the user's
+ * bills nothing, as the inert `kode-usage` agent (written in the run's folder), so the user's
  * default agent, its MCP servers and its hooks aren't loaded for it.
  */
 export function kiroUsageArgs(): string[] {
@@ -647,7 +663,7 @@ function inDays(n: string | undefined, now: number): string | null {
 /** The session deletes still running, for `kiroDeletesSettled`. */
 const deleting = new Set<Promise<void>>();
 
-/** Deletes one of Kiro's saved sessions (an Ask AgentK run's), in the background; never throws. */
+/** Deletes one of Kiro's saved sessions (an Ask Kode run's), in the background; never throws. */
 export function deleteKiroSession(command: string, id: string, cwd: string): void {
   if (!SESSION_ID.test(id)) return;
   const done = new Promise<void>((resolve) => {
