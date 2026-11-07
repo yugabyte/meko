@@ -44,7 +44,6 @@ import type {
   Metrics,
   Passage,
   PromotedMemory,
-  ProvisionStatus,
   SearchAnswer,
   ServerStatus,
   UpdateStatus,
@@ -162,7 +161,6 @@ export const api = {
   },
   usage: (id: string, days: number) => request<Usage>("GET", `/datapacks/${id}/usage?days=${days}`),
   server: () => request<ServerStatus>("GET", "/server"),
-  connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
 
   // How Meko takes this browser (src/meko/docs/web-ui.md): local or remote access, with no login.
   authStatus: () => request<AuthStatus>("GET", "/auth/status"),

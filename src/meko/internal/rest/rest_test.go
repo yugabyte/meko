@@ -351,7 +351,7 @@ func TestRESTNeedsACredential(t *testing.T) {
 	}
 }
 
-// With auth off, the Connect page doesn't hand the client token to callers that sent none.
+// With auth off, provision-status doesn't hand the client token to callers that sent none.
 func TestProvisionStatusWithAuthOff(t *testing.T) {
 	e := testenv.Start(t, testenv.Options{Auth: "none"})
 	resp, err := http.Get(e.URL + "/api/v1/datapacks/" + e.DatapackID + "/provision-status")

@@ -5,7 +5,7 @@
 
 import { useEffect } from "react";
 import { CheckCircle2, Circle } from "lucide-react";
-import { navigate, type Tab } from "../lib/route";
+import { AGENTS, navigate, type Route } from "../lib/route";
 import type { Datapack, Metrics } from "../lib/types";
 import { Card, cx } from "./ui";
 
@@ -28,15 +28,17 @@ function markStarted(id: string) {
 }
 
 export function GetStarted({ datapack, metrics }: { datapack: Datapack; metrics: Metrics }) {
-  const steps: { label: string; done: boolean; tab: Tab }[] = [
-    { label: "Connect an agent", done: metrics.agent_count > 0, tab: "connect" },
+  const id = datapack.datapack_id;
+  // Agents connect to Meko, not to a datapack, so that step opens the Agents page.
+  const steps: { label: string; done: boolean; to: Route }[] = [
+    { label: "Connect an agent", done: metrics.agent_count > 0, to: AGENTS },
     {
       label: "Add a memory",
       done: (datapack.memory_count ?? 0) + (datapack.collective_memory_count ?? 0) > 0,
-      tab: "memories",
+      to: { datapackId: id, tab: "memories" },
     },
-    { label: "Upload a file", done: metrics.kb_file_count > 0, tab: "knowledge" },
-    { label: "Run a search", done: metrics.total_requests > 0, tab: "search" },
+    { label: "Upload a file", done: metrics.kb_file_count > 0, to: { datapackId: id, tab: "knowledge" } },
+    { label: "Run a search", done: metrics.total_requests > 0, to: { datapackId: id, tab: "search" } },
   ];
   const left = steps.filter((s) => !s.done).length;
   useEffect(() => {
@@ -56,7 +58,7 @@ export function GetStarted({ datapack, metrics }: { datapack: Datapack; metrics:
           <button
             key={s.label}
             type="button"
-            onClick={() => navigate({ datapackId: datapack.datapack_id, tab: s.tab })}
+            onClick={() => navigate(s.to)}
             className={cx(
               "flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm hover:bg-accent",
               s.done && "text-muted-foreground",

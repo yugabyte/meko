@@ -380,11 +380,6 @@ export interface ProjectStats {
   artifact_bytes: number;
 }
 
-export interface ProvisionStatus {
-  mcp_server_url: string;
-  mcp_api_key: string;
-}
-
 export interface MemoryHit {
   id: string;
   memory: string;
