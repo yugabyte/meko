@@ -328,14 +328,15 @@ func contextEngineStep(e memory.EngineStatus) (stepKind, string) {
 	return stepWarn, text
 }
 
-// linkRows are where people (the web UI) and agents (MCP, and the API) reach Meko, and the Meko
-// Cloud it's linked to (cloud).
+// linkRows are where people (the web UI) and agents (MCP, and on the next line, unlabeled, the
+// REST API) reach Meko, and the Meko Cloud it's linked to (cloud).
 func linkRows(st server.StatusReply, cloud linkRow) []linkRow {
 	var rows []linkRow
 	if w := st.Web; w != nil && w.URL != "" && w.Enabled {
 		rows = append(rows, linkRow{"Web UI", w.URL, webAccessNote(w)})
 	}
-	return append(rows, linkRow{"Agents", fmt.Sprintf("http://127.0.0.1:%d/mcp", st.Port), "MCP and API"}, cloud)
+	return append(rows, linkRow{"Agents", fmt.Sprintf("http://127.0.0.1:%d/mcp", st.Port), "MCP"},
+		linkRow{"", fmt.Sprintf("http://127.0.0.1:%d/api/v1", st.Port), "REST API"}, cloud)
 }
 
 // extensionTitle is how a known extension is named to people (Kode), else its name.
@@ -372,7 +373,8 @@ func extensionState(name string, k stepKind, state, line, format string) (stepKi
 // printStatusVerbose is status --verbose: everything the server and this install say.
 func printStatusVerbose(l paths.Layout, st server.StatusReply, exts func() extensionResults, stdout io.Writer) {
 	fmt.Fprintf(stdout, "Meko is running\n")
-	fmt.Fprintf(stdout, "  Agents:         http://127.0.0.1:%d/mcp (MCP and API; the CLI uses it too)\n", st.Port)
+	fmt.Fprintf(stdout, "  Agents:         http://127.0.0.1:%d/mcp (MCP; the CLI uses it too)\n", st.Port)
+	fmt.Fprintf(stdout, "  API:            http://127.0.0.1:%d/api/v1 (REST)\n", st.Port)
 	printWeb(stdout, st.Web)
 	fmt.Fprintf(stdout, "  Version:        %s\n", st.Version)
 	fmt.Fprintf(stdout, "  PID:            %d\n", st.PID)

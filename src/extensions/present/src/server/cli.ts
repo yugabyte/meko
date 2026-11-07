@@ -15,7 +15,7 @@ import { DeckStore } from './decks.js';
 import { Jobs } from './jobs.js';
 import { MekoClient } from './meko.js';
 import { getPaths, MEKO_COMMANDS, refuseOtherMeko, withLocalBin, type Paths } from './paths.js';
-import { runs, statusLines } from './status.js';
+import { headline, runs, statusLines } from './status.js';
 import { forMekoSummary, summaryRow } from './summary.js';
 import { Runs } from './runs.js';
 import { broadcast, buildServer, findWebDir, type Core } from './server.js';
@@ -206,7 +206,9 @@ async function status(paths: Paths): Promise<void> {
     // gone since
   }
   const facts = { version: version(), pid, startedAt, answers: await socketAnswers(paths.webSock), claude: onPath('claude'), home: paths.home, now: Date.now() };
-  for (const line of statusLines(facts)) console.log(line);
+  // meko status runs it so (MEKO_SUMMARY=1) for its Present row: the headline alone.
+  if (forMekoSummary()) console.log(headline(facts));
+  else for (const line of statusLines(facts)) console.log(line);
   if (!runs(facts)) process.exitCode = 3;
 }
 

@@ -35,9 +35,18 @@ export const style = {
   dim: (s: string) => paint('2', s),
   green: (s: string) => paint('32', s),
   yellow: (s: string) => paint('33', s),
+  /** Meko's Warning: bold yellow, since some themes draw yellow pale on white. */
+  warn: (s: string) => paint('1;33', s),
   red: (s: string) => paint('31', s),
   blue: (s: string) => paint(blueCode(), s),
+  /** A URL blue and underlined, and an OSC 8 link, which terminals that know it make clickable: Meko's `spin.Link`. */
+  link: (url: string) => (useColor(process.stdout) ? `\x1b]8;;${url}\x1b\\\x1b[4m\x1b[${blueCode()}m${url}\x1b[0m\x1b]8;;\x1b\\` : url),
+  /** The call to action, white on blue with a space on each side: Meko's `spin.CTA`. */
+  cta: (s: string) => (useColor(process.stdout) ? `\x1b[1;97;44m ${s} \x1b[0m` : s),
 };
+
+/** Whether stdout gets colors: a terminal, without NO_COLOR, and TERM isn't dumb. */
+export const stdoutColor = () => useColor(process.stdout);
 
 const MARK = {
   ok: () => style.green(utf8 ? '✓' : 'ok'),

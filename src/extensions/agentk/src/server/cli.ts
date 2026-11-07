@@ -28,8 +28,8 @@ import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from '
 import { HEALTHY_MS, pruneSnapshots, snapshotBeforeMigrating, switchedAway, updatedFrom, Updates } from './updates.js';
 import { probeLocalMeko } from './mekolocal.js';
 import { forMekoSummary, stopRowText, summaryRow } from './summary.js';
-import { formatStatus, serverRuns, type StatusFacts } from './statusview.js';
-import { style } from './tty.js';
+import { formatStatus, headline, PLAIN, serverRuns, type Paint, type StatusFacts } from './statusview.js';
+import { stdoutColor, style } from './tty.js';
 import {
   checkMove, finishMove, HomeMove, MEKO_COMMANDS, mekoDirOf, moveHome, readJournal, refuseOtherMeko, rememberMekoHome, stopAll, tmpHomeWarning,
 } from './movehome.js';
@@ -313,6 +313,17 @@ async function status(): Promise<void> {
   // Asked first, while the rest is read: meko status gives the whole command 3 s, and a server
   // that's only slow to answer must still be told from a stopped one (the lease, below).
   const probing = probeLocal(paths, STATUS_PROBE_MS);
+  if (forMekoSummary()) {
+    // Meko runs it so (MEKO_SUMMARY=1) for meko status's Kode row, and an update deciding whether
+    // to restart Kode: the headline alone, which needs only the server's answer and the lease, so
+    // the rest isn't read inside meko status's 3 s. Meko reads the exit code: 3 when no server runs
+    // this home, as Present's. One holding the lease that was only slow to answer runs.
+    const probe = await probing;
+    const leasePid = heldLease(paths.lock)?.pid ?? null;
+    console.log(headline({ version: version(), probe, leasePid, now: Date.now() }));
+    if (!serverRuns({ probe, leasePid })) process.exitCode = 3;
+    return;
+  }
   const web = await webUrl(paths, cfg);
   // Only this home's services: another install on the account has its own.
   const svc = servicesFor(paths.home);
@@ -355,10 +366,13 @@ async function status(): Promise<void> {
     logs: join(paths.logs, 'server.log'),
     now: Date.now(),
   };
-  const paint = { ok: style.green, warn: style.yellow, fail: style.red };
-  for (const line of formatStatus(facts, (k, m) => paint[k](m))) console.log(line);
-  // Meko reads the exit code (meko status, and an update deciding whether to restart Kode): 3 when
-  // no server runs this home, as Present's. One holding the lease that was only slow to answer runs.
+  const marks = { ok: style.green, warn: style.warn, fail: style.red };
+  const paint: Paint = stdoutColor()
+    ? { color: true, mark: (k, m) => marks[k](m), bold: style.bold, dim: style.dim, link: style.link, cta: style.cta, blue: style.blue }
+    : PLAIN;
+  for (const line of formatStatus(facts, paint, process.stdout.isTTY === true)) console.log(line);
+  // 3 when no server runs this home, as Present's, and as above. One holding the lease that was
+  // only slow to answer runs. (A Meko from before MEKO_SUMMARY reads this exit code.)
   if (!serverRuns(facts)) process.exitCode = 3;
 }
 

@@ -130,7 +130,8 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
 	want(t, "install", code, 0, out+errs, "  ✓ Server          started in ")
-	want(t, "install's agents link", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
+	want(t, "install's agents links", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP\n"+
+		"          http://127.0.0.1:"+port+"/api/v1 · REST API\n")
 	want(t, "install's next steps", code, 0, out, "meko extension install kode")
 	want(t, "install's way out", code, 0, out,
 		"  meko status                    check on Meko at any time · meko uninstall removes it\n")
@@ -382,7 +383,8 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 		t.Errorf("registry %+v", reg.Entries)
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Extension:      kode, running (ext status)")
+	// status runs the extension's status with MEKO_SUMMARY set, for its headline alone.
+	want(t, "status", code, 0, out, "Extension:      kode, running (ext status as a row)")
 	// It isn't Meko's release, so delete runs its uninstall and forgets it, and Meko leaves the
 	// command (the fake's uninstall leaves it too; Kode's own removes its ~/.local/bin links).
 	code, out, _ = run("extension", "delete", "kode", "--force", "--data-dir", dir)

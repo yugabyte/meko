@@ -236,7 +236,8 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 	}
 	want(t, "status", code, 0, out, "  ✓ Kode            running, Kode 1.0\n"+
 		"  ! Present         didn't answer in 2s (meko present status)\n")
-	want(t, "status's links", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
+	want(t, "status's links", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP\n"+
+		"          http://127.0.0.1:"+port+"/api/v1 · REST API\n")
 	want(t, "status's Cloud", code, 0, out, "\n  Cloud   not linked\n")
 	want(t, "status's next steps", code, 0, out, "More detail: meko status --verbose\n\nNext:\n  meko ui ")
 
@@ -255,6 +256,7 @@ func TestStartStatusStop(t *testing.T) {
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, 0, out, "Children:       none")
+	want(t, "status's API", code, 0, out, "  API:            http://127.0.0.1:"+port+"/api/v1 (REST)\n")
 	want(t, "status's auth", code, 0, out, "Auth:           token")
 	want(t, "status's service", code, 0, out, "Service:        none (meko install sets one up)")
 	want(t, "status's updates", code, 0, out, "Updates:        none (a build from source)")
@@ -271,7 +273,8 @@ func TestStartStatusStop(t *testing.T) {
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "short status's headline", code, 0, out, "\n  ● Meko dev is running · pid ")
 	want(t, "short status's service", code, 0, out, "  ! Service         none (meko install sets one up)\n")
-	want(t, "short status's link for agents", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
+	want(t, "short status's links for agents", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP\n"+
+		"          http://127.0.0.1:"+port+"/api/v1 · REST API\n")
 	want(t, "short status's link for people", code, 0, out, "\n  Web UI  http://127.0.0.1:")
 	if strings.Contains(out, "│") {
 		t.Errorf("short status draws a box:\n%s", out)

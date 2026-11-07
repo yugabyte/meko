@@ -51,7 +51,8 @@ func (r report) running(text, note string) {
 }
 
 // linkRow is a line of links: where people or agents reach Meko. url is "" for a row that has only
-// a note ("Cloud    not linked").
+// a note ("Cloud    not linked"), and label is "" for a second URL under the row above it (the
+// REST API's under Agents).
 type linkRow struct{ label, url, note string }
 
 // links prints the link rows, after a blank line, their labels dim and aligned, and each URL
