@@ -386,7 +386,8 @@ async function turn(text) {
 // `review-reports.json` in the fake's dir maps a pass name to its report (default LGTM), and
 // `review-scores.json` a step id to its score (default confirmed at 90); a `review-skip` file lists
 // steps to leave unreported, and `review-skip-once` steps to leave unreported only the first time
-// they're asked for. Every call and its answer go to `review-calls.jsonl`.
+// they're asked for. Every call and its answer go to `review-calls.jsonl`, and each call as it starts
+// to `review-starts.jsonl`.
 async function reviewSteps(text) {
   const read = (f, d) => {
     try {
@@ -409,6 +410,7 @@ async function reviewSteps(text) {
     const input = tool === 'review_score'
       ? { step, score: read('review-scores.json', {})[step] ?? { read: ['src/a.ts:1-5'], refutation: '', verdict: 'confirmed', confidence: 90, reason: 'Read it; it holds.' } }
       : { step, report: read('review-reports.json', {})[step.split(':')[1]] ?? { summary: 'LGTM', findings: [] } };
+    appendFileSync(join(dir, 'review-starts.jsonl'), JSON.stringify({ step, tool, at: Date.now() }) + '\n');
     const r = await modPost('/tools', { v: 1, tool, input }).catch((e) => ({ status: 0, text: String(e) }));
     appendFileSync(join(dir, 'review-calls.jsonl'), JSON.stringify({ step, tool, status: r.status, text: r.text }) + '\n');
   }

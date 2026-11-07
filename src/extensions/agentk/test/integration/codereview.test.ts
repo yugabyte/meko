@@ -670,8 +670,12 @@ describe('code review before the PR (real session host + git, fake claude runnin
     // On a timeout, what the review's session was asked last and what it answered say where it stopped.
     const waiting = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.codeReview?.state === 'triage', 30000, 'the findings to wait on you')
       .catch((e: Error) => {
-        const child = all<{ claude_session_id: string }>(env.core.db, 'SELECT claude_session_id FROM sessions WHERE parent_id = ?', id).at(-1);
+        const child = all<{ id: string; claude_session_id: string }>(env.core.db, 'SELECT id, claude_session_id FROM sessions WHERE parent_id = ?', id).at(-1);
         const asked = child ? prompts(child.claude_session_id).slice(-2) : [];
+        const session = child ? env.core.sessions.get(child.id) : null;
+        const events = child ? all(env.core.db, 'SELECT kind, text, at FROM session_events WHERE session_id = ? ORDER BY at DESC LIMIT 8', child.id) : [];
+        const started = existsSync(join(env.fakeDir, 'review-starts.jsonl')) ? readFileSync(join(env.fakeDir, 'review-starts.jsonl'), 'utf8') : '';
+        e.message += `\nthe review session: ${JSON.stringify({ status: session?.status, events, at: Date.now() })}\nits calls started: ${started}`;
         const calls = existsSync(join(env.fakeDir, 'review-calls.jsonl')) ? readFileSync(join(env.fakeDir, 'review-calls.jsonl'), 'utf8') : '';
         throw new Error(`${e.message}\nthe review session was asked last: ${JSON.stringify(asked)}\nits tool calls: ${calls}`);
       });
