@@ -201,7 +201,7 @@ answer, isn't busy. An update someone asks for doesn't wait.
 
 | Decision | Why | Weighed |
 |---|---|---|
-| A Meko extension with its own pages at `/ext/present/`, on a unix socket, as AgentK | One port and one login for everything Meko runs; one package, one release train | Pages in Meko's web UI (two apps on two trains); its own port (a second login) |
+| A Meko extension with its own pages at `/ext/present/`, on a unix socket, as Kode | One port and one login for everything Meko runs; one package, one release train | Pages in Meko's web UI (two apps on two trains); its own port (a second login) |
 | A graph of scenes, linear inside | One model for linear, tree and graph decks, readable on a map | A graph of single slides; linked decks |
 | Structured blocks, never model-written HTML | On-brand, editable by hand, safe to render | Free HTML per slide |
 | Content from any datapack; names only for Present's own | Teams keep content where they already do | `present/story/...` datapacks |
@@ -214,7 +214,7 @@ answer, isn't busy. An update someone asks for doesn't wait.
 | `_busy` makes Meko's automatic update wait during a talk | A restart would drop the console and the audience's window mid-talk | Updating whenever a check finds one; turning automatic updates off before each talk |
 | Meko's Meko Cloud link, read from `meko token --json` and followed on Meko's notice; Meko Cloud reached through the Meko on this computer | One place links Meko Cloud for every extension, and its key stays in Meko | A key in Present's own `config.json`; Meko handing extensions the link's key |
 | Drafts name their Meko; another Meko's can be played, not edited | A deck's datapack exists in one Meko only; a talk under way outlives a change of the link | Hiding such drafts; letting their save fail with Meko's "not found" |
-| One build job packages every platform | No native modules: only the bundled Node differs | AgentK's per-platform builds (needed for node-pty) |
+| One build job packages every platform | No native modules: only the bundled Node differs | Kode's per-platform builds (needed for node-pty) |
 
 ## Not built yet
 

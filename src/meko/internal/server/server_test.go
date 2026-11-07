@@ -242,7 +242,7 @@ func TestListenTakenPort(t *testing.T) {
 	port := tcpPort(t, ln)
 	_, err = Listen(port)
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("port %d is in use", port)) ||
-		!strings.Contains(err.Error(), "--port") || !strings.Contains(err.Error(), "AgentK") {
+		!strings.Contains(err.Error(), "--port") || !strings.Contains(err.Error(), "Kode") {
 		t.Fatalf("got %v", err)
 	}
 }

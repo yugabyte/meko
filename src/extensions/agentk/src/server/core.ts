@@ -122,7 +122,7 @@ const LOCAL_MEKO_RECHECK_MS = 30_000;
 const TERM_THEME_KEY = 'term-theme';
 
 /**
- * Which Meko account AgentK uses, for whether a change forgets the account's invites: Meko's
+ * Which Meko account Kode uses, for whether a change forgets the account's invites: Meko's
  * `account` for the Meko Cloud link it keeps, '' while it keeps none (the Meko on this computer
  * alone), the same on any port or token. Null with no Meko.
  */
@@ -166,10 +166,10 @@ export class Core extends EventEmitter {
   readonly prReview: PrReviewService;
   readonly githubLinks: GithubLinkService;
   readonly workQueue: WorkQueue;
-  readonly askAgentk: AskAgentk;
-  /** AgentK's session tools: the calls `me_kode mcp` makes from sessions. */
+  readonly askKode: AskAgentk;
+  /** Kode's session tools: the calls `me_kode mcp` makes from sessions. */
   readonly tools: SessionTools;
-  /** AgentK's code review before a task's PR opens (review/runner.ts). */
+  /** Kode's code review before a task's PR opens (review/runner.ts). */
   readonly reviews: CodeReviews;
   readonly limits: PlanLimitsStore;
   /** Kiro's plan allowance for the rail. */
@@ -178,16 +178,16 @@ export class Core extends EventEmitter {
   readonly knowledge: KnowledgeService;
   readonly workshops: WorkshopService;
   readonly mekoTools: MekoTools;
-  /** Whether Meko's capture in Claude Code's sessions reaches AgentK's Meko (MekoStatus.claude, with its MCP server from `mekoAgents`). */
+  /** Whether Meko's capture in Claude Code's sessions reaches Kode's Meko (MekoStatus.claude, with its MCP server from `mekoAgents`). */
   readonly claudeMeko: MekoClaudeWatch;
   /** Meko's list of the agents on this computer, which new sessions are gated on (mekoagents.ts). */
   readonly mekoAgents: MekoAgents;
-  /** The agents AgentK connected to Meko by itself, once each (`HarnessStatus.autoConnect`). */
+  /** The agents Kode connected to Meko by itself, once each (`HarnessStatus.autoConnect`). */
   readonly autoConnect: MekoAutoConnect;
-  /** Meko's Context Gaps (the questions it couldn't answer), on the Meko on this computer while AgentK uses it. */
+  /** Meko's Context Gaps (the questions it couldn't answer), on the Meko on this computer while Kode uses it. */
   readonly mekoQuestions: MekoQuestions;
   readonly callHome: CallHomeService;
-  /** The Claude Code sessions launch with: its version (for AgentK's mod) and updating it. */
+  /** The Claude Code sessions launch with: its version (for Kode's mod) and updating it. */
   readonly claudeCode: ClaudeCode;
   /** gh: whether it's usable, the gate of every action that works on GitHub, and the GitHub dialog's install and sign-in. */
   readonly gh: GhService;
@@ -205,7 +205,7 @@ export class Core extends EventEmitter {
   private localReader: LocalMekoReader;
   /** When a failed connection last read the local Meko again. */
   private localRecheckAt = 0;
-  /** The Meko account AgentK last used (`mekoAccountOf`), kept through a spell with no Meko. */
+  /** The Meko account Kode last used (`mekoAccountOf`), kept through a spell with no Meko. */
   private mekoAccount: string | null = null;
   /** `refreshMeko` has read the Meko on this computer once: before that, nothing was connected to it. */
   private mekoRead = false;
@@ -241,12 +241,12 @@ export class Core extends EventEmitter {
       const m = resolveMeko();
       return { MEKO_MCP_URL: m.url, MEKO_API_KEY: m.apiKey };
     }, this.log, undefined, (ok, ms) => this.record('INSERT INTO meko_capture_runs(at, ok, ms) VALUES (?, ?, ?)', Date.now(), ok ? 1 : 0, ms));
-    // AgentK's own Meko calls, for the usage report (counts and sizes, never their content).
+    // Kode's own Meko calls, for the usage report (counts and sizes, never their content).
     this.meko.onCall = (r) => this.record('INSERT INTO meko_agentk_calls(at, tool, input_chars, result_chars, ok, ms, learn_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
       r.at, r.tool, r.inputChars, r.resultChars, r.ok ? 1 : 0, r.ms, r.tag);
     this.localReader = new LocalMekoReader(o.localMeko ?? (() => probeLocalMeko(this.mekoHome())));
     // Meko restarted on another port, or with a new token, or its Meko Cloud link changed while
-    // AgentK didn't hear: read it again before the retry.
+    // Kode didn't hear: read it again before the retry.
     this.meko.onConnectFail = () => this.recheckMeko();
     this.services = o.services ?? (() => servicesFor(o.paths.home));
     this.legacyTmuxPanes = o.legacyTmuxPanes ?? (() => legacyTmuxPanes(o.paths));
@@ -301,7 +301,7 @@ export class Core extends EventEmitter {
       githubTitle: async (repo, number) => (await github.issueOrPr(homedir(), repo, number)).title,
       settings: () => this.cfg.workQueue,
     });
-    this.askAgentk = new AskAgentk({
+    this.askKode = new AskAgentk({
       config: () => this.cfg,
       cwd: join(this.paths.run, 'ask'),
       projects: () => this.actionProjects(),
@@ -347,7 +347,7 @@ export class Core extends EventEmitter {
     this.knowledge = new KnowledgeService(this, mekoApi);
   }
 
-  /** A usage row (Meko, Ask AgentK) that may come after stop() closed the database: dropped then. */
+  /** A usage row (Meko, Ask Kode) that may come after stop() closed the database: dropped then. */
   private record(sql: string, ...args: (string | number | null)[]): void {
     if (this.stopped) return;
     try {
@@ -393,7 +393,7 @@ export class Core extends EventEmitter {
   }
 
   /**
-   * Whether Kiro's sessions reach AgentK's Meko (`MekoStatus.kiro`): its MCP server from Meko's
+   * Whether Kiro's sessions reach Kode's Meko (`MekoStatus.kiro`): its MCP server from Meko's
    * list, then whether the agent Kiro sessions are built from loads it. Null while Meko is off or
    * Kiro isn't available. Kiro's agent is read again at most every AGENT_MEKO_TTL_MS, or when `force`d.
    */
@@ -406,8 +406,8 @@ export class Core extends EventEmitter {
   }
 
   /**
-   * Which Meko OpenCode's sessions use (`MekoStatus.opencode`): AgentK's, which it adds to their
-   * config, or a `meko` server of OpenCode's own (`Harnesses.openCodeOwnMeko`), which AgentK leaves
+   * Which Meko OpenCode's sessions use (`MekoStatus.opencode`): Kode's, which it adds to their
+   * config, or a `meko` server of OpenCode's own (`Harnesses.openCodeOwnMeko`), which Kode leaves
    * alone. Null while Meko is off or OpenCode isn't available. Read again at most every AGENT_MEKO_TTL_MS.
    */
   openCodeMeko(): MekoStatus['opencode'] {
@@ -441,7 +441,7 @@ export class Core extends EventEmitter {
     return go;
   }
 
-  /** The open projects with their sessions, as Ask AgentK and the session tools see them (their GitHub repo not read yet). */
+  /** The open projects with their sessions, as Ask Kode and the session tools see them (their GitHub repo not read yet). */
   actionProjects(): ActionProject[] {
     return projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) }));
   }
@@ -523,13 +523,13 @@ export class Core extends EventEmitter {
     void this.syncInvites();
   }
 
-  /** The Meko data folder AgentK's home is in (movehome.ts), else `[meko] home`; null lets `meko` pick. */
+  /** The Meko data folder Kode's home is in (movehome.ts), else `[meko] home`; null lets `meko` pick. */
   mekoHome(): string | null {
     return mekoDirOf(this.paths.home) ?? (this.cfg.meko.home || null);
   }
 
   /**
-   * Reads the Meko on this computer again after a sign that it changed under AgentK (a failed MCP
+   * Reads the Meko on this computer again after a sign that it changed under Kode (a failed MCP
    * connection), at most once every LOCAL_MEKO_RECHECK_MS.
    */
   private async recheckMeko(): Promise<void> {
@@ -539,10 +539,10 @@ export class Core extends EventEmitter {
   }
 
   /**
-   * Reads the Meko on this computer again. When that changes what AgentK shows (whether there's a
-   * Meko, its URL, the web app it names), shows it; when it changes the Meko AgentK uses (it started,
+   * Reads the Meko on this computer again. When that changes what Kode shows (whether there's a
+   * Meko, its URL, the web app it names), shows it; when it changes the Meko Kode uses (it started,
    * stopped, has a new port or token, or another account behind it: Meko linked, unlinked or
-   * relinked Meko Cloud), reconnects. On the same account it keeps the invites and shares AgentK
+   * relinked Meko Cloud), reconnects. On the same account it keeps the invites and shares Kode
    * knows; on another it forgets them, as `mekoChanged` does. A spell with no Meko at all (the local
    * Meko stopped) isn't a change of account.
    */
@@ -564,7 +564,7 @@ export class Core extends EventEmitter {
     const reconnect = !first && (before.url !== after.url || before.apiKey !== after.apiKey || switched);
     if (account !== null) this.mekoAccount = account;
     if (!reconnect && status.webUrl === shown.webUrl && status.url === shown.url) {
-      // Installed, or gone, without changing the Meko AgentK uses: the install banner follows it.
+      // Installed, or gone, without changing the Meko Kode uses: the install banner follows it.
       // `meko` removed after it was found is seen only at the next read (a restart, Settings, or
       // Meko's notice), since the minute look stops once it's found (`lookForLocalMeko`).
       if (localMeko().state !== wasState) this.changed();
@@ -643,7 +643,7 @@ export class Core extends EventEmitter {
       gh: this.gh.status(),
       harnesses,
       // Still offered while an agent that's turned on hasn't answered yet (just after a start).
-      askAgentk: this.cfg.askAgentk.enabled && harnesses.some((h) => h.available || !h.checked),
+      askKode: this.cfg.askKode.enabled && harnesses.some((h) => h.available || !h.checked),
       sessionHost: { version: this.host.hello?.version ?? null, outdated: !!this.host.hello?.outdated },
       workQueue: this.workQueue.list(),
       workSync: this.workQueue.syncState(),
@@ -664,26 +664,26 @@ export class Core extends EventEmitter {
     if (svc?.legacyTmuxInstalled()) {
       const inTmux = svc.installed('host') ? await this.legacyTmuxPanes() : null;
       if (!inTmux || sessionRows(this.db).some((r) => r.status !== 'archived' && inTmux.has(r.tmux_name))) {
-        throw new Error("An AgentK version from before the session host is still installed here, and its sessions may still run in tmux. Run: meko kode install (it ends them there, and they resume in the session host)");
+        throw new Error("A Kode version from before the session host is still installed here, and its sessions may still run in tmux. Run: meko kode install (it ends them there, and they resume in the session host)");
       }
       this.log.warn("the tmux service of a version before the session host is still installed, though sessions run in the session host now. It's left running, since removing it ends any Claude still in tmux. To remove it: meko kode install");
     }
-    // AgentK's hook files: a server that can't write them doesn't start, since every session's hooks
+    // Kode's hook files: a server that can't write them doesn't start, since every session's hooks
     // (Claude Code's --settings file, the scripts Kiro's agent runs) and the Design guard depend on
     // them. With transcript capture off, Claude Code sessions run without the Meko plugin: its own
     // hooks would still send transcripts when a session compacts or ends. Its MCP server is
     // configured apart from it, so Meko's tools stay, and the system prompt gives the conversation_id
     // its SessionStart did. The setting, not whether the plugin's script was found: a plugin
-    // installed after AgentK starts runs in sessions once capture is on.
+    // installed after Kode starts runs in sessions once capture is on.
     writeHookFiles(this.paths, { disabledPlugins: this.cfg.meko.captureTranscripts ? [] : mekoPluginKeys() });
     // The session tools' MCP config and skill: without them sessions start without the tools.
     try {
-      if (!writeToolFiles(this.paths)) this.log.warn("AgentK's session tools are missing from this install; sessions start without them");
+      if (!writeToolFiles(this.paths)) this.log.warn("Kode's session tools are missing from this install; sessions start without them");
     } catch (e) {
-      this.log.warn("couldn't write AgentK's session tools; sessions start without them", errMsg(e));
+      this.log.warn("couldn't write Kode's session tools; sessions start without them", errMsg(e));
     }
     // Each harness's own files wait on its CLI (its version, Kiro's agent file), in the background:
-    // no one CLI has to be installed for AgentK to start.
+    // no one CLI has to be installed for Kode to start.
     for (const h of this.harnesses.list()) {
       const ready = h.prepare(this.paths, this.cfg).catch((e) => this.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
       // Kiro's plan is read once its version is known (whether it's available), unless stopping began meanwhile.
@@ -737,7 +737,7 @@ export class Core extends EventEmitter {
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
       this.every(60_000, () => this.workQueue.tick());
-      // Meko normally starts first (it starts AgentK); this covers a boot where it didn't, and an
+      // Meko normally starts first (it starts Kode); this covers a boot where it didn't, and an
       // install of Meko while the banner asks for one.
       this.every(LOCAL_MEKO_EVERY_MS, () => (lookForLocalMeko(mekoConfigured(), localMeko().state) ? this.refreshMeko() : undefined));
       this.callHome.start((ms, fn) => this.every(ms, fn));

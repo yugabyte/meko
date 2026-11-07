@@ -13,36 +13,38 @@ const STYLES = readFileSync(join(import.meta.dirname, '../../src/web/styles.css'
 
 const counts = (blocker: number, major: number, minor: number): SeverityCounts => ({ blocker, major, minor });
 
-describe('the me_ak_review line', () => {
+describe('the me_kode_review line', () => {
   it.each([
-    [counts(0, 0, 0), 'sagittarius-3.0', 'me_ak_review:LGTM;Sagittarius3.0'],
-    [counts(4, 4, 0), 'sagittarius-3.0', 'me_ak_review:4 blockers,4 major addressed;Sagittarius3.0'],
-    [counts(1, 2, 3), 'sirius-1.0', 'me_ak_review:1 blocker,2 major,3 minor addressed;Sirius1.0'],
-    [counts(0, 0, 2), 'golum-9', 'me_ak_review:2 minor addressed;golum-9'],
+    [counts(0, 0, 0), 'sagittarius-3.0', 'me_kode_review:LGTM;Sagittarius3.0'],
+    [counts(4, 4, 0), 'sagittarius-3.0', 'me_kode_review:4 blockers,4 major addressed;Sagittarius3.0'],
+    [counts(1, 2, 3), 'sirius-1.0', 'me_kode_review:1 blocker,2 major,3 minor addressed;Sirius1.0'],
+    [counts(0, 0, 2), 'golum-9', 'me_kode_review:2 minor addressed;golum-9'],
   ])('writes %j under %s as %s and reads it back', (c, strategy, line) => {
     expect(meAkReviewLine(c, strategy)).toBe(line);
     expect(parseMeAkReviewLine(line)).toEqual({ counts: c, strategy: strategyTag(strategy) });
   });
 
   it.each([
-    ['me_ak_review:LGTM', counts(0, 0, 0)],
-    ['me_ak_review:4 blockers,4 major addressed', counts(4, 4, 0)],
+    ['me_kode_review:LGTM', counts(0, 0, 0)],
+    ['me_kode_review:4 blockers,4 major addressed', counts(4, 4, 0)],
+    // Its prefix in PRs opened before Kode was called Kode.
+    ['me_ak_review:1 minor addressed', counts(0, 0, 1)],
   ])('reads %s, from before the line named its strategy', (line, c) => {
     expect(parseMeAkReviewLine(line)).toEqual({ counts: c, strategy: null });
   });
 
   it.each([
-    'meko_design:x', 'me_ak_review:4 blokers addressed', 'me_ak_review:4 blockers', 'me_ak_review:0 major addressed',
-    'me_ak_review:1 minor addressed;', 'me_ak_review:LGTM;Sagittarius 3.0', 'me_ak_review:;Sagittarius3.0',
+    'meko_design:x', 'me_kode_review:4 blokers addressed', 'me_kode_review:4 blockers', 'me_kode_review:0 major addressed',
+    'me_kode_review:1 minor addressed;', 'me_kode_review:LGTM;Sagittarius 3.0', 'me_kode_review:;Sagittarius3.0',
   ])("doesn't read %s as one", (line) => expect(parseMeAkReviewLine(line)).toBeNull());
 
   it.each([
-    ['Body.', 'Body.\n\nme_ak_review:LGTM;Sirius1.0'],
-    ['', 'me_ak_review:LGTM;Sirius1.0'],
-    ['Body.\nme_ak_review:1 minor addressed\nmeko_conversation_id:c', 'Body.\nme_ak_review:LGTM;Sirius1.0\nmeko_conversation_id:c'],
+    ['Body.', 'Body.\n\nme_kode_review:LGTM;Sirius1.0'],
+    ['', 'me_kode_review:LGTM;Sirius1.0'],
+    ['Body.\nme_kode_review:1 minor addressed\nmeko_conversation_id:c', 'Body.\nme_kode_review:LGTM;Sirius1.0\nmeko_conversation_id:c'],
   ])('sets it in %j', (body, want) => {
     expect(withMeAkReviewLine(body, meAkReviewLine(noCounts(), 'sirius-1.0'))).toBe(want);
-    expect(findMeAkReviewLine(want)).toBe('me_ak_review:LGTM;Sirius1.0');
+    expect(findMeAkReviewLine(want)).toBe('me_kode_review:LGTM;Sirius1.0');
   });
 });
 

@@ -1,6 +1,6 @@
 # Open project and New session
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 ## Open project
 
@@ -15,7 +15,7 @@ project on a repo gets its own datapack, settings, sessions and worktrees; proje
 names must differ within a repo, and a name is taken from the moment its open starts, so two
 opens of the same name at once can't both succeed. Their session branches
 share the repo, so a branch name that another project already uses gets a number added
-(`ak_<login>/fix-tests-2`). Per-repo files such as `.agent-k/stages/` overrides apply to every project on
+(`ak_<login>/fix-tests-2`). Per-repo files such as `.kode/stages/` overrides apply to every project on
 the repo.
 
 ![The Open project dialog listing the git repos under ~/code](../screenshots/new-project.png)
@@ -35,7 +35,7 @@ the repo.
 - **A repo with no commits yet.** A worktree needs a commit to branch from, so a repo that is just
   `git init` (picked, typed, or cloned from an empty remote) gets the same empty first commit as a
   new repo when its project opens (`ensureFirstCommit()` in `git.ts`), and so does a session's repo
-  when the session starts (for a repo opened before AgentK did this, or another scanned repo under
+  when the session starts (for a repo opened before Kode did this, or another scanned repo under
   Advanced). One with files in it (untracked or staged) is refused instead, changing nothing: an
   empty commit would leave them out of every worktree, and what to commit is the user's call, so
   the error says how to commit them. These run one at a time per repo, so two opens or starts at
@@ -102,7 +102,7 @@ A project picked from the dropdown fills in the rest from its datapack's name
 
 - **Project name:** the `<project>` part (everything after the repo part). You can still change it,
   which drops the pick.
-- **Repo:** by the remote in the datapack's description (AgentK writes it there when it creates a
+- **Repo:** by the remote in the datapack's description (Kode writes it there when it creates a
   datapack; SSH and HTTPS forms compare equal): first a fork whose `upstream` is that remote, since
   that's where you work on it, then a clone whose `origin` is the remote itself. So with
   `~/code/hari-yugabyte-db` (a fork of `yugabyte/yugabyte-db`) and `~/code/yugabyte-db` (a clone of
@@ -170,10 +170,10 @@ the first prompt, unless the prompt already starts with it), so the prompt needn
 | **0 Explore** (`start: 'explore'`) | Investigating, answering questions, POCs and experiments; you move it on to Design, Code or a PR when you're ready | `explore`; with no first prompt the name is the task |
 | **1 Design** (the default) | Normal tasks: a design for you to approve, then code, PR, review and merge | `design`; with no first prompt the name is the task |
 | **2 Code** | Small tasks: straight to code, then PR, review and merge | `code`; with no first prompt the name is the task |
-| **Review a PR** (`kind: 'review-pr'`) | Reviewing someone else's PR, with AgentK assisting | `review-pr`; it stays in Reviewing PR until you **Close review** (see [Reviewing a PR](review-pr.md)) |
+| **Review a PR** (`kind: 'review-pr'`) | Reviewing someone else's PR, with Kode assisting | `review-pr`; it stays in Reviewing PR until you **Close review** (see [Reviewing a PR](review-pr.md)) |
 | **Learn the project** (`learn`) | Seeding the project's datapack from the repo and its PRs; offered only with Meko on and a dedicated datapack, and only in a dialog opened on it: a project just opened on an empty datapack, the project home's offer, or Try again on a learn start. Under the months field, an estimate of the PRs and files it covers, which warns when that's a lot | `seed`; it closes by itself when done (see [Learn sessions](recall-and-learn.md#learn-sessions)) |
 
-With Code picked, a **Run to merge** box (off by default) sits under the picker: AgentK then opens
+With Code picked, a **Run to merge** box (off by default) sits under the picker: Kode then opens
 the PR when the coding turn ends and merges it once nothing blocks it (`CreateSessionRequest.autoRun`;
 see [Run to merge](lifecycle.md#run-to-merge)). At Design it's picked beside Approve instead, so the
 server refuses `autoRun` with any other start (400).
@@ -241,7 +241,7 @@ or `meko · PR #123 · hsunder/foo`).
 - **Work on: Existing branch** (`existingBranch: true` with `branch`). One of the repo's local
   branches (offered as you type), or one only on origin. A name that's in neither is refused (400)
   rather than started as a new branch. **Compare with** is the base used when the branch has no
-  open PR. As the session starts (after the dialog has closed), AgentK looks for the branch's open
+  open PR. As the session starts (after the dialog has closed), Kode looks for the branch's open
   PR for up to 5 seconds (`findPr`, an older open PR included); one found is linked (`pr_number`,
   event *Linked PR #N*) and its base becomes the session's base. An answer after that is dropped,
   since Claude has started without it; the PR stage still finds the PR.
@@ -250,7 +250,7 @@ or `meko · PR #123 · hsunder/foo`).
   The session works on the PR's head branch against the PR's base, with the PR linked from the start;
   picking one names an unnamed session after the PR and starts it at Code unless you picked a start.
   The PR must be open and in the repo's own repo (its origin, or its upstream for a fork's clone,
-  as for Review a PR; AgentK's later `gh` calls about a task's PR name its repo with `--repo`, from
+  as for Review a PR; Kode's later `gh` calls about a task's PR name its repo with `--repo`, from
   the PR's URL), and one of the repo's remotes (any name) must be the PR's head repo: for a PR from a fork, the fork added as a remote (`git remote add <owner> <url>`; the
   picker says so for a PR whose fork isn't one). The head branch is fetched from that remote. Its
   local name is the head branch's, unless the remote isn't origin and a local branch of that name

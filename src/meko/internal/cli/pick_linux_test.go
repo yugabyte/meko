@@ -124,7 +124,7 @@ func TestPickKeyNeedsATerminal(t *testing.T) {
 // A first install's picker asks on the terminal which experience to add, by the meko command that
 // runs it, with no numbers: the mark skips the coming-soon rows, skip for now and Ctrl+C add none,
 // and one whose install fails is a ✗ row, with Meko left as it is. On an 80-column terminal a long
-// detail is cut to fit its line. AgentK, already added, isn't offered again.
+// detail is cut to fit its line. Kode, already added, isn't offered again.
 func TestPickExtensionOnATerminal(t *testing.T) {
 	dir, _ := setup(t)
 	noRealExtensions(t)
@@ -175,7 +175,7 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 		{"a number does nothing", 120, []string{"2", "\x03"}, nil},
 		{"Ctrl+C adds none", 120, []string{"\x03"}, nil},
 		{"kode, whose install fails", 120, []string{"\r"}, []string{
-			"\n  → meko extension install agentk   · adds an extension at any time\n",
+			"\n  → meko extension install kode   · adds an extension at any time\n",
 			"  ✗ kode            not added: "}},
 		{"80 columns cut a long detail", 80, []string{"\x03"}, []string{
 			"    present        presentations that branch with the room, built from your da…\033[K\n"}},
@@ -200,12 +200,12 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg.Entries["agentk"] = extensions.Entry{Command: "/bin/true"}
+	reg.Entries["kode"] = extensions.Entry{Command: "/bin/true"}
 	if err = reg.Save(); err != nil {
 		t.Fatal(err)
 	}
 	if _, out := pick(t, 120, "\x03"); strings.Contains(out, "kode") || !strings.Contains(out, "  ❯ present ") {
-		t.Errorf("with AgentK added:\n%s", out)
+		t.Errorf("with Kode added:\n%s", out)
 	}
 }
 

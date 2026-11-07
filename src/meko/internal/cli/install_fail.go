@@ -121,7 +121,7 @@ const portScan = 20
 // pickPort makes sure Meko's port is free before anything else is written: the server would
 // otherwise fail to start once the service is. A port a Meko server that install replaces holds
 // is fine (mekoHolds). Another program's is the user's to sort out when they chose the port
-// (config.PortChosen), or when an AgentK is on this computer: one from before Meko served it holds
+// (config.PortChosen), or when a Kode is on this computer: one from before Meko served it holds
 // the default port until it's updated, and Meko should then take that port over, not move off it.
 // Otherwise install takes the first free port of the portScan after it, writes it to config.toml
 // (config.SetPickedPort) and says so; agents connected to the old port follow at the server's start
@@ -150,12 +150,12 @@ func pickPort(l paths.Layout, m service.Manager, home string, r report) *install
 	if mekoHolds(l, m, port) || portFree(port) == nil {
 		return nil
 	}
-	inUse := fmt.Sprintf("port %d is in use by another program (an AgentK from before Meko served it, or another)", port)
+	inUse := fmt.Sprintf("port %d is in use by another program (a Kode from before Meko served it, or another)", port)
 	switch {
 	case os.Getenv("MEKO_PORT") != "":
 		portInUse(r, inUse, port, "change or unset MEKO_PORT")
 		return &installFailure{step: callhome.StepChecks, kind: callhome.KindPortInUse, printed: true}
-	case chosen || extensions.Known["agentk"].Find("agentk", home, l.Root) != "":
+	case chosen || extensions.Known["kode"].Find("kode", home, l.Root) != "":
 		portInUse(r, inUse, port, "set [server] port in "+cfgPath)
 		return &installFailure{step: callhome.StepChecks, kind: callhome.KindPortInUse, printed: true}
 	}

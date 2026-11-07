@@ -56,13 +56,13 @@ describe('health probe', () => {
   function status(): Promise<number> {
     const cli = fileURLToPath(new URL('../../src/server/cli.ts', import.meta.url));
     const tsx = fileURLToPath(new URL('../../node_modules/.bin/tsx', import.meta.url));
-    const env: NodeJS.ProcessEnv = { ...process.env, AK_HOME: home, HOME: home, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` };
-    delete env.AK_APP_DIR;
+    const env: NodeJS.ProcessEnv = { ...process.env, KODE_HOME: home, HOME: home, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` };
+    delete env.KODE_APP_DIR;
     delete env.MEKO_HOME;
     return new Promise((resolve) => execFile(tsx, [cli, 'status'], { env }, (err) => resolve(err ? Number(err.code) : 0)));
   }
 
-  // Meko reads it as running or not (meko status, and whether an update restarts AgentK).
+  // Meko reads it as running or not (meko status, and whether an update restarts Kode).
   it('meko kode status exits 3 while no server runs the home, and 0 while one answers or holds the lease', async () => {
     expect(await status()).toBe(3);
     await serve();

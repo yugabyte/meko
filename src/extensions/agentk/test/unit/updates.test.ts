@@ -213,9 +213,11 @@ describe('the launcher', () => {
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  /** A meko on PATH that can (or can't) launch, recording what it's asked to. */
-  const meko = (supported: boolean) => {
-    writeFileSync(join(bin, 'meko'), `#!/bin/sh\necho "meko $*" >> "${log}"\n[ "$1 $2" = "_launch --supported" ] && exit ${supported ? 0 : 2}\necho launched\n`);
+  /** A meko on PATH that can (or can't) launch, recording what it's asked to; one from before Kode was called Kode doesn't know kode. */
+  const meko = (supported: boolean, knowsKode = true) => {
+    writeFileSync(join(bin, 'meko'), `#!/bin/sh\necho "meko $*" >> "${log}"\n`
+      + `[ "$1 $2 \${3:-}" = "_launch --supported kode" ] && exit ${supported && knowsKode ? 0 : 2}\n`
+      + `[ "$1 $2" = "_launch --supported" ] && exit ${supported ? 0 : 2}\necho launched\n`);
     chmodSync(join(bin, 'meko'), 0o755);
   };
   const run = (args: string[], env: Record<string, string> = {}, command = 'me_kode') =>
@@ -230,8 +232,16 @@ describe('the launcher', () => {
     meko(true);
     expect(run([cmd])).toBe('launched');
     expect(run([cmd], {}, 'agentk')).toBe('launched');
-    const launch = `meko _launch agentk ${join(root, 'home', 'app', '0.2.0', 'bin', 'me_kode')} ${cmd}`;
-    expect(calls()).toEqual(['meko _launch --supported', launch, 'meko _launch --supported', launch]);
+    const launch = `meko _launch kode ${join(root, 'home', 'app', '0.2.0', 'bin', 'me_kode')} ${cmd}`;
+    const asks = ['meko _launch --supported', 'meko _launch --supported kode', launch];
+    expect(calls()).toEqual([...asks, ...asks]);
+  });
+
+  it('names itself agentk to a Meko from before it knew kode', () => {
+    meko(true, false);
+    expect(run(['serve'])).toBe('launched');
+    expect(calls()).toEqual(['meko _launch --supported', 'meko _launch --supported kode',
+      `meko _launch agentk ${join(root, 'home', 'app', '0.2.0', 'bin', 'me_kode')} serve`]);
   });
 
   it("runs the server itself when Meko's launcher has started it, when no Meko can, and for other commands", () => {

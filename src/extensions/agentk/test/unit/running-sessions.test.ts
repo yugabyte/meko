@@ -95,7 +95,7 @@ describe('dotState', () => {
     expect(aggregateDot(project(background, session('needs_input')))).toBe('needs_input');
   });
 
-  it('shows an agent AgentK stopped for sitting idle as stopped, not exited, and quieter than idle in the rail', () => {
+  it('shows an agent Kode stopped for sitting idle as stopped, not exited, and quieter than idle in the rail', () => {
     const project = (...sessions: Session[]) => ({ sessions }) as ProjectWithSessions;
     const stopped = { ...session('exited'), idleStoppedAt: 1 } as Session;
     expect(dotState(stopped)).toBe('stopped');
@@ -123,8 +123,8 @@ describe('dotState', () => {
   });
 
   it("names what the user is to clear in a session's tab title", () => {
-    const s = { ...session('idle'), stage: 'review', waitsOnYou: ['CI is failing.', 'Send the held review from alice to AgentK or dismiss it.'] } as Session;
-    expect(dotTitle(s)).toBe('needs you: CI is failing. Send the held review from alice to AgentK or dismiss it.');
+    const s = { ...session('idle'), stage: 'review', waitsOnYou: ['CI is failing.', 'Send the held review from alice to Kode or dismiss it.'] } as Session;
+    expect(dotTitle(s)).toBe('needs you: CI is failing. Send the held review from alice to Kode or dismiss it.');
   });
 
   it('gives a learning dot the long tooltip and keeps its label short', () => {

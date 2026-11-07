@@ -10,7 +10,7 @@ import { fakeMekoQuestions, makeEnv, noMeko, readJsonl, useLocalMeko, waitFor, t
 
 const gitIn = (dir: string, ...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 
-describe('the AgentK tour (a bundled workshop; real session host + git, fake claude)', () => {
+describe('the Kode tour (a bundled workshop; real session host + git, fake claude)', () => {
   let env: TestEnv;
   beforeEach(async () => {
     env = await makeEnv();
@@ -29,7 +29,7 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
   };
   /**
    * Like the user typing into the host, then the host's turn: sent while the host is idle, and
-   * again until it goes in. AgentK sends the host its events too (GuideEvents): typed during their
+   * again until it goes in. Kode sends the host its events too (GuideEvents): typed during their
    * turn, the fake Claude would run both turns at once, and a prompt that waited for theirs to go
    * in is refused (submit's 409).
    */
@@ -57,16 +57,16 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     gotchasKnown();
     const r = await env.core.workshops.start(AGENTK_TOUR);
     const p = env.core.projects.get(r.projectId);
-    expect(p).toMatchObject({ name: 'AgentK tour', workshop: AGENTK_TOUR, repoPath: join(env.home, 'code', 'agentk-demo') });
+    expect(p).toMatchObject({ name: 'Kode tour', workshop: AGENTK_TOUR, repoPath: join(env.home, 'code', 'kode-demo') });
     const repo = p.repoPath;
     expect(gitIn(repo, 'remote')).toBe('');
     // Every install gets the same history: made-up authors, not the user's identity.
-    expect(gitIn(repo, 'log', '--format=%an <%ae>', 'main')).toBe('AgentK Demo <demo@example.com>');
+    expect(gitIn(repo, 'log', '--format=%an <%ae>', 'main')).toBe('Kode Demo <demo@example.com>');
     expect(gitIn(repo, 'log', '--format=%an <%ae>', '-1', 'demo/score-fix')).toBe('Alice <alice@example.com>');
     // The review finds the gotchas datapack through MEKO.md (on both branches and without the gotchas: the unit test's).
     const mekoMd = readFileSync(join(repo, 'MEKO.md'), 'utf8');
     expect(parseMekoMd(mekoMd)).toEqual([
-      { name: 'adlc/repo/agentk-demo/gotchas', id: GOTCHAS_ID, about: expect.any(String) },
+      { name: 'adlc/repo/kode-demo/gotchas', id: GOTCHAS_ID, about: expect.any(String) },
       { name: p.datapacks[0].name, id: DEDICATED_ID, about: expect.any(String) },
     ]);
     // The gotchas datapack isn't the project's: only the review reads it.
@@ -78,14 +78,14 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     expect(host).toMatchObject({ stage: 'explore', purpose: 'guide', projectId: p.id });
     await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "host's first turn");
     const first = firstPrompt(host.id);
-    expect(first).toContain('host of the AgentK tour');
+    expect(first).toContain('host of the Kode tour');
     expect(first).toContain(`projectId ${p.id}`);
     expect(first).toContain(`${repo}/index.html`);
-    expect(first).toContain('adlc/repo/agentk-demo/gotchas');
-    // AgentK's view mod hides the host's events prompts by their first line.
+    expect(first).toContain('adlc/repo/kode-demo/gotchas');
+    // Kode's view mod hides the host's events prompts by their first line.
     const conv = env.core.sessions.get(host.id).claudeSessionId;
     const launch = readJsonl<{ args: string[]; env: Record<string, string> }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes(conv));
-    expect(launch?.env.AK_HIDDEN_PROMPT).toBe('AgentK events:');
+    expect(launch?.env.KODE_HIDDEN_PROMPT).toBe('Kode events:');
 
     // Starting it again goes to the same project and host.
     expect(await env.core.workshops.start(AGENTK_TOUR)).toEqual(r);
@@ -102,11 +102,11 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     const submit = env.core.sessions.submit.bind(env.core.sessions);
     let dropped = 0;
     vi.spyOn(env.core.sessions, 'submit').mockImplementation(async (id, text, lost, hidden) => {
-      if (text.startsWith('AgentK events:') && !dropped++) return lost?.();
+      if (text.startsWith('Kode events:') && !dropped++) return lost?.();
       return submit(id, text, lost, hidden);
     });
     env.core.workshops.events.tell(r.projectId, 'The demo is ready.');
-    const told = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('AgentK events:') && t.includes('The demo is ready.'));
+    const told = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('Kode events:') && t.includes('The demo is ready.'));
     await waitFor(told, (t) => t.length === 1, 20000, 'the events sent again');
     expect(dropped).toBe(2);
   });
@@ -127,12 +127,12 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     const task = env.core.sessions.listForProject(r.projectId).find((s) => s.name === 'Review the score fix')!;
     expect(task).toMatchObject({ stage: 'code', branch: 'demo/score-fix' });
     await waitFor(() => env.core.sessions.get(task.id).status, (s) => s === 'idle', 10000, "task's first turn");
-    // AgentK reviews the level by itself on the tour's Sirius 1.0, with no PR description first: a first
+    // Kode reviews the level by itself on the tour's Sirius 1.0, with no PR description first: a first
     // look that keeps its findings, then, on the user's go, once the gotchas are uploaded and indexed, the review proper.
     const reviews = () => all<{ by: string; purpose: string; strategy: string; hand_off: number; state: string }>(env.core.db,
       'SELECT by, purpose, strategy, hand_off, state FROM code_reviews WHERE task_id = ? ORDER BY created_at, rowid', task.id);
-    const events = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('AgentK events:')).join('\n');
-    await waitFor(events, (t) => t.includes("AgentK waits for the user's go"), 20000, 'the pause');
+    const events = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('Kode events:')).join('\n');
+    await waitFor(events, (t) => t.includes("Kode waits for the user's go"), 20000, 'the pause');
     expect(reviews()).toEqual([{ by: 'auto', purpose: 'demand', strategy: 'sirius-1.0', hand_off: 0, state: 'done' }]);
     // The review session starts on the workshop's model for its agent; the task keeps its own.
     expect(get<{ model: string | null }>(env.core.db, 'SELECT s.model FROM code_reviews c JOIN sessions s ON s.id = c.session_id WHERE c.task_id = ?', task.id)?.model).toBe('sonnet');
@@ -151,8 +151,8 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     expect(env.core.projects.get(r.projectId).settings.codeReview).toEqual({ strategy: 'sirius-1.0' });
     expect(prompts(env.core.sessions.get(task.id).claudeSessionId).some((t) => t.includes("write the PR's title and description"))).toBe(false);
     await waitFor(events,
-      (t) => ["Review the score fix: AgentK's turn ended", 'Review the score fix: AgentK ran a first look', 'Review the score fix: First look done',
-        'Review the score fix: AgentK ran the code review'].every((x) => t.includes(x)), 20000, 'events');
+      (t) => ["Review the score fix: Kode's turn ended", 'Review the score fix: Kode ran a first look', 'Review the score fix: First look done',
+        'Review the score fix: Kode ran the code review'].every((x) => t.includes(x)), 20000, 'events');
 
     // A session in another project tells this host nothing.
     const other = await env.core.projects.create({ repoPath: env.repo, name: 'Other', datapack: { mode: 'none' } });
@@ -202,7 +202,7 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
       const r = await env.core.workshops.start(AGENTK_TOUR);
       const host = env.core.sessions.get(r.sessionId);
       await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "host's first turn");
-      const events = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('AgentK events:')).join('\n');
+      const events = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('Kode events:')).join('\n');
 
       // The dialog opens with the tour's brief; the home offers it, though Level 1 may have saved a memory there (3 in the fake).
       expect(env.core.workshops.list()[0].learn).toMatchObject({ about: expect.stringContaining('Snake'), months: 0 });
@@ -217,11 +217,11 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
       expect((out.body as { text: string }).text).toContain('Ask about the game');
       const ask = env.core.sessions.listForProject(r.projectId).find((s) => s.name === 'Ask about the game')!;
       gaps.datapacks.set(DEDICATED_ID, [{ key: 'untested rules', query: 'Which rules have no test', askedBy: [`conv-${ask.claudeSessionId}`] }]);
-      // Its first turn ends: the host hears the Meko line and where the question is, and AgentK runs the learn step by itself, once.
+      // Its first turn ends: the host hears the Meko line and where the question is, and Kode runs the learn step by itself, once.
       const link = `http://meko.test/datapacks/${DEDICATED_ID}/gaps`;
-      await waitFor(events, (t) => t.includes("Ask about the game: AgentK's turn ended. Meko: 1 lookup"), 20000, 'the Meko line');
+      await waitFor(events, (t) => t.includes("Ask about the game: Kode's turn ended. Meko: 1 lookup"), 20000, 'the Meko line');
       expect(events()).toContain(`1 question it asked Meko couldn't answer is on Meko's Context Gaps: ${link}`);
-      await waitFor(events, (t) => t.includes('AgentK is saving what Ask about the game learned to Meko'), 20000, 'the learn step');
+      await waitFor(events, (t) => t.includes('Kode is saving what Ask about the game learned to Meko'), 20000, 'the learn step');
       const learns = () => all<{ trigger: string }>(env.core.db, 'SELECT trigger FROM meko_learns WHERE session_id = ?', ask.id);
       await waitFor(learns, (l) => l.length === 1, 10000, 'learn row');
       expect(learns()).toEqual([{ trigger: 'manual' }]);
@@ -238,9 +238,9 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
         tool: 'start_sessions', input: { sessions: [{ name: 'Ask again', prompt: 'Answer again.', stage: 'explore' }] },
       });
       const again = env.core.sessions.listForProject(r.projectId).find((s) => s.name === 'Ask again')!;
-      // It replaces the level's earlier session: the host starts it on the user's go, and AgentK closes that one.
+      // It replaces the level's earlier session: the host starts it on the user's go, and Kode closes that one.
       await waitFor(() => env.core.sessions.row(ask.id).desired, (d) => d === 'archived', 10000, '"Ask about the game" closed');
-      await waitFor(events, (t) => t.includes("Ask again: AgentK's turn ended"), 20000, "the second session's turn");
+      await waitFor(events, (t) => t.includes("Ask again: Kode's turn ended"), 20000, "the second session's turn");
       expect(all(env.core.db, 'SELECT 1 FROM meko_learns WHERE session_id = ?', again.id)).toEqual([]);
 
       // Once a learn session ran on the datapack, the home stops offering it.

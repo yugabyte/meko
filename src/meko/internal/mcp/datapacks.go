@@ -420,7 +420,7 @@ func datapackDelete(ctx context.Context, c *call, a args) (any, error) {
 // Cloud's reply (cloud.go's routed), in the same row shape and with no word of where each lives: a
 // call that names one runs here. A datapack both sides have that this Meko lists is listed once, as
 // this Meko's; when this Meko's copy doesn't match the query, Meko Cloud's row stays. This Meko's
-// rows carry no user_id: the user's account id is Meko Cloud's, and AgentK reads it from an owner
+// rows carry no user_id: the user's account id is Meko Cloud's, and Kode reads it from an owner
 // row's user_id.
 
 // cloudRowID is the id of one of Meko Cloud's datapack rows.

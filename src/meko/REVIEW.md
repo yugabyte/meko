@@ -12,7 +12,7 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       last first and `t.Setenv` has restored PATH by then. A real `meko kode stop` ends every session.
 - [ ] Every database call goes through `internal/store`, the only package that imports the SQLite
       driver.
-      Migrations are append-only (`internal/store/migrations/`), like AgentK's.
+      Migrations are append-only (`internal/store/migrations/`), like Kode's.
 - [ ] Meko has one port, `[server] port` ([docs/web.md](docs/web.md)): nothing listens on
       another, and `[web] port` stays refused. Every route but `/healthz`, the UI's files,
       `/api/v1/auth/status`, `/ext/<name>` (the slash redirect) and the knowledge-file links needs a
@@ -61,15 +61,15 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       (`{"error", "detail"}`, `isError: false`); every call is recorded in the call log without its
       arguments or text, through `Options.record` (with its contents while they're kept, and its
       client), the forwarded ones too. A search takes a search slot; nothing holds the writer while it waits on
-      the context engine. A change to what AgentK's `meko.ts` sends or reads updates the replay in
-      `internal/mcp/agentk_contract_test.go`.
+      the context engine. A change to what Kode's `meko.ts` sends or reads updates the replay in
+      `internal/mcp/kode_contract_test.go`.
 - [ ] The context engine stores only through the store API, its dependencies stay pinned, and nothing copies
       or cites Meko Cloud's private code.
 - [ ] No third-party C code is copied into `src/meko`. SQLite and sqlite-vec come from the
       `replace` of `yugabyte/go-sqlite3` in `go.mod`: a bump names a new `-yb.<n>` tag and updates
       `TestLibVersions`, and the build keeps the `sqlite_fts5` and `sqlite_vec` tags.
 - [ ] Commits name the `meko` component (with `agentk` too, `feat(agentk,meko): ...`, when the
-      change also ships in AgentK), and a `feat`, `fix`, `perf` or `deps` subject means it
+      change also ships in Kode), and a `feat`, `fix`, `perf` or `deps` subject means it
       changes what Meko ships (it cuts a Meko release).
 - [ ] Secrets (the client token, later provider keys) are kept by Meko only in `internal/secrets` or
       the client token's file, and never reach a log, an error, or a command line other than an
@@ -99,7 +99,7 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       address, no customer names, nothing a user wrote or stored (memories, turns, knowledge
       files), and no unscrubbed logs or screenshots. Tests, `testdata/` and docs use made-up
       values (`alice@example.com`). Any found is a **blocker**. The description's Meko lines
-      from AgentK's PR prompt are allowed and stay as written.
+      from Kode's PR prompt are allowed and stay as written.
 - [ ] Knowledge files' bytes stay in `knowledgebase-files/` (0700 folders, 0600 files), written to a
       temporary name and renamed before their row commits, removed after it's deleted; their text
       never reaches a log or an error reply.

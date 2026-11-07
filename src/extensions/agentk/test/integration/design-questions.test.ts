@@ -41,9 +41,9 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     expect(sent).toContain('### Q1 (id: store): Where do designs live? Answer: Datapack Note: RESOLVE_STORE please');
     expect(sent).toContain('### Q2 (id: tabs): Tabs or one column? No answer: use your judgment, and say what you picked.');
     expect(sent).toMatch(/### Other feedback Keep it short\./);
-    expect(events(s.id)).toContain('Sent 1 answer to an open question and other feedback to AgentK');
-    // The answered question is resolved with the answer as it goes, on disk too; the other waits for AgentK.
-    expect(sent).toContain('AgentK may have marked some already');
+    expect(events(s.id)).toContain('Sent 1 answer to an open question and other feedback to Kode');
+    // The answered question is resolved with the answer as it goes, on disk too; the other waits for Kode.
+    expect(sent).toContain('Kode may have marked some already');
     expect(decided(s.id)).toEqual([['store', 'resolved', 'Datapack — RESOLVE_STORE please'], ['tabs', 'open', null]]);
     expect(onDisk(s.id)).toEqual(questions(s.id));
 
@@ -55,7 +55,7 @@ describe("a design's open questions (real session host + git, fake claude)", () 
       .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/changed its questions/) });
     await expect(revise(s.id, { answers: [], feedback: ' ' })).rejects.toMatchObject({ status: 400 });
 
-    // While AgentK works, they don't go, and aren't kept for later.
+    // While Kode works, they don't go, and aren't kept for later.
     writeFileSync(join(env.fakeDir, 'turn-ms'), '1500');
     await env.core.sessions.submit(s.id, 'think about it');
     await expect(revise(s.id, { answers: [], feedback: 'Now?' })).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/still working/) });
@@ -79,17 +79,17 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     await expect(revise(s.id, { answers: [], feedback: 'More' })).rejects.toMatchObject({ status: 409 });
   });
 
-  it("lists AgentK's own decisions with their Meko items, and records who decided each", async () => {
+  it("lists Kode's own decisions with their Meko items, and records who decided each", async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Decide', prompt: 'DESIGN_QUESTIONS WITH_DECISION it' });
     const ready = await designReady(s.id, 'design with a decision');
     // The prompt asks for them (and names the tool: Claude Code has the mod).
     expect(transcript(s.id)).toContain('give the key design decisions you made yourself');
-    expect(transcript(s.id)).toContain('mcp__agentk__design_questions');
+    expect(transcript(s.id)).toContain('mcp__kode__design_questions');
     // A decision is resolved, so only the questions are open.
     expect(ready.designQuestions).toEqual({ open: 2 });
     const who = () => questions(s.id).map((q) => [q.id, q.kind, q.decision, q.decidedBy]);
-    expect(who()).toEqual([['store', 'question', null, null], ['tabs', 'question', null, null], ['cards', 'decision', 'Reuse the cards', 'agentk']]);
+    expect(who()).toEqual([['store', 'question', null, null], ['tabs', 'question', null, null], ['cards', 'decision', 'Reuse the cards', 'kode']]);
     expect(questions(s.id)[2].meko).toEqual([{ kind: 'memory', id: '131a7d0e-8f56', datapackId: 'dp-1', excerpt: 'The cards already keep drafts.' }]);
 
     // The user answers a question and changes the decision: both are theirs as they go.
@@ -108,15 +108,15 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     ]);
     expect(onDisk(s.id)).toEqual(questions(s.id));
 
-    // AgentK's revision rewrites the file without "decidedBy" on the answer: it's still the user's.
-    // The approval leaves the open question to AgentK.
+    // Kode's revision rewrites the file without "decidedBy" on the answer: it's still the user's.
+    // The approval leaves the open question to Kode.
     await designReady(s.id, 'revised design', () => questions(s.id)[0].decision === 'Datapack.');
     expect(who()[0]).toEqual(['store', 'question', 'Datapack.', 'user']);
     await env.core.sessions.action(s.id, 'approve-design', {});
-    expect(who()).toEqual([['store', 'question', 'Datapack.', 'user'], ['tabs', 'question', 'Left to AgentK', 'agentk'], ['cards', 'decision', 'New cards', 'user']]);
+    expect(who()).toEqual([['store', 'question', 'Datapack.', 'user'], ['tabs', 'question', 'Left to Kode', 'kode'], ['cards', 'decision', 'New cards', 'user']]);
   });
 
-  it('approves without answers, and refuses answers to options AgentK has changed', async () => {
+  it('approves without answers, and refuses answers to options Kode has changed', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Stale', prompt: 'DESIGN_QUESTIONS it' });
     await designReady(s.id, 'design with questions');
@@ -130,21 +130,21 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     expect(get(s.id).stage).toBe('code');
     const approval = await waitFor(() => transcript(s.id), (t) => t.includes('The design is approved'), 10000, 'approval prompt');
     expect(approval).not.toContain('as they approved it');
-    // Questions left unanswered are left to AgentK, on its recommendation.
-    expect(decided(s.id)).toEqual([['store', 'resolved', 'Left to AgentK: Datapack'], ['tabs', 'resolved', 'Left to AgentK']]);
+    // Questions left unanswered are left to Kode, on its recommendation.
+    expect(decided(s.id)).toEqual([['store', 'resolved', 'Left to Kode: Datapack'], ['tabs', 'resolved', 'Left to Kode']]);
   });
 
-  it('reopens what an approval left to AgentK when the session moves back to Design', async () => {
+  it('reopens what an approval left to Kode when the session moves back to Design', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Back', prompt: 'DESIGN_QUESTIONS it' });
     await designReady(s.id, 'design with questions');
     await env.core.sessions.action(s.id, 'approve-design', { answers: [{ questionId: 'store', choice: 0, label: 'Datapack', text: '' }], feedback: '' });
-    expect(decided(s.id)).toEqual([['store', 'resolved', 'Datapack'], ['tabs', 'resolved', 'Left to AgentK']]);
+    expect(decided(s.id)).toEqual([['store', 'resolved', 'Datapack'], ['tabs', 'resolved', 'Left to Kode']]);
     const note = join(env.core.paths.designs, s.id, 'questions-approval.json');
     expect(existsSync(note)).toBe(true);
     await waitFor(() => get(s.id).status, (st) => st === 'idle', 10000, 'the Code turn to end');
     await env.core.lifecycle.move(row(s.id), { stage: 'design', prompt: false });
-    // The user's answer stays; what was left to AgentK is open again.
+    // The user's answer stays; what was left to Kode is open again.
     expect(decided(s.id)).toEqual([['store', 'resolved', 'Datapack'], ['tabs', 'open', null]]);
     expect(onDisk(s.id)).toEqual(questions(s.id));
     expect(existsSync(note)).toBe(false);
@@ -155,12 +155,12 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     const s = await env.core.sessions.create(p.id, { name: 'Changed', prompt: 'DESIGN_QUESTIONS it' });
     await designReady(s.id, 'design with questions');
     const store = { questionId: 'store', choice: 0, label: 'Datapack', text: '' };
-    // AgentK changed the question after the answers were checked against it.
+    // Kode changed the question after the answers were checked against it.
     const asked = questions(s.id).map((q) => (q.id === 'store' ? { ...q, question: 'Where did they live?' } : q));
     expect(env.core.questions.record(row(s.id), [store], asked, false)).toBe(false);
     expect(decided(s.id)[0]).toEqual(['store', 'open', null]);
 
-    // A broken file is AgentK's to fix: the answers go, and it's left as it is.
+    // A broken file is Kode's to fix: the answers go, and it's left as it is.
     const file = env.core.sessions.questionsFile(row(s.id));
     writeFileSync(file, '{oops');
     await revise(s.id, { answers: [store], feedback: '' });
@@ -195,7 +195,7 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     expect(env.core.questions.get(row(s.id)).source).toBe('markdown');
     const file = env.core.sessions.questionsFile(row(s.id));
 
-    // Answers to revise it write no questions file: AgentK revises the design's list.
+    // Answers to revise it write no questions file: Kode revises the design's list.
     const tabs = questions(s.id)[0].id;
     await revise(s.id, { answers: [{ questionId: tabs, choice: null, label: null, text: 'Tabs.' }], feedback: '' });
     expect(existsSync(file)).toBe(false);
@@ -211,9 +211,9 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     }
     rmSync(file);
 
-    // The approval does write them, answered or left to AgentK.
+    // The approval does write them, answered or left to Kode.
     await env.core.sessions.action(s.id, 'approve-design', { answers: [{ questionId: tabs, choice: null, label: null, text: 'One column.' }], feedback: '' });
-    expect(decided(s.id)).toEqual([[tabs, 'resolved', 'One column.'], [questions(s.id)[1].id, 'resolved', 'Left to AgentK']]);
+    expect(decided(s.id)).toEqual([[tabs, 'resolved', 'One column.'], [questions(s.id)[1].id, 'resolved', 'Left to Kode']]);
     expect(onDisk(s.id)).toEqual(questions(s.id));
 
     // Back in Design, the file the approval made goes, and the design's own list shows again.
@@ -247,6 +247,6 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     env.core.questions.forget(s.id);
     env.core.questions.preload();
     expect(get(s.id).designQuestions.open).toBe(0);
-    expect(events(s.id).some((e) => /questions file can't be read .* Ask AgentK to fix .*questions\.json/.test(e))).toBe(true);
+    expect(events(s.id).some((e) => /questions file can't be read .* Ask Kode to fix .*questions\.json/.test(e))).toBe(true);
   });
 });

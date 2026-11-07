@@ -209,11 +209,11 @@ func TestKnowledgeRoutes(t *testing.T) {
 	wantErr(t, e, "DELETE", kb+"/documents/not-a-uuid", nil, 404, "NOT_FOUND")
 }
 
-// AgentK's upload (src/extensions/agentk/src/server/mekoapi.ts requestUpload, postPresigned and
+// Kode's upload (src/extensions/agentk/src/server/mekoapi.ts requestUpload, postPresigned and
 // documentStatus, since #225), replayed as it sends it: upload-url with the client token and its
 // client name, the fields then the file to the link with no token, then document-status until its
 // state is final. A change to those calls updates this replay.
-func TestAgentKUpload(t *testing.T) {
+func TestKodeUpload(t *testing.T) {
 	e := testenv.Start(t, testenv.Options{})
 	kb := "/datapacks/" + e.DatapackID + "/knowledge-bases"
 	file := []byte("# Deploys\n\nProduction deploys need two approvals from the release team.\n")

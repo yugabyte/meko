@@ -323,16 +323,16 @@ describe('token formatting (web)', () => {
     expect(formatCostOf({ usd: 3.06, unpricedMessages: 4 })).toBe('≥ $3.06');
   });
 
-  it('puts the 1st-turn tokens in words, seed first, saying when AgentK has never seeded a session', async () => {
+  it('puts the 1st-turn tokens in words, seed first, saying when Kode has never seeded a session', async () => {
     const { firstTurnText } = await import('../../src/web/util.js');
     expect(firstTurnText({ sessions: 0, startSearches: 0, searchedTokens: 0, seedTokens: 0 })).toEqual({
       split: null, title: 'No session has finished its first turn yet.',
     });
-    // Most sessions are from before AgentK searched at start.
+    // Most sessions are from before Kode searched at start.
     const old = firstTurnText({ sessions: 50, startSearches: 2, searchedTokens: 12_300, seedTokens: 0 });
     expect(old.split).toBe('Seeded ≈ 0 · Searched ≈ 12.3k');
     expect(old.title).toBe(
-      "About 12,300 tokens from Meko in the first turns of 50 sessions (characters ÷ 4): 0 that AgentK's search at session start passed to Claude " +
+      "About 12,300 tokens from Meko in the first turns of 50 sessions (characters ÷ 4): 0 that Kode's search at session start passed to Claude " +
       "(the seed; it ran in 2 of them, the others are from before it was added or had no task), and 12,300 from Claude's own Meko searches before its first turn ended. " +
       'Only sessions in projects with datapacks count.');
     const none = firstTurnText({ sessions: 1, startSearches: 0, searchedTokens: 900, seedTokens: 0 });
@@ -341,7 +341,7 @@ describe('token formatting (web)', () => {
     expect(none.title).toContain("the seed, hasn't run in any of them yet; and 900 from");
     const all = firstTurnText({ sessions: 3, startSearches: 3, searchedTokens: 0, seedTokens: 4_560 });
     expect(all.split).toBe('Seeded ≈ 4.56k · Searched ≈ 0');
-    expect(all.title).toContain("4,560 that AgentK's search at session start passed to Claude (the seed), and 0 from");
+    expect(all.title).toContain("4,560 that Kode's search at session start passed to Claude (the seed), and 0 from");
   });
 
   it("puts the Meko section's learn-step tiles in words", async () => {

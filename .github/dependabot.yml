@@ -2,7 +2,7 @@
 #
 # Commit prefixes follow the title rules (scripts/check-title.sh) and the release rules
 # (scripts/release/release-notes.sh), and name the component: Dependabot adds the `: `.
-# Every AgentK npm bump is `deps(agentk): ...`, so it cuts a release once merged to main: the web
+# Every Kode npm bump is `deps(agentk): ...`, so it cuts a release once merged to main: the web
 # UI's libraries (react, xterm, marked, dompurify) are devDependencies that Vite bundles into the
 # release. Action bumps are `ci(repo): ...` and ship with the next release. Meko's bumps are
 # `deps(meko): ...` (Go modules) and `deps(meko/context-engine): ...` (the context engine's
@@ -120,7 +120,7 @@ updates:
     commit-message:
       prefix: deps(meko/web-ui)
       prefix-development: chore(meko/web-ui)
-    # As in AgentK's entry: families with peer ranges on each other share a group for every update
+    # As in Kode's entry: families with peer ranges on each other share a group for every update
     # type, and everything else gets one PR per dependency type for minor and patch bumps.
     groups:
       react:

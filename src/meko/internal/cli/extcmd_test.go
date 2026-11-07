@@ -9,8 +9,8 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 )
 
-// meko kode runs AgentK's registered program with everything after it, MEKO_HOME naming the data
-// folder (a leading --data-dir is Meko's), and exits as it does; meko kode --help is AgentK's own.
+// meko kode runs Kode's registered program with everything after it, MEKO_HOME naming the data
+// folder (a leading --data-dir is Meko's), and exits as it does; meko kode --help is Kode's own.
 // An extension that isn't installed says how to install it.
 func TestExtensionCommandRunsItsProgram(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -27,7 +27,7 @@ func TestExtensionCommandRunsItsProgram(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: prog, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: prog, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -44,5 +44,5 @@ func TestExtensionCommandRunsItsProgram(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, errs = run("kode", "status")
-	want(t, "kode, its program gone", code, exitError, errs, "AgentK is damaged")
+	want(t, "kode, its program gone", code, exitError, errs, "Kode is damaged")
 }

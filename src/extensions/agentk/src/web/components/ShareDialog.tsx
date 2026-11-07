@@ -189,7 +189,7 @@ export function ShareDialog({
         <ShareReviewers projectId={projectId} focusSessionId={focusSessionId} people={people} onShare={shareReviewer} busy={busy !== null} />
         {!isProjectDatapack(datapack.name) && (
           <p className="hint">
-            This datapack’s name doesn’t start with adlc/proj/, so AgentK won’t offer it to them as a project. They can still
+            This datapack’s name doesn’t start with adlc/proj/, so Kode won’t offer it to them as a project. They can still
             attach it to one.
           </p>
         )}

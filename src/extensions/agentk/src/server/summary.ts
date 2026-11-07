@@ -14,7 +14,7 @@ export function summaryRow(mark: Mark, title: string, text: string, color = colo
 }
 
 /**
- * What AgentK's row of `meko stop` says. Its sessions resume when the server starts again: at `meko
+ * What Kode's row of `meko stop` says. Its sessions resume when the server starts again: at `meko
  * start` with services, but without them `meko start`'s `me_kode start` can't, and `meko kode serve` does.
  */
 export function stopRowText(stopped: boolean, sessions: number, services: boolean): string {
@@ -25,7 +25,7 @@ export function stopRowText(stopped: boolean, sessions: number, services: boolea
 
 /**
  * Whether Meko runs this command for its summary (MEKO_SUMMARY=1): `start` and `stop` then print
- * one row, and `status` only its headline, which `meko status` shows in AgentK's row.
+ * one row, and `status` only its headline, which `meko status` shows in Kode's row.
  */
 export function forMekoSummary(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.MEKO_SUMMARY === '1';

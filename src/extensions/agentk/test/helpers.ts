@@ -171,7 +171,7 @@ export interface TestEnv {
   mekoTools: ReturnType<typeof stubMekoTools>;
   /**
    * What the Meko on this computer answers when Core reads it (one running at `TEST_MEKO_URL` with
-   * the token `test-key`, linked to Meko Cloud as `TEST_ACCOUNT`, at first: AgentK's Meko); never
+   * the token `test-key`, linked to Meko Cloud as `TEST_ACCOUNT`, at first: Kode's Meko); never
    * the real `meko`.
    */
   local: LocalMekoProbe;

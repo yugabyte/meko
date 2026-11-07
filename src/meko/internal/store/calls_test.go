@@ -69,13 +69,13 @@ func TestCallContents(t *testing.T) {
 	}
 	add(Call{At: now.Add(-10 * 24 * time.Hour), Tool: "memory_add", AgentID: "a", OK: true},
 		&CallContents{Args: `{"text":"old"}`, Reply: "added"})
-	add(Call{At: now.Add(-time.Hour), Tool: "context_search", AgentID: "a", Client: "agentk", OK: true},
+	add(Call{At: now.Add(-time.Hour), Tool: "context_search", AgentID: "a", Client: "kode", OK: true},
 		&CallContents{Args: `{"query":"q"}`, Reply: `{"results":[]}`, Cut: true})
 	add(Call{At: now, Tool: "datapack_list", AgentID: "b", Location: LocationCloud, OK: false, ErrorCode: "x"}, nil)
 
 	got, more, err := s.ListCalls(ctx, CallFilter{}, 2)
 	if err != nil || !more || len(got) != 2 || got[0].Tool != "datapack_list" || got[0].HasContents ||
-		got[0].Location != LocationCloud || got[1].Client != "agentk" || !got[1].HasContents {
+		got[0].Location != LocationCloud || got[1].Client != "kode" || !got[1].HasContents {
 		t.Fatalf("first page: %+v %v %v", got, more, err)
 	}
 	older, more, err := s.ListCalls(ctx, CallFilter{Before: got[1].ID}, 2)
@@ -85,7 +85,7 @@ func TestCallContents(t *testing.T) {
 	for _, c := range []struct {
 		f    CallFilter
 		want int
-	}{{CallFilter{AgentID: "a"}, 2}, {CallFilter{Client: "agentk"}, 1}, {CallFilter{Failed: true}, 1},
+	}{{CallFilter{AgentID: "a"}, 2}, {CallFilter{Client: "kode"}, 1}, {CallFilter{Failed: true}, 1},
 		{CallFilter{Tool: "memory_add"}, 1}, {CallFilter{AgentID: "a", Tool: "datapack_list"}, 0}} {
 		if cs, _, _ := s.ListCalls(ctx, c.f, 50); len(cs) != c.want {
 			t.Errorf("%+v: %d calls, want %d", c.f, len(cs), c.want)

@@ -13,12 +13,12 @@
 #                              Mekos and their registries run
 #     bin/agentk               a link to it: its name before me_koder, run the same way, and the
 #                              services' launcher's fallback (every release has it)
-#     bin/agent-k-local        a link to it: its name before the rename to AgentK, which older services start
-#     node/bin/me_kode         bundled Node runtime, named so its processes say they're AgentK's
-#     node/bin/node            a link to it, which the MCP configs AgentK writes for sessions name
+#     bin/agent-k-local        a link to it: its name before the rename to Kode, which older services start
+#     node/bin/me_kode         bundled Node runtime, named so its processes say they're Kode's
+#     node/bin/node            a link to it, which the MCP configs Kode writes for sessions name
 #     node/LICENSE
 #     lib/package.json
-#     lib/dist/                compiled server + web assets, AgentK's mod for Claude Code (dist/mod), the session tools' skill (dist/tools) and the bundled workshops (dist/workshops)
+#     lib/dist/                compiled server + web assets, Kode's mod for Claude Code (dist/mod), the session tools' skill (dist/tools) and the bundled workshops (dist/workshops)
 #     lib/node_modules/        production dependencies only
 #     lib/packaging/systemd/   service templates used by `meko kode install` (Linux)
 #     lib/packaging/launchd/   service templates used by `meko kode install` (macOS)
@@ -56,7 +56,7 @@ for p in "$repo/dist/server/cli.js" "$repo/dist/server/mcpmain.js" "$repo/dist/w
   [ -e "$p" ] || { echo "missing $p (build first)" >&2; exit 1; }
 done
 
-name="agentk-$version"
+name="kode-$version"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT INT TERM
 root="$stage/$name"

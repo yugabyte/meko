@@ -1,6 +1,6 @@
 {
-  "name": "agentk-view",
+  "name": "kode-view",
   "version": "1.0.0",
-  "description": "Draws AgentK's prompts in the Claude Code sessions it runs as one line each; ctrl+o shows them in full.",
-  "author": { "name": "AgentK" }
+  "description": "Draws Kode's prompts in the Claude Code sessions it runs as one line each; ctrl+o shows them in full.",
+  "author": { "name": "Kode" }
 }

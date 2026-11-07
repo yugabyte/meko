@@ -39,7 +39,7 @@ A plain sentence: what's wrong (bug), what should become possible (feature), or 
 `<type>(<component>): …` format, which is for commits and PRs. Keep it under about 90
 characters.
 
-- `AgentK update can leave existing installations without a reachable web UI`
+- `Kode update can leave existing installations without a reachable web UI`
 - `Verify release provenance in Meko's updater, pinned to the release workflow on main`
 
 ## Body

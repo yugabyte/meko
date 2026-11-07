@@ -35,8 +35,8 @@ export interface KiroPlanDeps {
  * --no-interactive /usage`, which bills nothing) at start, hourly, when the first Kiro session
  * starts, and — at most every `KIRO_PLAN_TURN_EVERY_MS` — when a Kiro session's turn ends, so an
  * active account's reading stays fresh between the hourly reads. Only once a session has run on Kiro
- * in AgentK: an install that never uses Kiro never runs it for this. A read that fails keeps the last
- * one, which the rail shows with its age. Each run is the inert `agentk-usage` agent's, in a folder
+ * in Kode: an install that never uses Kiro never runs it for this. A read that fails keeps the last
+ * one, which the rail shows with its age. Each run is the inert `kode-usage` agent's, in a folder
  * of its own, and every session Kiro keeps of a run there is deleted afterwards, whether or not the
  * run said its id.
  */
@@ -97,7 +97,7 @@ export class KiroPlanStore {
     return this.reading ?? Promise.resolve();
   }
 
-  /** A Kiro session was just created: the first one in AgentK reads the plan, rather than waiting for the hour. */
+  /** A Kiro session was just created: the first one in Kode reads the plan, rather than waiting for the hour. */
   sessionCreated(): void {
     const n = get<{ n: number }>(this.deps.db, `SELECT COUNT(*) AS n FROM sessions WHERE harness = 'kiro'`)?.n ?? 0;
     if (n === 1) void this.refresh();
@@ -125,7 +125,7 @@ export class KiroPlanStore {
       this.sweep(cmd, r.sessionId);
       const plan = r.ok ? parseKiroPlan(r.text, Date.now()) : null;
       if (!plan) {
-        const why = out.spawnError ?? (out.timedOut ? 'it timed out' : r.error ?? (r.ok ? `its answer wasn't one AgentK knows: ${r.text.slice(0, 200)}` : `exit ${out.code}`));
+        const why = out.spawnError ?? (out.timedOut ? 'it timed out' : r.error ?? (r.ok ? `its answer wasn't one Kode knows: ${r.text.slice(0, 200)}` : `exit ${out.code}`));
         this.warn(`reading Kiro's plan usage failed (${why}); the rail keeps the last reading`);
         return;
       }

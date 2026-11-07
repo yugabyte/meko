@@ -339,7 +339,7 @@ func linkRows(st server.StatusReply, cloud linkRow) []linkRow {
 		linkRow{"", fmt.Sprintf("http://127.0.0.1:%d/api/v1", st.Port), "REST API"}, cloud)
 }
 
-// extensionTitle is how a known extension is named to people (AgentK), else its name.
+// extensionTitle is how a known extension is named to people (Kode), else its name.
 func extensionTitle(name string) string {
 	if c, ok := extensions.Known[name]; ok && c.Title != "" {
 		return c.Title
@@ -348,7 +348,7 @@ func extensionTitle(name string) string {
 }
 
 // extensionState is extension name's row in status, its mark and state, from its status command's
-// first line. A line that starts with a mark, as the extensions' own headline does ("✓ AgentK 0.2
+// first line. A line that starts with a mark, as the extensions' own headline does ("✓ Kode 0.2
 // is running (pid 7, up 2h)"), gives the row its mark (a server that runs but doesn't answer is
 // "!" though it exits 0) and its state: the line without the mark and the extension's title, or
 // one of its old titles, which an older release still prints. Any other line is added to state
@@ -591,7 +591,7 @@ func readMCPAccess(l paths.Layout) (config.Config, mcpAccess, error) {
 }
 
 // runToken prints the client token (readMCPAccess), and with asJSON the MCP URL, the token, whether
-// a server runs and the Meko Cloud link, for extensions (AgentK reads it).
+// a server runs and the Meko Cloud link, for extensions (Kode reads it).
 func runToken(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 	cfg, a, err := readMCPAccess(l)
 	if err != nil {
@@ -601,7 +601,7 @@ func runToken(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, a.token)
 		return exitOK
 	}
-	// web_url is where browsers find Meko's web UI and its extensions' (AgentK's at /ext/agentk/):
+	// web_url is where browsers find Meko's web UI and its extensions' (Kode's at /ext/kode/):
 	// "" while it's off ([web] enabled), when web_off says so.
 	web, off := webURL(cfg.Web, cfg.Server.Port), !cfg.Web.Enabled
 	if a.running {

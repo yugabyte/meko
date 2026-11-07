@@ -24,7 +24,7 @@ function optional(v: unknown, max: number): string | null {
 
 /**
  * The questions of a Claude AskUserQuestion call, as the mod forwards them, checked and capped for
- * the browser. Throws for anything AgentK can't show as Claude's dialog does: then the dialog in
+ * the browser. Throws for anything Kode can't show as Claude's dialog does: then the dialog in
  * the terminal is left to answer it alone. Questions of another kind than a choice (Claude Code's
  * `text` and `number` questions) are among those.
  */
@@ -74,7 +74,7 @@ export function askAnswers(body: unknown, questions: AskQuestion[]): Record<numb
     if (!v || typeof v !== 'object') throw new HttpError(400, 'Each answer must be {question, labels, text}.');
     const a = v as Record<string, unknown>;
     const n = a.question;
-    if (!Number.isInteger(n) || (n as number) < 0 || (n as number) >= questions.length) throw new HttpError(400, 'An answer names a question AgentK isn\'t asking.');
+    if (!Number.isInteger(n) || (n as number) < 0 || (n as number) >= questions.length) throw new HttpError(400, 'An answer names a question Kode isn\'t asking.');
     const q = questions[n as number];
     const qn = `question ${(n as number) + 1}`;
     if ((n as number) in out) throw new HttpError(400, `There are two answers to ${qn}.`);

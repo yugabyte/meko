@@ -34,7 +34,7 @@ func (a *api) registerQuestions(g *echo.Group) {
 // questions: they're what this Meko recorded of the searches it passed on, and reading them never
 // calls Meko Cloud or uses its key. Teaching one writes its memory to Meko Cloud with the key, for
 // any credential too, as POST /datapacks/:id/memories does. ?location= picks
-// the side: the one route left that takes it, since AgentK links a Meko Cloud datapack's questions
+// the side: the one route left that takes it, since Kode links a Meko Cloud datapack's questions
 // to their own page. ok is false when the reply has been written.
 func (a *api) questionsDatapack(c echo.Context) (id string, cloud, ok bool, err error) {
 	switch c.QueryParam("location") {

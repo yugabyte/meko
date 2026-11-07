@@ -56,13 +56,13 @@ describe('hostServices', () => {
 
 describe('service templates', () => {
   it('escapes values for property lists only', () => {
-    expect(renderTemplate('<string>@AK_HOME@</string>', 'launchd', { AK_HOME: '/Users/a&b', HOST: 'mac' })).toBe('<string>/Users/a&amp;b</string>');
-    expect(renderTemplate('Environment=AK_HOME=@AK_HOME@', 'systemd', { AK_HOME: '/home/a&b', HOST: 'box' })).toBe('Environment=AK_HOME=/home/a&b');
+    expect(renderTemplate('<string>@KODE_HOME@</string>', 'launchd', { KODE_HOME: '/Users/a&b', HOST: 'mac' })).toBe('<string>/Users/a&amp;b</string>');
+    expect(renderTemplate('Environment=KODE_HOME=@KODE_HOME@', 'systemd', { KODE_HOME: '/home/a&b', HOST: 'box' })).toBe('Environment=KODE_HOME=/home/a&b');
   });
 
   it('renders the launchd jobs: the session host and the server, both kept alive', () => {
     const svc = new LaunchdServices(() => ok, '/Users/me', 501);
-    const out = renderServiceFiles(svc, { AK_HOME: '/Users/me/.agent-k-local', HOST: 'mac' });
+    const out = renderServiceFiles(svc, { KODE_HOME: '/Users/me/.agent-k-local', HOST: 'mac' });
     for (const text of Object.values(out)) {
       expect(text).not.toContain('@');
       expect(text).toContain('<key>KeepAlive</key>\n  <true/>');
@@ -79,7 +79,7 @@ describe('service templates', () => {
 
   it('renders the systemd units: the session host, and the server that wants it, run only on this host and not restarted when busy', () => {
     const svc = new SystemdServices(() => ok, {}, '/home/me');
-    const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
+    const out = renderServiceFiles(svc, { KODE_HOME: '/home/me/.agent-k-local', HOST: 'box' });
     // The launcher, as on macOS: it runs a release from before the program was me_kode too.
     expect(out.host).toContain('ExecStart=/home/me/.agent-k-local/service/me_kode host\n');
     expect(out.server).toContain('ExecStart=/home/me/.agent-k-local/service/me_kode serve\n');
@@ -106,7 +106,7 @@ describe('servicesFor', () => {
   it("uses the services only when they run this home, so a dev server never waits on an install's", () => {
     const svc = new SystemdServices(() => ok, { XDG_CONFIG_HOME: dir }, '/home/me');
     expect(servicesFor('/home/me/.agent-k-local', svc)).toBe(svc); // nothing installed yet
-    svc.install({ server: 'Environment=AK_HOME=/home/me/.agent-k-local\n', host: 'host\n' });
+    svc.install({ server: 'Environment=KODE_HOME=/home/me/.agent-k-local\n', host: 'host\n' });
     expect(servicesFor('/home/me/.agent-k-local', svc)).toBe(svc);
     expect(servicesFor('/home/me/code/agent-k-local/.dev-home', svc)).toBeNull();
     // A home whose path starts another's is still another home.
@@ -119,16 +119,16 @@ describe('servicesFor', () => {
     mkdirSync(real, { recursive: true });
     symlinkSync(real, join(dir, 'old-home'));
     const svc = new SystemdServices(() => ok, { XDG_CONFIG_HOME: join(dir, 'config') }, dir);
-    svc.install({ server: `Environment=AK_HOME=${join(dir, 'old-home')}\n`, host: 'host\n' });
+    svc.install({ server: `Environment=KODE_HOME=${join(dir, 'old-home')}\n`, host: 'host\n' });
     expect(servicesFor(real, svc)).toBe(svc);
   });
 
-  it("reads a unit's or a property list's AK_HOME exactly", () => {
-    const vars = { AK_HOME: '/Users/a&b/.agent-k-local', HOST: 'mac' };
+  it("reads a unit's or a property list's KODE_HOME exactly", () => {
+    const vars = { KODE_HOME: '/Users/a&b/.agent-k-local', HOST: 'mac' };
     const launchd = renderServiceFiles(new LaunchdServices(() => ok, '/Users/a&b', 501), vars);
     expect(serviceHome(launchd.server, 'launchd')).toBe('/Users/a&b/.agent-k-local');
     expect(serviceHome(launchd.host, 'launchd')).toBe('/Users/a&b/.agent-k-local');
-    const systemd = renderServiceFiles(new SystemdServices(() => ok, {}, '/home/me'), { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
+    const systemd = renderServiceFiles(new SystemdServices(() => ok, {}, '/home/me'), { KODE_HOME: '/home/me/.agent-k-local', HOST: 'box' });
     expect(serviceHome(systemd.server, 'systemd')).toBe('/home/me/.agent-k-local');
     expect(serviceHome('ExecStart=/home/me/.agent-k-local/app/current/bin/agentk serve', 'systemd')).toBeNull();
   });
@@ -194,12 +194,12 @@ describe('SystemdServices', () => {
     expect(() => make((a) => (a[0] === 'sh' ? fail('') : ok)).svc.preflight()).toThrow(/systemctl was not found/);
   });
 
-  it('keeps units installed before the rename to AgentK under their old names until install moves them, and never a running host', () => {
+  it('keeps units installed before the rename to Kode under their old names until install moves them, and never a running host', () => {
     const units = join(dir, 'systemd', 'user');
     mkdirSync(units, { recursive: true });
     writeFileSync(join(units, 'agent-k-local.service'), 'old server\n');
     writeFileSync(join(units, 'agent-k-local-host.service'), 'old host\n');
-    const vars = { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' };
+    const vars = { KODE_HOME: '/home/me/.agent-k-local', HOST: 'box' };
     const hostActive = (a: string[]) => (a.join(' ') === 'systemctl --user is-active agent-k-local-host.service' ? { ok: true, out: 'active', err: '' } : ok);
     const { svc, calls } = make(hostActive);
     expect([svc.id('server'), svc.id('host')]).toEqual(['agent-k-local.service', 'agent-k-local-host.service']);
@@ -229,11 +229,11 @@ describe('SystemdServices', () => {
     mkdirSync(units, { recursive: true });
     writeFileSync(join(units, 'agentk.service'), 'server\n');
     writeFileSync(join(units, 'agentk-host.service'), 'host\n');
-    // Left by a version before the rename to AgentK too: agentk's is the one in use.
+    // Left by a version before the rename to Kode too: agentk's is the one in use.
     writeFileSync(join(units, 'agent-k-local.service'), 'older server\n');
     const { svc, calls } = make();
     expect([svc.id('server'), svc.id('host')]).toEqual(['agentk.service', 'agentk-host.service']);
-    expect(renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' }).server).toContain('Wants=agentk-host.service\n');
+    expect(renderServiceFiles(svc, { KODE_HOME: '/home/me/.agent-k-local', HOST: 'box' }).server).toContain('Wants=agentk-host.service\n');
     expect(dropOldNames(svc)).toEqual([['agentk-host.service', 'me_kode-host.service'], ['agentk.service', 'me_kode.service']]);
     expect(calls).toEqual([
       'systemctl --user is-active agentk-host.service',
@@ -256,7 +256,7 @@ describe('SystemdServices', () => {
     const { svc, calls } = make();
     expect([svc.id('server'), svc.id('host')]).toEqual(['me_koder.service', 'me_koder-host.service']);
     expect(svc.oldName('server')).toBe(true);
-    expect(renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' }).server).toContain('Wants=me_koder-host.service\n');
+    expect(renderServiceFiles(svc, { KODE_HOME: '/home/me/.agent-k-local', HOST: 'box' }).server).toContain('Wants=me_koder-host.service\n');
     expect(dropOldNames(svc)).toEqual([['me_koder-host.service', 'me_kode-host.service'], ['me_koder.service', 'me_kode.service']]);
     expect(calls).toEqual([
       'systemctl --user is-active me_koder-host.service',
@@ -415,12 +415,12 @@ describe('LaunchdServices', () => {
     expect(unloaded.calls).toEqual([`bootstrap gui/501 ${unloaded.svc.file('host')}`]);
   });
 
-  it('labels a job installed before the rename to AgentK by its old label until install moves it', () => {
+  it('labels a job installed before the rename to Kode by its old label until install moves it', () => {
     const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agent-k-local'] });
     mkdirSync(agents(), { recursive: true });
     writeFileSync(join(agents(), 'com.yugabyte.agent-k-local.plist'), 'old server\n');
     expect(svc.id('server')).toBe('com.yugabyte.agent-k-local');
-    const vars = { AK_HOME: '/Users/me/.agent-k-local', HOST: 'mac' };
+    const vars = { KODE_HOME: '/Users/me/.agent-k-local', HOST: 'mac' };
     // The file under the old name keeps its label, or launchctl wouldn't find the job it loads.
     expect(renderServiceFiles(svc, vars).server).toContain('<key>Label</key>\n  <string>com.yugabyte.agent-k-local</string>');
     expect(dropOldNames(svc)).toEqual([['com.yugabyte.agent-k-local', 'com.yugabyte.me_kode']]);
@@ -527,7 +527,7 @@ describe('the LaunchAgents launcher', () => {
   ])("moves a release's LaunchAgents that ran %s onto the launcher at the server's start, under the label they're installed with", (program, oldLauncher) => {
     const home = releaseHome('home');
     const svc = new LaunchdServices(() => ok, join(dir, 'user'), 501, () => {});
-    const vars = { AK_HOME: home, HOST: 'mac' };
+    const vars = { KODE_HOME: home, HOST: 'mac' };
     const current = renderServiceFiles(svc, vars);
     const old = (text: string) => text.replaceAll(`${home}/service/me_kode`, `${home}/${program}`);
     mkdirSync(dirname(svc.file('server')), { recursive: true });
@@ -538,8 +538,8 @@ describe('the LaunchAgents launcher', () => {
       writeFileSync(join(home, program), '#!/bin/sh\n', { mode: 0o755 });
     }
 
-    expect(refreshServiceFiles(home, svc, 'mac')).toEqual([]); // not a release (no AK_APP_DIR)
-    vi.stubEnv('AK_APP_DIR', join(home, 'app', '1.0'));
+    expect(refreshServiceFiles(home, svc, 'mac')).toEqual([]); // not a release (no KODE_APP_DIR)
+    vi.stubEnv('KODE_APP_DIR', join(home, 'app', '1.0'));
     expect(refreshServiceFiles(home, null, 'mac')).toEqual([]);
     expect(refreshServiceFiles(home, new SystemdServices(() => ok, { XDG_CONFIG_HOME: dir }, dir), 'box')).toEqual([]);
     expect(refreshServiceFiles(home, svc, 'mac')).toEqual(['host', 'server']);

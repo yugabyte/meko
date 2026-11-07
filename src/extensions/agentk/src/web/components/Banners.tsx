@@ -70,7 +70,7 @@ const CLAUDE_OLD_KEY = 'ak-dismissed-claude-old';
 const CLAUDE_UPDATE_KEY = 'ak-dismissed-claude-update';
 
 /**
- * The Claude Code sessions launch with, when it's too old for AgentK's mod: update it here (its own
+ * The Claude Code sessions launch with, when it's too old for Kode's mod: update it here (its own
  * `claude update`), or dismiss the banner for that version. Then the update's outcome.
  */
 function ClaudeCodeBanners({ state, onError }: { state: AppState; onError: (m: string) => void }) {
@@ -118,8 +118,8 @@ function ClaudeCodeBanners({ state, onError }: { state: AppState; onError: (m: s
       {!c.updating && old && (
         <div className="banner warn">
           <span className="banner-text">
-            Claude Code {c.version} on {state.serverName} is older than {c.minModVersion}, the first version AgentK’s mod
-            runs in, so AgentK types its prompts into the terminal.
+            Claude Code {c.version} on {state.serverName} is older than {c.minModVersion}, the first version Kode’s mod
+            runs in, so Kode types its prompts into the terminal.
           </span>
           <span className="banner-btns">
             <button className="btn primary small" disabled={starting} onClick={update}>
@@ -224,8 +224,8 @@ function InviteBanners({
 }
 
 /**
- * The offer to install AgentK as an app (`installapp.ts`), until it's installed or turned down in this
- * browser. On iOS only Not now hides it: Safari can't tell that AgentK is on the Home Screen already.
+ * The offer to install Kode as an app (`installapp.ts`), until it's installed or turned down in this
+ * browser. On iOS only Not now hides it: Safari can't tell that Kode is on the Home Screen already.
  */
 function InstallBanner() {
   const { offer, install, dismiss } = useInstall();
@@ -234,8 +234,8 @@ function InstallBanner() {
     <div className="banner info">
       <span className="banner-text">
         {offer === 'prompt'
-          ? 'Install AgentK as an app: it opens in its own window, with its own icon in your dock or on your home screen.'
-          : 'Add AgentK to your Home Screen: tap Share, then Add to Home Screen. It opens full screen there, and can show notifications.'}
+          ? 'Install Kode as an app: it opens in its own window, with its own icon in your dock or on your home screen.'
+          : 'Add Kode to your Home Screen: tap Share, then Add to Home Screen. It opens full screen there, and can show notifications.'}
       </span>
       <span className="banner-btns">
         {offer === 'prompt' && (
@@ -285,8 +285,8 @@ function FailedStartBanners({
 }
 
 /**
- * Claude Code's sessions don't reach AgentK's Meko (its meko MCP server isn't connected, as Meko
- * reports it, or its settings name another server or a token that doesn't work there). AgentK never
+ * Claude Code's sessions don't reach Kode's Meko (its meko MCP server isn't connected, as Meko
+ * reports it, or its settings name another server or a token that doesn't work there). Kode never
  * fixes it on its own: the user sets Claude Code up from here or Settings › Harness › Claude Code,
  * which has Meko connect it first (`setUpWithMeko`).
  */
@@ -307,7 +307,7 @@ function MekoClaudeBanner({ state, onDetails, onError }: { state: AppState; onDe
   return (
     <div className="banner warn" role="alert">
       <span className="banner-text">
-        Claude Code sessions may not reach AgentK’s Meko datapacks. {gaps.join(' ')} Setting it up changes Claude Code’s own
+        Claude Code sessions may not reach Kode’s Meko datapacks. {gaps.join(' ')} Setting it up changes Claude Code’s own
         settings; new sessions pick it up, and running ones keep what they started with.
       </span>
       <span className="banner-btns">
@@ -332,8 +332,8 @@ export function MekoInstallBanner({ state }: { state: AppState }) {
   return (
     <div className="banner warn" role="alert">
       <span className="banner-text">
-        Meko isn’t installed on {state.serverName}. AgentK keeps each project’s memory in Meko. Install it there:{' '}
-        <code className="mono">{MEKO_INSTALL_COMMAND}</code>. This goes away once AgentK finds it.
+        Meko isn’t installed on {state.serverName}. Kode keeps each project’s memory in Meko. Install it there:{' '}
+        <code className="mono">{MEKO_INSTALL_COMMAND}</code>. This goes away once Kode finds it.
       </span>
       <button className="btn small" onClick={() => void copyText(MEKO_INSTALL_COMMAND).then(setCopied)}>
         {copied ? 'Copied' : 'Copy'}
@@ -370,7 +370,7 @@ export function Banners({
   const [dismissed, setDismissed] = useState<string | null>(readDismissed);
   const [applying, setApplying] = useState(false);
   const u = state.update;
-  // Meko installs AgentK's updates: what's available, and its job, are Meko's (mekoupdate.ts).
+  // Meko installs Kode's updates: what's available, and its job, are Meko's (mekoupdate.ts).
   const meko = useMekoUpdate().row;
   const offer = meko?.updatable && meko.update_available && meko.latest ? meko.latest : null;
   const failed = updateFailed(meko);
@@ -393,7 +393,7 @@ export function Banners({
         <div className="banner warn" role="alert">
           <span className="banner-text">
             The session host on {state.serverName} runs version {state.sessionHost.version}, too old for this version of
-            AgentK, so sessions can’t start. Run meko kode host restart there: running sessions restart and resume.
+            Kode, so sessions can’t start. Run meko kode host restart there: running sessions restart and resume.
           </span>
         </div>
       )}
@@ -418,7 +418,7 @@ export function Banners({
       )}
       {stale && (
         <div className="banner info">
-          <span className="banner-text">AgentK was updated to v{stale}. Reload to use it.</span>
+          <span className="banner-text">Kode was updated to v{stale}. Reload to use it.</span>
           <button className="btn primary small" onClick={() => location.reload()}>
             Reload
           </button>
@@ -476,7 +476,7 @@ export function Banners({
       )}
       {failed && failedKey && dismissedFailure !== failedKey && (
         <div className="banner warn">
-          <span className="banner-text">Updating AgentK failed: {failed}</span>
+          <span className="banner-text">Updating Kode failed: {failed}</span>
           <button
             className="link-btn"
             onClick={() => {

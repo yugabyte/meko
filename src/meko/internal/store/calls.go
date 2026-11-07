@@ -17,7 +17,7 @@ type Call struct {
 	AgentID        string
 	ConversationID string
 	Credential     string
-	// Client is the X-Meko-Client header the call came with: "agentk" for AgentK's own calls, else "".
+	// Client is the X-Meko-Client header the call came with: "kode" for Kode's own calls, else "".
 	Client string
 	// Location is where the call ran: "" for this Meko, LocationCloud for one /mcp sent on to the
 	// linked Meko Cloud. Calls and ConversationCalls, which metrics read, return only this Meko's;

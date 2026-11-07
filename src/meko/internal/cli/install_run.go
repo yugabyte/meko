@@ -295,7 +295,7 @@ func portInUse(r report, msg string, port int, move string) {
 }
 
 // addLater is what a first install says in place of the picker, where it can't ask.
-const addLater = "Add an extension at any time: meko extension install agentk"
+const addLater = "Add an extension at any time: meko extension install kode"
 
 // upcoming are the experiences a first install's picker lists as coming soon. They aren't
 // extensions yet (nothing in extensions.Known), so they can't be picked or installed.
@@ -333,9 +333,9 @@ func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r re
 		if len(names) == 0 {
 			return ""
 		}
-		// AgentK first: it's what most people add.
+		// Kode first: it's what most people add.
 		for i, n := range names {
-			if n == "agentk" && i > 0 {
+			if n == "kode" && i > 0 {
 				names[0], names[i] = names[i], names[0]
 				rows[0], rows[i] = rows[i], rows[0]
 			}

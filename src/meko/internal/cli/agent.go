@@ -195,7 +195,7 @@ func runAgentDisconnect(l paths.Layout, name string, stdout, stderr io.Writer) i
 func printConnectHelp(t agents.Target, running bool, w io.Writer) {
 	fmt.Fprintln(w, "Add Meko to any MCP client as a Streamable HTTP server:")
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	fmt.Fprintf(tw, "  Name\t%s (AgentK knows Meko's tools by it)\n", agents.ServerName)
+	fmt.Fprintf(tw, "  Name\t%s (Kode knows Meko's tools by it)\n", agents.ServerName)
 	fmt.Fprintf(tw, "  URL\t%s\n", t.URL)
 	fmt.Fprintf(tw, "  Header\tAuthorization: Bearer %s\n", t.Token)
 	fmt.Fprintf(tw, "  Token\t%s\n", t.Token)

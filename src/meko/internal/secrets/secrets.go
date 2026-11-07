@@ -4,7 +4,7 @@
 // their owner.
 //
 // A secret never reaches a log or an error message, and reaches a command line only where an
-// installer takes it as a flag: meko extension install passes the client token to AgentK's
+// installer takes it as a flag: meko extension install passes the client token to Kode's
 // installer as --meko-key, as REVIEW.md allows.
 package secrets
 

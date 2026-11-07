@@ -1,6 +1,6 @@
 # The app
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 The left rail holds projects, each with its repo's folder name in small type under the project
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
@@ -95,14 +95,14 @@ host answers a program's color queries (OSC 10/11) with them, and Kiro is told t
 (`KIRO_TERMINAL_THEME`). With several browsers on different colors, the last to report wins. A
 change applies to sessions started (or resumed) after it.
 
-![The AgentK window: the project rail, session tabs, the stage bar and a live Claude terminal](../screenshots/workbench.png)
+![The Kode window: the project rail, session tabs, the stage bar and a live Claude terminal](../screenshots/workbench.png)
 
 Session states, shown with a dot on each session (on its tab, or in the rail) and on its project:
 
 - **Working:** the dot's halo blinks
 - **Needs you:** a permission prompt or a question. The diamond knocks three times short and once
   long, then pauses. It also shows in Pull Request while a merge blocker only you can clear stands
-  (`Session.waitsOnYou`: a held review, CI or merge conflicts AgentK handed over, or with Run to
+  (`Session.waitsOnYou`: a held review, CI or merge conflicts Kode handed over, or with Run to
   merge any blocker that doesn't clear by itself; see *Waiting on you* in
   [the task lifecycle](lifecycle.md)), and in Code or Pull Request while a code review's findings
   wait on you ([Findings that wait on you](code-review.md#findings-that-wait-on-you)), over idle, recovered and working, and over learning, queued,
@@ -110,21 +110,21 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
-- **Agent stopped while idle:** AgentK stopped the session's agent after `[sessions] idle_stop_hours`
+- **Agent stopped while idle:** Kode stopped the session's agent after `[sessions] idle_stop_hours`
   idle to free its memory (`Session.idleStoppedAt`; [Stopping idle agents](recovery.md#stopping-idle-agents)).
   A thin grey ring with a pause sign (‖) inside, still: the rail ranks it under idle. Needs you shows over it while
   something only you can clear waits (`Session.waitsOnYou`). The terminal says so, with
   **Resume**; opening the session doesn't start the agent, but Resume, a key typed into the terminal
   (the phone's key bar and compose box too),
-  an action that sends it a prompt or AgentK's own work for it does, so the gates don't block on it.
-- **Learning:** AgentK is saving what the session learned to Meko (the
+  an action that sends it a prompt or Kode's own work for it does, so the gates don't block on it.
+- **Learning:** Kode is saving what the session learned to Meko (the
   [learn step](recall-and-learn.md#the-learn-step), `Session.learning`). The dot becomes a ring of dots turning around
   Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the
   status idle; without the mod it's a working turn), never over needs you, exited or starting
   (`dotState()` in `src/web/util.ts`). The rail ranks it like working.
 - **Calling Meko:** the session's agent (Claude, Kiro or OpenCode) is running a Meko tool call. The working dot gets Meko's m, in white,
   and its halo blinks on (*Meko in the dot*, below).
-- **Queued:** a gate is queued (`Session.queued`: Merge when ready, waiting on CI or the AgentK
+- **Queued:** a gate is queued (`Session.queued`: Merge when ready, waiting on CI or the Kode
   review, or Open PR) while Claude is between turns. The idle ring, with its top quarter open,
   turns once every 3 s. It shows over idle and recovered only; a learn step wins over it
   (`dotState()`). The session's tooltip says what the gate waits on (a merge's from `queuedText()`;
@@ -133,7 +133,7 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   background, which wakes it again when it's done (`Session.background`: Claude Code's background
   shells, subagents and monitors, from its `Stop` hook's `background_tasks`, less the watch it
   keeps on each Artifact the agent publishes, a monitor that never ends (`backgroundTasks()`);
-  OpenCode's background shells and subagents, from AgentK's plugin; never Kiro's, see
+  OpenCode's background shells and subagents, from Kode's plugin; never Kiro's, see
   [Harnesses](harnesses.md)). The
   same turning ring as queued. It shows over idle and recovered only; a learn step and a queued
   gate win over it (`dotState()`). The tooltip and the palette name what's running ("running in
@@ -153,7 +153,7 @@ palette dots blink together, and a dot shown again picks up where its signal is.
 motion the dots are still.
 
 **Meko in the dot.** While the session's agent runs a Meko tool call, `Session.mekoCall` is true
-and a working session's dot shows Meko's m. Claude's calls come from AgentK's mod (`/mod/meko`, a
+and a working session's dot shows Meko's m. Claude's calls come from Kode's mod (`/mod/meko`, a
 start and an end per `tool_use_id`), kept in memory by `ModLinks.mekoCall()` in `modlink.ts`, which
 pushes a change only when the first starts and when the last ends; a Claude Code session without the
 mod never shows it. Kiro's and OpenCode's come from their hooks (see
@@ -181,7 +181,7 @@ turn's end and a reset clear it with the rest.
 - **How it looks:** the working dot drawn at 12 px (10 px in the layout, with `margin: -1px`, so the
   tab keeps its width as calls start and end), with `/meko-m.png` as an 8 px white mask. It keeps
   the working blink. The session's tooltip and the palette say *calling Meko*.
-- **Why the mod and not command hooks:** AgentK's hooks see the end of every tool call
+- **Why the mod and not command hooks:** Kode's hooks see the end of every tool call
   (`PostToolUse`) but the start of only a few. A `PreToolUse` matcher would add a process per call
   and leave a failed or interrupted call to a guess. The mod brackets each call exactly.
 
@@ -299,11 +299,11 @@ base, the unpushed count, and Claude's system prompt at its next launch. The ses
 notes the change (*Base changed from master to 2026.1*). The branch must be here, on origin or on
 upstream, with history in common with the session's, and not the session's own branch. A review's
 base, and a session's with a PR, is its PR's and can't be changed; there the base is plain text.
-When AgentK finds the session's PR, the PR's base becomes the session's if they differ (the base
+When Kode finds the session's PR, the PR's base becomes the session's if they differ (the base
 may have changed after the PR prompt went out). The menu says under its filter that the pick
 becomes the session's base, and the PR goes there; long branch names are cut short.
 
-AgentK also suggests a base when the branch is far past its own (`suggestBase()` in `changes.ts`,
+Kode also suggests a base when the branch is far past its own (`suggestBase()` in `changes.ts`,
 at least 50 commits, `SUGGEST_MIN_AHEAD`): of origin's and upstream's branches whose tips are in
 the branch's history (`git for-each-ref --merged HEAD`, the 50 newest), less the branch's own
 copies and the base itself, the one the fewest commits behind it, when that's fewer. A bar under the
@@ -322,7 +322,7 @@ lines, or added and unchanged ones) and stops at the edge of its hunk; a range o
 leaves out the unchanged lines between them. While you drag, and while you write its comment, a
 range shows a bar beside each of its lines and a single **+**, on its last line. Comments are
 drafts in `state.db` until you click **Send N comments**, which sends
-them to Claude as one prompt (through [AgentK's mod](mod.md), or pasted into the
+them to Claude as one prompt (through [Kode's mod](mod.md), or pasted into the
 terminal), grouped by file, with the lines each one is about. If Claude is
 mid-turn or waiting on a permission prompt, they queue and go out when it's back at its prompt in
 the Code or Review stage. Each comment keeps an excerpt of its last 20 lines (lines over 1,000 characters are cut short and
@@ -366,12 +366,12 @@ terminal**, which hides it for that start in this page.
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
 normal tab, so it works in the installed app window), `⌘.` (`Ctrl+.` elsewhere) opens the session's
 ⋯ menu (the ⋯ sheet on a phone; the terminal never gets the key, and an input method that takes
-`Ctrl+.` itself, such as some Linux emoji pickers, keeps it from AgentK), and `⌘K` opens a palette to jump to any
+`Ctrl+.` itself, such as some Linux emoji pickers, keeps it from Kode), and `⌘K` opens a palette to jump to any
 session or project home, create a session, or move or rename the one on screen (or, with a GitHub
 PR or issue pasted, start a session on it: see [Starting from a GitHub link](palette.md#starting-from-a-github-link);
-or ask in plain words: see [Ask AgentK](palette.md#ask-agentk); or find a session by what it's about: see
+or ask in plain words: see [Ask Kode](palette.md#ask-kode); or find a session by what it's about: see
 [Finding a session](palette.md#finding-a-session)).
-The search bar at the top of the rail (the AgentK logo, "Ask AgentK" and the shortcut)
+The search bar at the top of the rail (the Kode logo, "Ask Kode" and the shortcut)
 opens it too; either way it opens over that bar, at the top left. In the palette, session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
 these use Ctrl, so the terminal doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes
@@ -433,7 +433,7 @@ In a dialog, `Ctrl+Enter` (`⌘Enter`) presses its main button, as a click would
 disabled): Start session, Move to…, Save and the like (`submitButton()` in `common.tsx`). In a form
 with a submit button, that's the submit button if it's primary and nothing otherwise (Turn off
 two-factor); else the dialog footer's primary button; else, outside a form and footer, a primary
-button marked `data-submit` (Answer, in AgentK is asking). A field that takes Enter itself keeps it:
+button marked `data-submit` (Answer, in Kode is asking). A field that takes Enter itself keeps it:
 in the Another PR box, `Ctrl+Enter` is Find, as Enter is, so a session can't start on the PR picked
 before. The design's Questions view does the same with **Approve with answers** ([Design
 panel](design-panel.md)).
@@ -492,7 +492,7 @@ every prompt that names the task (a review's notes) adds the paths with a line a
 open each with its Read tool: the first prompt, a move that gives the session its task, a relaunch without resume.
 The hooks settings file allows `Read` on the pastes folder, so that doesn't stop for a permission
 prompt. The images aren't the task: with no text, the name is the task, as for any session started
-with no first prompt. AgentK's Meko search at start uses the task's text alone. Staged images no session started with
+with no first prompt. Kode's Meko search at start uses the task's text alone. Staged images no session started with
 are removed after a day (at startup and hourly), and a project's when it's closed.
 
 Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that
@@ -505,7 +505,7 @@ activity.
 A browser notification fires when any session moves to *needs you*, and for the gates and the
 PR's news (a review arrived, CI failed, a merge) unless the session's tab is open in front of you.
 A session on [Run to merge](lifecycle.md#run-to-merge) notifies only when it's done or needs you. You
-can mute them per project. Only one open AgentK page shows them, the one used
+can mute them per project. Only one open Kode page shows them, the one used
 last (pages queue for a Web Lock and a page that gets focus steals it; when it closes, the next one
 takes over), so each shows once. They go through a minimal service worker (`/sw.js`), so a
 notification stays clickable after the page that showed it reloads (as open pages do after an
@@ -521,7 +521,7 @@ opens the dialog in an open window, or opens `/`, where the share's banner is wa
 
 ## Installing the app
 
-AgentK is a web app you can install: the manifest and the service worker above meet the browsers'
+Kode is a web app you can install: the manifest and the service worker above meet the browsers'
 rules (the service worker still caches nothing). The first time you open it in a browser that can
 install it, a banner offers to: **Install** opens the browser's own install dialog, and **Not now**
 hides the offer in that browser for good (`localStorage`, as the other banners do; installing is
@@ -529,12 +529,12 @@ per browser and device, so the server doesn't keep it). The page catches the bro
 `beforeinstallprompt` as it loads and holds it, so Android Chrome doesn't show its own install bar
 as well (`src/web/installapp.ts`). The banner doesn't show in the installed app, once the app is
 installed (Chrome stops making the offer in its tabs), or before a sign-in on a Meko that has one. While the browser can
-still install it, **Install AgentK as an app** is in the `⌘K` palette too, even after Not now.
+still install it, **Install Kode as an app** is in the `⌘K` palette too, even after Not now.
 Tapping Install doesn't also ask for notification permission (the first-click ask waits for the
 next click), so one tap never brings up two prompts.
 
 An iPhone or iPad makes no offer, so there the banner says to tap Share, then Add to Home Screen;
-iOS shows notifications only for Home Screen web apps. Safari can't tell that AgentK is on the Home
+iOS shows notifications only for Home Screen web apps. Safari can't tell that Kode is on the Home
 Screen already (it has no `appinstalled`, and the Home Screen app keeps its storage apart), so in a
 Safari tab only Not now hides these steps; the Home Screen app itself never shows them. Firefox and Safari on a Mac get no banner.
 Chrome offers nothing for a page whose certificate it doesn't trust, so with Meko's self-signed

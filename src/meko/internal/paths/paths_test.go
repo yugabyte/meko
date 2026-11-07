@@ -25,7 +25,7 @@ func fakeFS(t *testing.T, types map[string]string) {
 	t.Cleanup(func() { FSType = old })
 }
 
-// The cases AgentK's mekoHome() runs too (testdata/resolve-cases.json), so both pick the same
+// The cases Kode's mekoHome() runs too (testdata/resolve-cases.json), so both pick the same
 // folder. Their absolute paths are put under a temporary root, and the network folders made there,
 // because Resolve checks the filesystem of a path's nearest folder that exists.
 func TestResolveCases(t *testing.T) {

@@ -147,10 +147,10 @@ describe('the SessionStart context hook', () => {
       child.child.stdin?.end('{"hook_event_name":"SessionStart","source":"startup"}');
       return (await child).stdout;
     };
-    expect(JSON.parse(await runScript({ AK_HOOK_SOCK: sock, AK_HOOK_TOKEN: 'good' }))).toEqual(
+    expect(JSON.parse(await runScript({ KODE_HOOK_SOCK: sock, KODE_HOOK_TOKEN: 'good' }))).toEqual(
       { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'from Meko' } });
-    expect(await runScript({ AK_HOOK_SOCK: sock, AK_HOOK_TOKEN: 'other' })).toBe('');
-    expect(await runScript({ AK_HOOK_SOCK: join(home, 'missing.sock'), AK_HOOK_TOKEN: 'good' })).toBe('');
+    expect(await runScript({ KODE_HOOK_SOCK: sock, KODE_HOOK_TOKEN: 'other' })).toBe('');
+    expect(await runScript({ KODE_HOOK_SOCK: join(home, 'missing.sock'), KODE_HOOK_TOKEN: 'good' })).toBe('');
     expect(await runScript({})).toBe('');
   });
 });

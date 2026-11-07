@@ -85,7 +85,7 @@ describe('Meko in Claude Code: what is missing', () => {
 });
 
 describe('the command to set up Meko by hand', () => {
-  it("reads the local Meko's token in the user's shell, from the Meko AgentK uses, and keeps any other server's key off it", () => {
+  it("reads the local Meko's token in the user's shell, from the Meko Kode uses, and keeps any other server's key off it", () => {
     expect(manualMekoSetup('http://127.0.0.1:7778/mcp', 'claude-code', { home: null })).toBe(
       'npx @yugabytedb/meko-mcp --client claude-code --url http://127.0.0.1:7778/mcp --api-key "$(meko token)"',
     );

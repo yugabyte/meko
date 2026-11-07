@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
 import { agentkHooks, kiroArgs, kiroHarness, kiroMekoTool, kiroTrustByAgent, normalizeKiro, writeAgentkAgent } from '../../src/server/harness/kiro.js';
 import {
-  agentkAgent, builtinKiroAgent, findKiroSession, parseKiroMekoCalls, parseKiroModels, parseKiroPlan, parseKiroTurns, readKiroAgent, readKiroRun, removeKiroAgent,
+  agentkAgent, builtinKiroAgent, findKiroSession, parseKiroMekoCalls, parseKiroModels, parseKiroPlan, parseKiroTurns, readKiroAgent, readKiroRun, removeKiroAgent, removeOldKiroAgents,
   removeOwnKiroAgent, writeKiroAgent,
 } from '../../src/server/kiro.js';
 import { kiroMekoGaps, kiroMekoServerNames } from '../../src/server/mekokiro.js';
@@ -29,8 +29,8 @@ async function withKiroHomeAsync(fn: (home: string) => Promise<void>): Promise<v
 }
 const withKiroHome = (fn: (home: string) => void) => withKiroHomeAsync(async (home) => fn(home));
 
-describe("Kiro's agentk agent", () => {
-  it("keeps the base agent's tools, MCP servers and hooks (Meko's capture), adds AgentK's and its session tools after them, and drops Kiro's upgrade bookkeeping", () => {
+describe("Kiro's kode agent", () => {
+  it("keeps the base agent's tools, MCP servers and hooks (Meko's capture), adds Kode's and its session tools after them, and drops Kiro's upgrade bookkeeping", () => {
     const meko = {
       name: 'meko-default', description: 'Meko', tools: ['@meko', 'read', 'write'], includeMcpJson: true, kiroUpgrade: { revision: 2 },
       hooks: { agentSpawn: [{ command: 'node kiro-handler.js agentSpawn' }], stop: [{ command: 'node kiro-handler.js stop' }] },
@@ -40,18 +40,18 @@ describe("Kiro's agentk agent", () => {
     // [meko] capture_transcripts off: Meko's capture hooks are left out, as Claude's sessions run without Meko's plugin.
     expect(agentkAgent(meko, ours, { mekoCapture: false }).hooks).toEqual({ agentSpawn: [{ command: '/run/hook.sh' }], stop: [], preToolUse: ours.preToolUse });
     expect(a).toEqual({
-      name: 'agentk', description: expect.stringMatching(/^Written by AgentK.* Based on meko-default\.$/), tools: ['@meko', 'read', 'write'], includeMcpJson: true,
+      name: 'kode', description: expect.stringMatching(/^Written by Kode.* Based on meko-default\.$/), tools: ['@meko', 'read', 'write'], includeMcpJson: true,
       hooks: {
         agentSpawn: [{ command: 'node kiro-handler.js agentSpawn' }, { command: '/run/hook.sh' }],
         stop: [{ command: 'node kiro-handler.js stop' }],
         preToolUse: [{ matcher: 'fs_write', command: '/run/kiro-guard.sh' }],
       },
     });
-    const tools = { name: 'agentk_sessions', server: { command: '/ak/node', args: ['/ak/mcpmain.js'] }, skill: '/ak/run/tools/skills/agentk-sessions/SKILL.md' };
+    const tools = { name: 'kode_sessions', server: { command: '/ak/node', args: ['/ak/mcpmain.js'] }, skill: '/ak/run/tools/skills/kode-sessions/SKILL.md' };
     const base = { ...meko, mcpServers: { meko: { url: 'https://meko.test/mcp' } }, resources: ['file://AGENTS.md'], allowedTools: ['read'] };
     expect(agentkAgent(base, ours, { tools })).toMatchObject({
-      mcpServers: { meko: { url: 'https://meko.test/mcp' }, agentk_sessions: tools.server },
-      resources: ['file://AGENTS.md', 'skill:///ak/run/tools/skills/agentk-sessions/SKILL.md'],
+      mcpServers: { meko: { url: 'https://meko.test/mcp' }, kode_sessions: tools.server },
+      resources: ['file://AGENTS.md', 'skill:///ak/run/tools/skills/kode-sessions/SKILL.md'],
       // Nothing more is allowed than the base allows: Kiro asks before each session tool too.
       allowedTools: ['read'],
     });
@@ -62,24 +62,24 @@ describe("Kiro's agentk agent", () => {
     const a = agentkAgent({ name: 'base', tools: ['*'] }, {});
     expect(writeKiroAgent(a, home)).toBe(true);
     expect(writeKiroAgent(a, home)).toBe(false);
-    // A default agent named agentk (or a file with that name) is AgentK's own, not the user's.
+    // A default agent named agentk (or a file with that name) is Kode's own, not the user's.
     expect(readKiroAgent('agentk', home)).toBeNull();
     // So is one written while the product was AgentK Local.
-    writeFileSync(join(home, 'agents', 'agentk-ask.json'), JSON.stringify({ name: 'agentk-ask', description: 'Written by AgentK Local, which rewrites it: edit your default agent instead.' }));
-    expect(readKiroAgent('agentk-ask', home)).toBeNull();
+    writeFileSync(join(home, 'agents', 'kode-ask.json'), JSON.stringify({ name: 'kode-ask', description: 'Written by AgentK Local, which rewrites it: edit your default agent instead.' }));
+    expect(readKiroAgent('kode-ask', home)).toBeNull();
     writeFileSync(join(home, 'agents', 'mine.json'), JSON.stringify({ name: 'my-agent', tools: ['read'] }));
     expect(readKiroAgent('my-agent', home)).toEqual({ name: 'my-agent', tools: ['read'] });
   });
 });
 
-describe("Kiro's agentk-trusted agent ([kiro] trust_tools on Kiro 3.0)", () => {
+describe("Kiro's kode-trusted agent ([kiro] trust_tools on Kiro 3.0)", () => {
   const allowAll = { capability: 'all', effect: 'allow' };
   const hooks = { agentSpawn: [{ command: '/run/hook.sh' }] };
 
   it("is agentk with every tool allowed after the base's own rules, which still hold (Kiro settles deny and ask first)", () => {
     const base = { name: 'meko-default', tools: ['*'], permissions: { rules: [{ capability: 'shell', match: ['rm *'], effect: 'deny' }], other: 1 } };
     expect(agentkAgent(base, hooks, { trustAll: true })).toEqual({
-      ...agentkAgent(base, hooks), name: 'agentk-trusted',
+      ...agentkAgent(base, hooks), name: 'kode-trusted',
       permissions: { rules: [{ capability: 'shell', match: ['rm *'], effect: 'deny' }, allowAll], other: 1 },
     });
     expect(agentkAgent({ name: 'base' }, hooks, { trustAll: true }).permissions).toEqual({ rules: [allowAll] });
@@ -88,23 +88,35 @@ describe("Kiro's agentk-trusted agent ([kiro] trust_tools on Kiro 3.0)", () => {
     expect(agentkAgent({ name: 'base' }, hooks)).not.toHaveProperty('permissions');
   });
 
-  it('is removed only while it is AgentK\'s, with its copy, and by uninstall with agentk', () => {
+  it('is removed only while it is Kode\'s, with its copy, and by uninstall with agentk', () => {
     const home = tempDir('akl-kiro-');
-    const written = join(tempDir('akl-run-'), 'run', 'kiro-agentk-trusted.json');
-    const file = join(home, 'agents', 'agentk-trusted.json');
-    expect(removeOwnKiroAgent('agentk-trusted', home, written)).toBe(false);
+    const written = join(tempDir('akl-run-'), 'run', 'kiro-kode-trusted.json');
+    const file = join(home, 'agents', 'kode-trusted.json');
+    expect(removeOwnKiroAgent('kode-trusted', home, written)).toBe(false);
     writeKiroAgent(agentkAgent({ name: 'base' }, hooks, { trustAll: true }), home, written);
-    expect(removeOwnKiroAgent('agentk-trusted', home, written)).toBe(true);
+    expect(removeOwnKiroAgent('kode-trusted', home, written)).toBe(true);
     expect(existsSync(file) || existsSync(written)).toBe(false);
     // Someone's own agent by that name stays.
-    writeFileSync(file, JSON.stringify({ name: 'agentk-trusted', description: 'Mine' }));
-    expect(removeOwnKiroAgent('agentk-trusted', home)).toBe(false);
+    writeFileSync(file, JSON.stringify({ name: 'kode-trusted', description: 'Mine' }));
+    expect(removeOwnKiroAgent('kode-trusted', home)).toBe(false);
     expect(existsSync(file)).toBe(true);
 
     writeKiroAgent(agentkAgent({ name: 'base' }, hooks), home);
     writeKiroAgent(agentkAgent({ name: 'base' }, hooks, { trustAll: true }), home);
     removeKiroAgent(home);
-    expect(existsSync(join(home, 'agents', 'agentk.json')) || existsSync(file)).toBe(false);
+    expect(existsSync(join(home, 'agents', 'kode.json')) || existsSync(file)).toBe(false);
+  });
+
+  it("removes the agents Kode wrote as agentk before it was called Kode, and someone's own by those names stays", async () => {
+    await withKiroHome((home) => {
+      mkdirSync(join(home, 'agents'), { recursive: true });
+      writeFileSync(join(home, 'agents', 'agentk.json'), JSON.stringify({ name: 'agentk', description: 'Written by AgentK, which rewrites it: edit your default agent instead.' }));
+      writeFileSync(join(home, 'agents', 'agentk-trusted.json'), JSON.stringify({ name: 'agentk-trusted', description: 'Mine' }));
+      expect(removeOldKiroAgents(home)).toBe(true);
+      expect(existsSync(join(home, 'agents', 'agentk.json'))).toBe(false);
+      expect(existsSync(join(home, 'agents', 'agentk-trusted.json'))).toBe(true);
+      expect(removeOldKiroAgents(home)).toBe(false);
+    });
   });
 
   it('is used only with trust_tools on a Kiro read as 3.0 or later, and left as it is while no version is known', () => {
@@ -118,18 +130,18 @@ describe("Kiro's agentk-trusted agent ([kiro] trust_tools on Kiro 3.0)", () => {
 
     withKiroHome((home) => {
       const paths = getPaths(tempDir('akl-kiro-ak-'));
-      const trusted = join(home, 'agents', 'agentk-trusted.json');
-      expect(writeAgentkAgent(paths, cfg(true), true)).toEqual(["wrote Kiro's agentk agent", "wrote Kiro's agentk-trusted agent"]);
+      const trusted = join(home, 'agents', 'kode-trusted.json');
+      expect(writeAgentkAgent(paths, cfg(true), true)).toEqual(["wrote Kiro's kode agent", "wrote Kiro's kode-trusted agent"]);
       expect(JSON.parse(readFileSync(trusted, 'utf8')).permissions.rules).toEqual([allowAll]);
-      expect(JSON.parse(readFileSync(join(home, 'agents', 'agentk.json'), 'utf8'))).not.toHaveProperty('permissions');
+      expect(JSON.parse(readFileSync(join(home, 'agents', 'kode.json'), 'utf8'))).not.toHaveProperty('permissions');
       expect(writeAgentkAgent(paths, cfg(true), true)).toEqual([]);
       // No version known: neither written nor removed.
       expect(writeAgentkAgent(paths, cfg(true), null)).toEqual([]);
       expect(existsSync(trusted)).toBe(true);
       // Trust turned off: removed, agentk left as it was.
-      expect(writeAgentkAgent(paths, cfg(false))).toEqual(["removed Kiro's agentk-trusted agent"]);
+      expect(writeAgentkAgent(paths, cfg(false))).toEqual(["removed Kiro's kode-trusted agent"]);
       expect(existsSync(trusted)).toBe(false);
-      expect(existsSync(join(home, 'agents', 'agentk.json'))).toBe(true);
+      expect(existsSync(join(home, 'agents', 'kode.json'))).toBe(true);
       expect(writeAgentkAgent(paths, cfg(false))).toEqual([]);
     });
   });
@@ -137,7 +149,7 @@ describe("Kiro's agentk-trusted agent ([kiro] trust_tools on Kiro 3.0)", () => {
   it('runs a launch as the Kiro last read, even after a read failed or with Kiro off for new sessions, and goes once trust_tools is off', async () => {
     await withKiroHomeAsync(async (home) => {
       const paths = getPaths(tempDir('akl-kiro-ak-'));
-      const trusted = join(home, 'agents', 'agentk-trusted.json');
+      const trusted = join(home, 'agents', 'kode-trusted.json');
       let version: string | null = '3.0.0';
       const reads: string[] = [];
       const kiro = kiroHarness({ log: silentLog, changed: () => {}, readVersion: async (cmd) => (reads.push(cmd), version) });
@@ -146,25 +158,25 @@ describe("Kiro's agentk-trusted agent ([kiro] trust_tools on Kiro 3.0)", () => {
         await kiro.beforeLaunch({ paths, cfg: c, log: silentLog, row: row({ id: 's1', worktree_path: home }), repo: null } as never);
         return kiro.launcher(paths, c, { row: row({ id: 's1', worktree_path: home }), resume: false, prompt: null, model: null, untrusted: false, env: {}, termTheme: 'dark', unsetEnv: [] } as never).args.slice(0, 3);
       };
-      expect(await launch(cfg(true))).toEqual(['chat', '--agent', 'agentk-trusted']);
+      expect(await launch(cfg(true))).toEqual(['chat', '--agent', 'kode-trusted']);
       expect(existsSync(trusted)).toBe(true);
       // Kiro turned off for new sessions: its sessions still resume as the Kiro last read, never knocked off the agent.
       version = null;
-      expect(await launch(cfg(true, false))).toEqual(['chat', '--agent', 'agentk-trusted']);
+      expect(await launch(cfg(true, false))).toEqual(['chat', '--agent', 'kode-trusted']);
       expect(existsSync(trusted)).toBe(true);
       // A version read that fails keeps the last one.
       await kiro.version(cfg(true), true);
-      expect(await launch(cfg(true))).toEqual(['chat', '--agent', 'agentk-trusted']);
+      expect(await launch(cfg(true))).toEqual(['chat', '--agent', 'kode-trusted']);
       // Settings runs prepare when trust_tools turns off: gone at once, Kiro on or off.
       await kiro.prepare(paths, cfg(false, false));
       expect(existsSync(trusted)).toBe(false);
-      expect(await launch(cfg(false))).toEqual(['chat', '--agent', 'agentk']);
+      expect(await launch(cfg(false))).toEqual(['chat', '--agent', 'kode']);
       expect(reads.length).toBeGreaterThan(0);
     });
   });
 });
 
-describe("Kiro's built-in agent, as AgentK exported it", () => {
+describe("Kiro's built-in agent, as Kode exported it", () => {
   it("leaves out the copy of Kiro's MCP config the export took, so Kiro reads Meko's current token (#467)", () => {
     const paths = getPaths(tempDir('akl-kiro-'));
     mkdirSync(paths.run, { recursive: true });
@@ -178,9 +190,9 @@ describe("Kiro's built-in agent, as AgentK exported it", () => {
   });
 });
 
-describe("Kiro's agentk agent after Kiro 3.0 upgraded it", () => {
+describe("Kiro's kode agent after Kiro 3.0 upgraded it", () => {
   const hooks = { agentSpawn: [{ command: "'/ak/run/hook.sh'", timeout_ms: 5000 }], preToolUse: [{ matcher: 'fs_write', command: "'/ak/run/kiro-guard.sh'", timeout_ms: 5000 }] };
-  const servers = { agentk_sessions: { command: '/ak/node', args: ['/ak/mcpmain.js'] } };
+  const servers = { kode_sessions: { command: '/ak/node', args: ['/ak/mcpmain.js'] } };
   const a = { ...agentkAgent({ name: 'base', tools: ['*'] }, hooks), mcpServers: servers };
   const t: Record<string, unknown> = { ...agentkAgent({ name: 'base', tools: ['*'] }, hooks, { trustAll: true }), mcpServers: servers };
   const allowAll = { capability: 'all', effect: 'allow' };
@@ -195,21 +207,21 @@ describe("Kiro's agentk agent after Kiro 3.0 upgraded it", () => {
     kiroUpgrade: { revision: 2, fingerprint: 'sha256:1', source: 'sha256:2' },
   });
   it.each([
-    // Writing AgentK's over it again would knock running sessions off the agent.
-    ["Kiro's upgrade of AgentK's last write is kept", upgrade(a), false],
-    ['another AgentK home\'s agent (its own script paths) is written over',
+    // Writing Kode's over it again would knock running sessions off the agent.
+    ["Kiro's upgrade of Kode's last write is kept", upgrade(a), false],
+    ['another Kode home\'s agent (its own script paths) is written over',
       upgrade(a, { ...hooks, agentSpawn: [{ command: "'/dev-home/run/hook.sh'", timeout_ms: 5000 }] }), true],
     ["an older release's agent (other hooks) is written over", upgrade(a, { agentSpawn: hooks.agentSpawn, preToolUse: [] }), true],
     ['an agent with other MCP servers is written over', upgrade({ ...a, mcpServers: {} }), true],
-    ["one that isn't AgentK's is written over", upgrade({ ...a, description: 'Mine' }), true],
+    ["one that isn't Kode's is written over", upgrade({ ...a, description: 'Mine' }), true],
     ['a missing file is written', null, true],
     ['agentk that allows every tool is written over', { ...upgrade(a), permissions: { rules: [allowAll] } }, true],
     // Kiro 3.0.0 doesn't upgrade a file with `permissions`; a later one that did and dropped the rule is written over.
-    ["agentk-trusted upgraded without its rule is written over", upgrade(t), true, t],
-    ["agentk-trusted upgraded with its rule kept is left alone", { ...upgrade(t), permissions: t.permissions }, false, t],
+    ["kode-trusted upgraded without its rule is written over", upgrade(t), true, t],
+    ["kode-trusted upgraded with its rule kept is left alone", { ...upgrade(t), permissions: t.permissions }, false, t],
   ])('%s', (_, onDisk, writes, agent: Record<string, unknown> = a) => {
     const home = tempDir('akl-kiro-');
-    const written = join(tempDir('akl-run-'), 'run', 'kiro-agentk.json');
+    const written = join(tempDir('akl-run-'), 'run', 'kiro-kode.json');
     const file = join(home, 'agents', `${String(agent.name)}.json`);
     expect(writeKiroAgent(agent, home, written)).toBe(true);
     if (onDisk) writeFileSync(file, JSON.stringify(onDisk));
@@ -218,14 +230,14 @@ describe("Kiro's agentk agent after Kiro 3.0 upgraded it", () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(writes ? agent : onDisk);
   });
 
-  it("is written over when AgentK's own agent changed", () => {
+  it("is written over when Kode's own agent changed", () => {
     const home = tempDir('akl-kiro-');
-    const written = join(tempDir('akl-run-'), 'run', 'kiro-agentk.json');
+    const written = join(tempDir('akl-run-'), 'run', 'kiro-kode.json');
     expect(writeKiroAgent(a, home, written)).toBe(true);
-    writeFileSync(join(home, 'agents', 'agentk.json'), JSON.stringify(upgrade(a)));
+    writeFileSync(join(home, 'agents', 'kode.json'), JSON.stringify(upgrade(a)));
     const b = { ...a, resources: ['skill:///ak/SKILL.md'] };
     expect(writeKiroAgent(b, home, written)).toBe(true);
-    expect(JSON.parse(readFileSync(join(home, 'agents', 'agentk.json'), 'utf8'))).toEqual(b);
+    expect(JSON.parse(readFileSync(join(home, 'agents', 'kode.json'), 'utf8'))).toEqual(b);
   });
 });
 
@@ -238,12 +250,12 @@ describe("a Kiro session's command line", () => {
     ['tools trusted for this run only ([kiro] trust_tools)', { conversation: 'k-1', trustTools: true, prompt: 'continue' }, ['--trust-tools=*', '--resume-id', 'k-1', 'continue']],
     ["the session's model, at a resume too", { conversation: 'k-1', trustTools: false, prompt: null, model: 'claude-sonnet-4.5' }, ['--model', 'claude-sonnet-4.5', '--resume-id', 'k-1']],
   ])('%s', (_, o, rest) => {
-    expect(kiroArgs(o)).toEqual(['chat', '--agent', 'agentk', ...rest]);
+    expect(kiroArgs(o)).toEqual(['chat', '--agent', 'kode', ...rest]);
   });
 
 });
 
-describe("Kiro's hook events as AgentK's", () => {
+describe("Kiro's hook events as Kode's", () => {
   it.each([
     [{ hook_event_name: 'agentSpawn', cwd: '/w', session_id: 'k-1' }, { hook_event_name: 'SessionStart', cwd: '/w', agent_session_id: 'k-1' }],
     [{ hook_event_name: 'userPromptSubmit', session_id: 'k-1', prompt: 'hi' }, { hook_event_name: 'UserPromptSubmit', agent_session_id: 'k-1', prompt: 'hi' }],

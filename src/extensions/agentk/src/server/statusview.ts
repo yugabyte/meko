@@ -1,12 +1,12 @@
 /**
  * `meko kode status`'s output, from what it found, laid out as `meko status` is (Meko's
  * `internal/cli/report.go`): a row per part that runs (the server, the session host, the services),
- * a headline (`● AgentK <version> is running · pid, up`), the links as plain aligned rows, then the
+ * a headline (`● Kode <version> is running · pid, up`), the links as plain aligned rows, then the
  * commands to run next. `meko status` runs it with MEKO_SUMMARY=1 and shows the one line `headline`
- * gives in its AgentK row, without the mark and "AgentK" (src/meko/docs/install.md), so that line's
+ * gives in its Kode row, without the mark and "Kode" (src/meko/docs/install.md), so that line's
  * marks are always ✓, ! and ✗, whatever the locale, and never colored. Off a terminal the output
  * starts with that line too: a Meko from before MEKO_SUMMARY reads the first line, and would take a
- * row's mark (`✓ Session host …`) for AgentK's.
+ * row's mark (`✓ Session host …`) for Kode's.
  */
 import type { Probe } from './health.js';
 
@@ -81,12 +81,12 @@ function about(f: Pick<StatusFacts, 'probe' | 'leasePid' | 'now'>): string {
   return [pid ? `pid ${pid}` : '', Number.isNaN(started) ? '' : `up ${upFor(f.now - started)}`].filter(Boolean).join(', ');
 }
 
-/** The one line `meko status` shows in its AgentK row: "✓ AgentK 0.2 is running (pid 7, up 2h4m0s)". */
+/** The one line `meko status` shows in its Kode row: "✓ Kode 0.2 is running (pid 7, up 2h4m0s)". */
 export function headline(f: Pick<StatusFacts, 'version' | 'probe' | 'leasePid' | 'now'>): string {
   const a = about(f);
-  if (f.probe.ok) return `${MARKS.ok} AgentK ${f.version} is running${a ? ` (${a})` : ''}`;
-  if (serverRuns(f)) return `${MARKS.warn} AgentK ${f.version} is running${a ? ` (${a})` : ''}, but isn't answering`;
-  return `${MARKS.fail} AgentK ${f.version} isn't running`;
+  if (f.probe.ok) return `${MARKS.ok} Kode ${f.version} is running${a ? ` (${a})` : ''}`;
+  if (serverRuns(f)) return `${MARKS.warn} Kode ${f.version} is running${a ? ` (${a})` : ''}, but isn't answering`;
+  return `${MARKS.fail} Kode ${f.version} isn't running`;
 }
 
 /**
@@ -124,9 +124,9 @@ export function formatStatus(f: StatusFacts, p: Paint = PLAIN, terminal = true):
   if (lines.length > top) lines.push('');
   const a = about(f);
   const note = (text: string, n: string) => (n ? `${text}${p.dim(` · ${n}`)}` : text);
-  if (f.probe.ok) lines.push(`  ${p.mark('ok', '●')} ${note(p.bold(`AgentK ${f.version} is running`), a)}`);
-  else if (runs) lines.push(`  ${p.mark('warn', MARKS.warn)} ${note(p.bold(`AgentK ${f.version} isn't answering`), a)}`);
-  else lines.push(`  ${p.mark('fail', MARKS.fail)} ${p.bold(`AgentK ${f.version} isn't running`)}`);
+  if (f.probe.ok) lines.push(`  ${p.mark('ok', '●')} ${note(p.bold(`Kode ${f.version} is running`), a)}`);
+  else if (runs) lines.push(`  ${p.mark('warn', MARKS.warn)} ${note(p.bold(`Kode ${f.version} isn't answering`), a)}`);
+  else lines.push(`  ${p.mark('fail', MARKS.fail)} ${p.bold(`Kode ${f.version} isn't running`)}`);
 
   lines.push('', ...links([
     ['Web UI', f.webUrl ? p.link(f.webUrl) : `none (${f.webWhy ?? 'unknown'})`],
@@ -135,9 +135,9 @@ export function formatStatus(f: StatusFacts, p: Paint = PLAIN, terminal = true):
   ], p));
 
   lines.push('', ...next(
-    f.probe.ok ? [['meko kode ui', 'open AgentK']]
+    f.probe.ok ? [['meko kode ui', 'open Kode']]
       : runs ? [['meko kode logs', "see why it isn't answering"], ['meko kode restart', 'restart its server']]
-        : [['meko kode start', 'start AgentK']],
+        : [['meko kode start', 'start Kode']],
     p,
   ));
   return lines;

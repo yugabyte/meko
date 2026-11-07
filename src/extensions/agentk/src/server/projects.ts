@@ -171,7 +171,7 @@ export class ProjectService {
     // An empty folder typed under Other folder is made a repo below, once the name is checked.
     const makeRepo = !!req.repoPath && isEmptyFolder(repoPath);
     if (!makeRepo && !isMainRepo(repoPath)) {
-      throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree). Run git init there and commit its files, or pick an empty folder and AgentK makes it a repo.`);
+      throw new HttpError(400, `${repoPath} isn't a git repository (or it's a worktree). Run git init there and commit its files, or pick an empty folder and Kode makes it a repo.`);
     }
     // Stored as its real path, so every path to the repo (a symlink, say) names the same one.
     repoPath = repoKey(repoPath);
@@ -286,7 +286,7 @@ export class ProjectService {
     try {
       await initRepo(dest);
     } catch (e) {
-      // Made meanwhile, by something other than AgentK.
+      // Made meanwhile, by something other than Kode.
       if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw folderTaken(dest);
       throw new HttpError(400, `Couldn't create the repo: ${errMsg(e)}`);
     }
@@ -361,7 +361,7 @@ export class ProjectService {
    * the plan's datapack limit), or with `replace` switches it to another one: the old one stays
    * attached as shared, or is detached with `detachOld`. A datapack already attached as shared
    * becomes the dedicated one. New and resumed sessions use it; running ones keep the one they
-   * were launched with (sessionDatapack), for their own Meko calls, capture and AgentK's writes.
+   * were launched with (sessionDatapack), for their own Meko calls, capture and Kode's writes.
    */
   async setDedicatedDatapack(id: string, req: SetDedicatedDatapackRequest): Promise<Project> {
     const r = this.row(id);
@@ -658,7 +658,7 @@ export class ProjectService {
     let p = this.creatingConversation.get(id);
     if (!p) {
       const dp = dedicatedDatapack(this.db, id);
-      p = this.core.meko.ensureConversation(AGENTK_AGENT_ID, dp?.id ?? null, projectConversationKey(id), `AgentK: ${r.name}`, timeoutMs)
+      p = this.core.meko.ensureConversation(AGENTK_AGENT_ID, dp?.id ?? null, projectConversationKey(id), `Kode: ${r.name}`, timeoutMs)
         .then((conv) => {
           run(this.db, 'UPDATE projects SET meko_conversation_id = ? WHERE id = ?', conv, id);
           return conv;

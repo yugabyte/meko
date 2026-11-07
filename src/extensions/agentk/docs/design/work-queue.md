@@ -1,10 +1,10 @@
 # The work queue
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 One ordered list of what the user is working on, across every project (`/queue`: the list icon
 beside Settings in the rail's footer, and **Work queue** in the command palette). Items are added by hand or pulled in by a sync
-from GitHub and Slack. Each one has links (GitHub, Jira, Slack, any page) and at most one AgentK
+from GitHub and Slack. Each one has links (GitHub, Jira, Slack, any page) and at most one Kode
 session, whose status dot it shows. The server keeps it in `state.db` (`src/server/workqueue.ts`)
 and pushes the open items in `AppState.workQueue`, so every device shows the same queue.
 
@@ -97,11 +97,11 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
   profile, started with the reporter the way Slack starts a message with its author ("<reporter>:
   …", from the Reporter column, as the list has it: an email stays an email,
   since the profile read takes only user IDs). The queue page shows an item's notes in two lines
-  under its title. Unlike Ask AgentK, it loads your
+  under its title. Unlike Ask Kode, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
   wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`);
   none of your Claude Code settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
-  `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
+  `--setting-sources project` in Kode's empty `run/work-sync` folder), so your allow rules and
   default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
   (only the claude.ai Slack connector's `slack_read_file`, and `slack_read_user_profile` to name the
   people a row mentions, by default, so the run can't search Slack or

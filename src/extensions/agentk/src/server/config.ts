@@ -13,8 +13,8 @@ import { expandHome, type Paths } from './paths.js';
 export interface Config {
   /**
    * name: shown in the rail next to the user name; empty uses the machine's short host name.
-   * bind and port, and [tls]: where AgentK listened, and its certificate, when it served browsers
-   * itself. Meko serves it now (on AgentK's old port, at /ext/agentk/), and its handoff takes them
+   * bind and port, and [tls]: where Kode listened, and its certificate, when it served browsers
+   * itself. Meko serves it now (on Kode's old port, at /ext/kode/), and its handoff takes them
    * over once (`me_kode _handoff`, handoff.ts); nothing else reads them, and they're kept in
    * config.toml only for that.
    */
@@ -24,12 +24,12 @@ export interface Config {
   /**
    * captureTranscripts: send session transcripts to Meko conversations. Off by default until Meko's capture stops
    * extracting loaded skills as user requirements (MEKO-710); off, sessions also run without the Meko plugin.
-   * The Meko AgentK uses is the one running on this computer, read from Meko (mekolocal.ts), never
+   * The Meko Kode uses is the one running on this computer, read from Meko (mekolocal.ts), never
    * stored here. The url, api_key, web_url and api_url keys of releases before are ignored, but kept
    * in the file on save (`oldMekoKeys`): a rollback to such a release restores only state.db and reads
    * its key from them, and they may be the only copy of a key never linked in Meko.
-   * home: Meko's data folder, as Meko last told AgentK (the MEKO_HOME it sets on the commands it
-   * runs); empty means Meko's default. AgentK's home is in it (paths.ts `mekoHome`).
+   * home: Meko's data folder, as Meko last told Kode (the MEKO_HOME it sets on the commands it
+   * runs); empty means Meko's default. Kode's home is in it (paths.ts `mekoHome`).
    */
   meko: { captureTranscripts: boolean; home: string };
   /**
@@ -41,7 +41,7 @@ export interface Config {
   state: { dbPath: string };
   /**
    * command: how Claude Code is run. enabled: offer it for new sessions when `<command> --version`
-   * answers. mod: load AgentK's mod into sessions (Claude Code 2.1.287 or later), which takes AgentK's
+   * answers. mod: load Kode's mod into sessions (Claude Code 2.1.287 or later), which takes Kode's
    * prompts and reports the context fill; off, prompts are typed into the terminal.
    */
   claude: { command: string; enabled: boolean; mod: boolean };
@@ -50,14 +50,14 @@ export interface Config {
   /**
    * Kiro CLI (src/server/harness/kiro.ts). command: how it's run. enabled: offer it for new sessions when
    * `<command> --version` answers. trustTools: Kiro sessions start with every tool trusted (`--trust-tools=*`,
-   * and on Kiro 3.0, whose engine ignores that flag, as the `agentk-trusted` agent, which allows every
+   * and on Kiro 3.0, whose engine ignores that flag, as the `kode-trusted` agent, which allows every
    * tool; from a session's next launch or resume), so Kiro runs any tool without asking.
    */
   kiro: { command: string; enabled: boolean; trustTools: boolean };
   /**
    * OpenCode (src/server/harness/opencode.ts). command: how it's run (the default, `opencode`, is also found in
    * `~/.opencode/bin`, where OpenCode's installer puts it). enabled: offer it for new sessions when `<command> --version` answers.
-   * disableTracking: the OpenCode AgentK runs (sessions, from their next launch or resume, and Ask AgentK) sends no telemetry, checks
+   * disableTracking: the OpenCode Kode runs (sessions, from their next launch or resume, and Ask Kode) sends no telemetry, checks
    * for no update and offers none of OpenCode Zen's free models (`OPENCODE_NO_TRACKING_ENV` in opencode.ts).
    */
   opencode: { command: string; enabled: boolean; disableTracking: boolean };
@@ -79,18 +79,18 @@ export interface Config {
    */
   callHome: { enabled: boolean; diagnosticsUrl: string };
   /**
-   * resolveConflicts: when a PR in Pull Request conflicts with its base, AgentK asks Claude to resolve the conflicts
+   * resolveConflicts: when a PR in Pull Request conflicts with its base, Kode asks Claude to resolve the conflicts
    * (false leaves them to the user). Set in Settings → General; an edit to config.toml takes effect after a restart.
    */
   pr: { resolveConflicts: boolean };
   /**
-   * Ask AgentK in the command palette (askagentk.ts): an instruction in plain words, answered by one `claude -p`.
+   * Ask Kode in the command palette (askagentk.ts): an instruction in plain words, answered by one `claude -p`.
    * enabled: offer it. model: the model it asks (a Claude Code alias or a full name). timeoutSeconds: how long an
    * answer may take before Claude is stopped (5 to 300).
    */
-  askAgentk: { enabled: boolean; model: string; timeoutSeconds: number };
+  askKode: { enabled: boolean; model: string; timeoutSeconds: number };
   /**
-   * AgentK's session tools (tools.ts): enabled gives every session the `agentk_sessions` MCP server (`me_kode mcp`) and its
+   * Kode's session tools (tools.ts): enabled gives every session the `kode_sessions` MCP server (`me_kode mcp`) and its
    * skill, which open projects, start sessions and move them between stages, from each session's next launch. Off, the
    * tools' route refuses calls from sessions that still have them. Set in Settings → General.
    */
@@ -158,7 +158,7 @@ export const DEFAULT_CONFIG: Config = {
   sessions: { idleStopHours: 24 },
   callHome: { enabled: true, diagnosticsUrl: '' },
   pr: { resolveConflicts: true },
-  askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
+  askKode: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
   tools: { enabled: true },
   workQueue: { github: false, slack: false, syncMinutes: 15, slackList: '', slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
   codeReview: {
@@ -215,14 +215,20 @@ function merge<T>(base: T, over: unknown, warn: (msg: string) => void, at = ''):
 /** What config.toml says, over the defaults, without environment overrides. */
 function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
   const file = existsSync(paths.config) ? mapKeys(parse(readFileSync(paths.config, 'utf8')), camel) : null;
-  // Meko installs AgentK's updates, as the [update] in Meko's own config.toml says. An [update] here
-  // is ignored, but for channel = "off", which Meko reads as Update automatically off for AgentK
+  // Meko installs Kode's updates, as the [update] in Meko's own config.toml says. An [update] here
+  // is ignored, but for channel = "off", which Meko reads as Update automatically off for Kode
   // until that switch is set (saveConfig keeps it); the rest goes from the file at the next save.
   if (isObject(file) && 'update' in file) {
     warn(
-      "config.toml: [update] is ignored: Meko installs AgentK's updates, as the [update] in Meko's own config.toml says. " +
-        'channel = "off" here keeps Update automatically off for AgentK until it\'s turned on (Settings › Updates)',
+      "config.toml: [update] is ignored: Meko installs Kode's updates, as the [update] in Meko's own config.toml says. " +
+        'channel = "off" here keeps Update automatically off for Kode until it\'s turned on (Settings › Updates)',
     );
+  }
+  // [ask_agentk], Ask Kode's section before it was called Ask Kode, is [ask_kode] (the next save
+  // writes it under that name).
+  if (isObject(file) && 'askAgentk' in file) {
+    if (!('askKode' in file)) file.askKode = file.askAgentk;
+    delete file.askAgentk;
   }
   const cfg = file ? merge(structuredClone(DEFAULT_CONFIG), file, warn) : structuredClone(DEFAULT_CONFIG);
   if (!isStrategySetting(cfg.codeReview.strategy)) {
@@ -270,7 +276,7 @@ function changedFrom(cfg: unknown, base: unknown): unknown {
  * Writes the settings that differ from the defaults, so a changed default reaches existing
  * installs. `[server] bind` and `port` and `[tls]` are written as they are, for Meko's handoff.
  */
-/** Whether config.toml has AgentK's old [update] channel = "off" (its own updater's switch). */
+/** Whether config.toml has Kode's old [update] channel = "off" (its own updater's switch). */
 function updatesWereOff(paths: Paths): boolean {
   try {
     const t = parse(readFileSync(paths.config, 'utf8')) as { update?: { channel?: unknown } };
@@ -290,18 +296,18 @@ function oldMekoKeys(paths: Paths): Record<string, string> {
   }
 }
 
-/** `[meko]` keys AgentK no longer reads, which `saveConfig` keeps (`oldMekoKeys`). */
+/** `[meko]` keys Kode no longer reads, which `saveConfig` keeps (`oldMekoKeys`). */
 const OLD_MEKO_KEYS = ['url', 'api_key', 'web_url', 'api_url'] as const;
 
 export function saveConfig(paths: Paths, cfg: Config): void {
   const out = structuredClone(cfg);
   mkdirSync(dirname(paths.config), { recursive: true });
   const header =
-    '# AgentK configuration. Settings changed in the web UI are written here too.\n' +
+    '# Kode configuration. Settings changed in the web UI are written here too.\n' +
     '# Only settings that differ from the defaults are listed; add any other key to change it.\n' +
-    "# Meko serves AgentK to browsers: its web listener's port and access are [web] in Meko's config.toml.\n\n";
+    "# Meko serves Kode to browsers: its web listener's port and access are [web] in Meko's config.toml.\n\n";
   const body = (changedFrom(mapKeys(out, snake), mapKeys(DEFAULT_CONFIG, snake)) ?? {}) as Record<string, unknown>;
-  // An old [update] channel = "off" stays: Meko reads it as Update automatically off for AgentK.
+  // An old [update] channel = "off" stays: Meko reads it as Update automatically off for Kode.
   if (updatesWereOff(paths)) body.update = { channel: 'off' };
   // An old Meko key stays too, unread, for a rollback and for linking it in Meko.
   const old = oldMekoKeys(paths);
@@ -320,17 +326,17 @@ export function repoRoots(cfg: Config): string[] {
 }
 
 /**
- * The Meko AgentK uses: always the one running on this computer, as `meko token --json` reports it
+ * The Meko Kode uses: always the one running on this computer, as `meko token --json` reports it
  * (mekolocal.ts), with its MCP URL and client token. That Meko serves its own datapacks and, while
- * it's linked to Meko Cloud, passes calls for the rest on to it, so AgentK never tells them apart.
- * Empty while no Meko runs here: AgentK then works without datapacks.
+ * it's linked to Meko Cloud, passes calls for the rest on to it, so Kode never tells them apart.
+ * Empty while no Meko runs here: Kode then works without datapacks.
  */
 export function resolveMeko(): { url: string; apiKey: string } {
   const local = localMeko().meko;
   return local ? { url: local.url, apiKey: local.token } : { url: '', apiKey: '' };
 }
 
-/** There's a Meko to use (one runs on this computer). Without one AgentK works without datapacks. */
+/** There's a Meko to use (one runs on this computer). Without one Kode works without datapacks. */
 export function mekoConfigured(): boolean {
   return !!resolveMeko().apiKey;
 }

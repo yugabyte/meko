@@ -18,7 +18,7 @@ import { shq } from './launcher.js';
  *
  * The services are named for the program, me_kode (`me_kode.service`, `com.yugabyte.me_kode`),
  * so they say they're a Meko extension's. Before that they were me_koder (`me_koder.service`,
- * `com.yugabyte.me_koder`), agentk before that, and agent-k-local before the rename to AgentK. A
+ * `com.yugabyte.me_koder`), agentk before that, and agent-k-local before the rename to Kode. A
  * service installed under an old name keeps it, and `id` and `file` name it, until `install` moves it to its new one
  * (`dropOldName`): updates never touch the services, so a version rolled back to still finds them.
  */
@@ -113,7 +113,7 @@ const SYSTEMD_UNITS: Record<Service, string> = {
   server: `${COMMAND}.service`,
   host: `${COMMAND}-host.service`,
 };
-/** The units' names before, newest first: me_koder's, agentk's, then agent-k-local's from before the rename to AgentK. */
+/** The units' names before, newest first: me_koder's, agentk's, then agent-k-local's from before the rename to Kode. */
 const SYSTEMD_OLD_UNITS: Record<Service, string>[] = OLD_COMMANDS.map((c) => ({ server: `${c}.service`, host: `${c}-host.service` }));
 /** The tmux unit of versions before the session host. */
 const SYSTEMD_TMUX = 'agent-k-local-tmux.service';
@@ -230,7 +230,7 @@ export class SystemdServices implements ServiceManager {
       ok: false,
       label,
       detail: `no: couldn't enable lingering (${en.err || 'permission denied'}).`,
-      note: `Without it, AgentK only runs while you're logged in. Ask an admin: sudo loginctl enable-linger ${user}`,
+      note: `Without it, Kode only runs while you're logged in. Ask an admin: sudo loginctl enable-linger ${user}`,
     };
   }
 
@@ -246,7 +246,7 @@ const LAUNCHD_LABELS: Record<Service, string> = {
   server: `com.yugabyte.${COMMAND}`,
   host: `com.yugabyte.${COMMAND}.host`,
 };
-/** The jobs' labels before, newest first: me_koder's, agentk's, then agent-k-local's from before the rename to AgentK. */
+/** The jobs' labels before, newest first: me_koder's, agentk's, then agent-k-local's from before the rename to Kode. */
 const LAUNCHD_OLD_LABELS: Record<Service, string>[] = OLD_COMMANDS.map((c) => ({ server: `com.yugabyte.${c}`, host: `com.yugabyte.${c}.host` }));
 /** The tmux job of versions before the session host. */
 const LAUNCHD_TMUX = 'com.yugabyte.agent-k-local.tmux';
@@ -472,8 +472,8 @@ export function writeServiceLauncher(home: string): boolean {
   const bin = join(home, 'app', 'current', 'bin');
   const text = [
     '#!/bin/sh',
-    `# AgentK's services run this file, written by \`${COMMAND} install\`. Updates leave it alone, so`,
-    "# macOS doesn't announce AgentK as a new background item after each one.",
+    `# Kode's services run this file, written by \`${COMMAND} install\`. Updates leave it alone, so`,
+    "# macOS doesn't announce Kode as a new background item after each one.",
     `bin=${shq(bin)}`,
     `[ -e "$bin/${COMMAND}" ] || exec "$bin/${ALWAYS_IN_BIN}" "$@"`,
     `exec "$bin/${COMMAND}" "$@"`,
@@ -501,7 +501,7 @@ export function removeServiceLauncher(home: string): void {
  * file changed; nothing on Linux, or without services or a release.
  */
 export function refreshServiceFiles(home: string, svc: ServiceManager | null, host: string): Service[] {
-  if (svc?.kind !== 'launchd' || !process.env.AK_APP_DIR) return [];
+  if (svc?.kind !== 'launchd' || !process.env.KODE_APP_DIR) return [];
   const file = svc.installed('server') ? svc.file('server') : svc.installed('host') ? svc.file('host') : null;
   if (!file) return [];
   // The home as the jobs spell it, so files that are up to date stay as they are.
@@ -509,12 +509,12 @@ export function refreshServiceFiles(home: string, svc: ServiceManager | null, ho
   const spelled = named !== null && samePath(named, home) ? named : home;
   if (!existsSync(join(spelled, 'app', 'current', 'bin', COMMAND))) return [];
   writeServiceLauncher(spelled);
-  return svc.refresh(renderServiceFiles(svc, { AK_HOME: spelled, HOST: host }));
+  return svc.refresh(renderServiceFiles(svc, { KODE_HOME: spelled, HOST: host }));
 }
 
 /**
  * Before `install` writes the services, drops the ones installed under their old names (me_koder's,
- * agentk's, or agent-k-local's from before the rename to AgentK), so they're written under their new
+ * agentk's, or agent-k-local's from before the rename to Kode), so they're written under their new
  * ones: the server's always (`install` restarts it anyway), the host's only while it isn't running, since stopping it would end every
  * session. A running host keeps its old name, which the server's unit then names, until it stops.
  * Returns each move, old name first.
@@ -531,18 +531,21 @@ export function dropOldNames(svc: ServiceManager): [string, string][] {
 }
 
 // ---------------------------------------------------------------------------
-// The one-shot job that moves AgentK's home into Meko's data folder (movehome.ts). It stops the
+// The one-shot job that moves Kode's home into Meko's data folder (movehome.ts). It stops the
 // server and the session host, so it runs outside both services: as a transient systemd unit, or
 // a LaunchAgent of its own that removes itself. Both run it again after a failure, and each run
 // goes on from the move's journal.
 
-export const MOVE_JOB = { systemd: 'agentk-move-home.service', launchd: 'com.yugabyte.agentk.move-home' } as const;
+export const MOVE_JOB = { systemd: 'kode-move-home.service', launchd: 'com.yugabyte.kode.move-home' } as const;
+
+/** The job's names before Meko called it Kode: a server finds a move an older one started by them. */
+export const OLD_MOVE_JOB = { systemd: 'agentk-move-home.service', launchd: 'com.yugabyte.agentk.move-home' } as const;
 
 export interface MoveJob {
   /** The release's `me_kode` to run (`_move-home --to <to>`). */
   bin: string;
   to: string;
-  /** The home being moved, for the job's AK_HOME. */
+  /** The home being moved, for the job's KODE_HOME. */
   from: string;
 }
 
@@ -551,7 +554,7 @@ export interface MoveJob {
  * not in either home, since a copy moves the old one aside and removes it.
  */
 export function moveJobLog(to: string): string {
-  return join(dirname(to), 'agentk-move-home.log');
+  return join(dirname(to), 'kode-move-home.log');
 }
 
 function moveJobPlist(home: string): string {
@@ -560,11 +563,13 @@ function moveJobPlist(home: string): string {
 
 /** Whether the move job is running (or waiting to run again after a failure). */
 export function moveJobRunning(kind: ServiceManager['kind'], run: Runner = runCommand, uid = process.getuid?.() ?? 0): boolean {
-  if (kind === 'systemd') {
-    const r = run('systemctl', ['--user', 'is-active', MOVE_JOB.systemd]);
-    return r.ok || /^(activating|reloading)/.test(r.out);
-  }
-  return run('launchctl', ['print', `gui/${uid}/${MOVE_JOB.launchd}`]).ok;
+  return [MOVE_JOB, OLD_MOVE_JOB].some((job) => {
+    if (kind === 'systemd') {
+      const r = run('systemctl', ['--user', 'is-active', job.systemd]);
+      return r.ok || /^(activating|reloading)/.test(r.out);
+    }
+    return run('launchctl', ['print', `gui/${uid}/${job.launchd}`]).ok;
+  });
 }
 
 /** Starts the move job unless it's running already. */
@@ -577,7 +582,7 @@ export function startMoveJob(kind: ServiceManager['kind'], job: MoveJob, run: Ru
     must(run, 'systemd-run', [
       '--user', '--unit', MOVE_JOB.systemd, '--collect', '--quiet',
       '-p', 'Restart=on-failure', '-p', 'RestartSec=30', '-p', `StandardOutput=append:${log}`, '-p', `StandardError=append:${log}`,
-      '--setenv', `AK_HOME=${job.from}`, '--setenv', `PATH=${process.env.PATH ?? '/usr/bin:/bin'}`,
+      '--setenv', `KODE_HOME=${job.from}`, '--setenv', `PATH=${process.env.PATH ?? '/usr/bin:/bin'}`,
       job.bin, '_move-home', '--to', job.to,
     ]);
     return;
@@ -593,7 +598,7 @@ export function startMoveJob(kind: ServiceManager['kind'], job: MoveJob, run: Ru
   <key>ProgramArguments</key>
   <array>${s(job.bin)}${s('_move-home')}${s('--to')}${s(job.to)}</array>
   <key>EnvironmentVariables</key>
-  <dict><key>AK_HOME</key>${s(job.from)}<key>PATH</key>${s(process.env.PATH ?? '/usr/bin:/bin')}</dict>
+  <dict><key>KODE_HOME</key>${s(job.from)}<key>PATH</key>${s(process.env.PATH ?? '/usr/bin:/bin')}</dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>30</integer>
@@ -658,16 +663,19 @@ export function samePath(a: string, b: string): boolean {
   }
 }
 
-/** The AK_HOME a unit file or property list sets, or null when it sets none. */
+/**
+ * The KODE_HOME a unit file or property list sets (AK_HOME in one installed before Meko called it
+ * Kode), or null when it sets none.
+ */
 export function serviceHome(text: string, kind: ServiceManager['kind']): string | null {
-  if (kind === 'systemd') return /^Environment=AK_HOME=(.*)$/m.exec(text)?.[1].trim() ?? null;
-  const v = /<key>AK_HOME<\/key>\s*<string>([^<]*)<\/string>/.exec(text)?.[1];
+  if (kind === 'systemd') return /^Environment=(?:KODE|AK)_HOME=(.*)$/m.exec(text)?.[1].trim() ?? null;
+  const v = /<key>(?:KODE|AK)_HOME<\/key>\s*<string>([^<]*)<\/string>/.exec(text)?.[1];
   return v === undefined ? null : v.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
 }
 
 function templatesDir(kind: ServiceManager['kind'], probe: string): string {
   const candidates = [
-    process.env.AK_APP_DIR ? join(process.env.AK_APP_DIR, 'lib', 'packaging', kind) : '',
+    process.env.KODE_APP_DIR ? join(process.env.KODE_APP_DIR, 'lib', 'packaging', kind) : '',
     // dev checkout: src/server/service.ts or dist/server/service.js → repo root
     resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'packaging', kind),
   ].filter(Boolean);
@@ -679,7 +687,7 @@ function templatesDir(kind: ServiceManager['kind'], probe: string): string {
 const xmlEscape = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 export interface TemplateVars {
-  AK_HOME: string;
+  KODE_HOME: string;
   /** This host's name: the systemd units run only here (ConditionHost). */
   HOST: string;
 }
@@ -690,7 +698,7 @@ interface ServiceIds {
   HOST_ID: string;
 }
 
-/** Fills in @AK_HOME@, @HOST@ and the services' ids (XML-escaped in property lists). */
+/** Fills in @KODE_HOME@, @HOST@ and the services' ids (XML-escaped in property lists). */
 export function renderTemplate(template: string, kind: ServiceManager['kind'], vars: TemplateVars & Partial<ServiceIds>): string {
   const esc = kind === 'launchd' ? xmlEscape : (s: string) => s;
   let out = template;

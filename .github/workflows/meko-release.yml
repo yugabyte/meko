@@ -1,6 +1,6 @@
 name: Meko release
 
-# Meko (src/meko) releases on its own train, beside AgentK's (agentk-release.yml). Versions are
+# Meko (src/meko) releases on its own train, beside Kode's (agentk-release.yml). Versions are
 # 0.<UTC date YYYYMMDD>.<n>, tagged meko-v<version>. A push to main that changes src/meko cuts a
 # release when it contains meko feat/fix/perf/deps commits (naming meko, alone or in a list such as
 # agentk,meko) since the last Meko tag and the tests pass. The release scripts are the repo root's
@@ -359,7 +359,7 @@ jobs:
           set -eu
           sh scripts/release/release-notes.sh --product meko > notes.md || echo "Maintenance release." > notes.md
           # The repo's latest release: its install.sh is the one-line install
-          # (mekodata.ai/install.sh redirects to it). AgentK's releases are published --latest=false.
+          # (mekodata.ai/install.sh redirects to it). Kode's releases are published --latest=false.
           gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --latest --repo "$GITHUB_REPOSITORY" \
             dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/SHA256SUMS.sig dist-release/install.sh
 

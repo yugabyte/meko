@@ -28,7 +28,7 @@ export const SEARCH_TOOL_NAMES = ['memory_search', 'knowledgebase_search', 'cont
 export const SEARCH_TOOLS: ReadonlySet<string> = new Set(SEARCH_TOOL_NAMES);
 
 /**
- * The lowest score of a memory worth giving Claude: AgentK's search at start (`recall.ts`) leaves
+ * The lowest score of a memory worth giving Claude: Kode's search at start (`recall.ts`) leaves
  * out memories below it, and a search whose memories are all below it, with nothing from the
  * knowledge base or the conversation cache, found nothing relevant (`mekousage.ts`). Memories
  * Meko ranks high can still be off-topic: unrelated ones have scored 0.74–0.76 (2026-10-13).
@@ -45,7 +45,7 @@ export interface FoundSearch {
   model: string | null;
 }
 
-/** Tokens and USD one search that found something saved, or one seed AgentK passed at start (usd is null for a model with no known price). */
+/** Tokens and USD one search that found something saved, or one seed Kode passed at start (usd is null for a model with no known price). */
 export function searchSaving(s: FoundSearch): { tokens: number; usd: number | null } {
   const explored = EXPLORE_CALLS * EXPLORE_RESULT_TOKENS;
   const carry = Math.min(CARRY_TURNS, Math.max(0, s.laterResponses));

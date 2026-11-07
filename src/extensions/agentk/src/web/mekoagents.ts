@@ -1,8 +1,8 @@
 /**
  * Connecting an agent to Meko. Meko owns the agents' connections: the page posts Meko's own route,
  * root-absolute on Meko's origin (not under BASE) with its sign-in, as `mekoupdate.ts` does for
- * updates (`POST /api/v1/agents/:id/connect`, in Meko's `{ data, error }` envelope), then asks AgentK
- * to read Meko's list again (`POST /api/harnesses/refresh`). AgentK's server never posts to Meko.
+ * updates (`POST /api/v1/agents/:id/connect`, in Meko's `{ data, error }` envelope), then asks Kode
+ * to read Meko's list again (`POST /api/harnesses/refresh`). Kode's server never posts to Meko.
  * The page also connects Kiro and OpenCode by itself, once each (`autoConnectToMeko`).
  */
 import { HARNESS_CAPS, type HarnessId } from '../shared/harnesses';
@@ -35,7 +35,7 @@ export async function connectAgent(id: HarnessId): Promise<string[]> {
   return Array.isArray(notes) ? notes.filter((n): n is string => typeof n === 'string') : [];
 }
 
-/** Connect to Meko: Meko connects it, then AgentK reads Meko's list (and the versions) again. */
+/** Connect to Meko: Meko connects it, then Kode reads Meko's list (and the versions) again. */
 export async function connectToMeko(id: HarnessId): Promise<{ notes: string[]; harnesses: HarnessStatus[] }> {
   const notes = await connectAgent(id);
   return { notes, harnesses: await api.refreshHarnesses() };
@@ -57,14 +57,14 @@ export async function autoConnectToMeko(id: HarnessId): Promise<string | null> {
     const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, '');
     throw new Error(`Couldn’t connect ${label} to Meko: ${why}. Connect it in Settings › Harness.`, { cause: e });
   }
-  // Connected: a refresh that fails (AgentK restarting) isn't a failed connect; the next push says it.
+  // Connected: a refresh that fails (Kode restarting) isn't a failed connect; the next push says it.
   await api.refreshHarnesses().catch(() => undefined);
   return [`Connected ${label} to Meko.`, ...notes].join(' ');
 }
 
 /**
  * Set up Claude Code or Kiro with this Meko: Meko connects its MCP server first when it isn't, then
- * AgentK's setup route runs Meko's setup package for what Meko's capture needs (nothing when that's there).
+ * Kode's setup route runs Meko's setup package for what Meko's capture needs (nothing when that's there).
  */
 export async function setUpWithMeko(id: 'claude' | 'kiro', meko: HarnessMeko | null | undefined): Promise<void> {
   if (connectable(meko)) await connectAgent(id);

@@ -5,7 +5,7 @@
 // the reason), or as 3.0 does (`kiro3` below); it keeps a session file like Kiro's ($KIRO_HOME/sessions/cli/<id>.json) with
 // each finished turn's usage, and its log (<id>.jsonl) of prompts and Meko calls' results, and turns
 // each stdin line into a turn, except Kiro's own `/clear` and `/model <id>`, which start none and
-// run no hook, as Kiro's don't. A code review's step reports through AgentK's tools route
+// run no hook, as Kiro's don't. A code review's step reports through Kode's tools route
 // (`reviewStep`). Everything it does is recorded
 // in $FAKE_KIRO_DIR.
 import { spawnSync } from 'node:child_process';
@@ -71,7 +71,7 @@ if (args.includes('--no-interactive') && args.at(-1) === '/usage') {
   process.stdout.write(events.map((e) => JSON.stringify(e)).join('\n') + '\n', () => process.exit(0));
   await new Promise(() => undefined);
 }
-// Like `kiro-cli chat --no-interactive --output-format stream-json` (Ask AgentK): records what it got
+// Like `kiro-cli chat --no-interactive --output-format stream-json` (Ask Kode): records what it got
 // and prints `ask-reply.jsonl` from the fake's dir.
 if (args.includes('--no-interactive')) {
   let input = '';
@@ -99,7 +99,7 @@ const agent = JSON.parse(readFileSync(agentFile, 'utf8'));
 // Like Kiro 3.0, when the test put `kiro3` in the fake's dir: it upgrades the agent's file in place
 // as `kiro-cli agent upgrade` does (its hooks a list of named hooks, `fs_write` widened to `write`,
 // its own bookkeeping added), and its hooks get Claude Code's event names. A file that already has
-// `permissions` (AgentK's agentk-trusted) is "out of sync" to Kiro 3.0.0's upgrade and left as it is.
+// `permissions` (Kode's kode-trusted) is "out of sync" to Kiro 3.0.0's upgrade and left as it is.
 const kiro3 = existsSync(join(dir, 'kiro3'));
 const EVENT_NAMES = { agentSpawn: 'SessionStart', userPromptSubmit: 'UserPromptSubmit', preToolUse: 'PreToolUse', postToolUse: 'PostToolUse', stop: 'Stop' };
 if (kiro3 && !agent.kiroUpgrade && !agent.permissions) {
@@ -137,7 +137,7 @@ const asked = process.stdin.isTTY
   ? spawnSync('/bin/sh', ['-c', `old=$(stty -g < /dev/tty) && stty -echo raw min 0 time 20 < /dev/tty && printf '\\033]11;?\\007' > /dev/tty && dd bs=256 count=1 < /dev/tty 2>/dev/null; stty "$old" < /dev/tty`], { encoding: 'latin1' }).stdout
   : '';
 const background = /rgb:[0-9a-f/]+/.exec(asked)?.[0] ?? null;
-log('argv.jsonl', { args, cwd: process.cwd(), background, env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, AK_SESSION: process.env.AK_SESSION, KIRO_TERMINAL_THEME: process.env.KIRO_TERMINAL_THEME } });
+log('argv.jsonl', { args, cwd: process.cwd(), background, env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, KODE_SESSION: process.env.KODE_SESSION, KIRO_TERMINAL_THEME: process.env.KIRO_TERMINAL_THEME } });
 
 /**
  * Runs the agent's hooks for an event (matcher '*', the tool's name, or `@<server>` for an MCP
@@ -187,8 +187,8 @@ function mekoCall(query, ms, how) {
 }
 
 /**
- * Like a Kiro code-review session's turn on one step (AgentK's code review, `turns` mode): the step's
- * file names its report tool and step id, and the agent reports through AgentK's tools route: the
+ * Like a Kiro code-review session's turn on one step (Kode's code review, `turns` mode): the step's
+ * file names its report tool and step id, and the agent reports through Kode's tools route: the
  * pass's report from `review-reports.json` in the fake's dir (default LGTM), or a confirmed score,
  * unless the step is listed in `review-skip` there (or in `review-skip-once`, the first time only).
  * Every call goes to `review-calls.jsonl`, with the model the session was on.
@@ -214,8 +214,8 @@ function reviewStep(file) {
   const input = tool === 'review_score'
     ? { step, score: { read: ['src/a.ts:1-5'], refutation: '', verdict: 'confirmed', confidence: 90, reason: 'Read it; it holds.' } }
     : { step, report: reports[step.split(':')[1]] ?? { summary: 'LGTM', findings: [] } };
-  const r = spawnSync('curl', ['-s', '-w', '\n%{http_code}', '--unix-socket', process.env.AK_HOOK_SOCK, '-H', `X-AK-Token: ${process.env.AK_HOOK_TOKEN}`,
-    '-H', 'Content-Type: application/json', '--data-binary', '@-', 'http://agentk/tools'], { input: JSON.stringify({ v: 1, tool, input }) });
+  const r = spawnSync('curl', ['-s', '-w', '\n%{http_code}', '--unix-socket', process.env.KODE_HOOK_SOCK, '-H', `X-AK-Token: ${process.env.KODE_HOOK_TOKEN}`,
+    '-H', 'Content-Type: application/json', '--data-binary', '@-', 'http://kode/tools'], { input: JSON.stringify({ v: 1, tool, input }) });
   const out = r.stdout.toString().trim().split('\n');
   log('review-calls.jsonl', { step, tool, model, status: Number(out.at(-1)), text: out.slice(0, -1).join('\n') });
 }

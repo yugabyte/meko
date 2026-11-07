@@ -23,8 +23,8 @@ describe('the hooks settings file', () => {
     const allow: string[] = settings.permissions.allow;
     // Claude Code ignores Write() rules and warns about them at every session start; Edit() covers Write.
     // The session tools that change something ask first; a code review's reports only report.
-    expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`, 'mcp__agentk_sessions__list',
-      'mcp__agentk_sessions__review_report', 'mcp__agentk_sessions__review_score', 'mcp__agentk_sessions__review_outcome']);
+    expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`, 'mcp__kode_sessions__list',
+      'mcp__kode_sessions__review_report', 'mcp__kode_sessions__review_score', 'mcp__kode_sessions__review_outcome']);
   });
 
   it('turns off the plugins it is given, and leaves plugins alone otherwise', () => {
@@ -102,7 +102,7 @@ describe('writeLauncher (run through the login shell)', () => {
     writeFileSync(fake, `#!/bin/sh
 for a in "$@"; do printf '%s\\0' "$a"; done > ${shq(out + '.args')}
 printf '%s' "$PATH" > ${shq(out + '.path')}
-for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECKPOINT_INTERVAL-unset}" "\${AK_HOME-unset}" "\${CLAUDECODE-unset}" "\${KIRO_SESSION_ID-unset}" "\${AK_TRICKY-unset}"; do printf '%s\\0' "$v"; done > ${shq(out + '.env')}
+for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECKPOINT_INTERVAL-unset}" "\${KODE_HOME-unset}" "\${CLAUDECODE-unset}" "\${KIRO_SESSION_ID-unset}" "\${KODE_TRICKY-unset}"; do printf '%s\\0' "$v"; done > ${shq(out + '.env')}
 `);
     chmodSync(fake, 0o755);
     const worktree = join(home, "it's a \"worktree\" $HOME `x`");
@@ -111,7 +111,7 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
       sessionId: 'demo--fix-it', worktree, claudeCommand: fake, claudeSessionId: 'c0ffee', resume: false,
       name: 'Fix "it" now', planMode: false, addDirs: [join(home, 'designs', 'demo--fix-it')],
       appendSystemPrompt: "Line one\nLine 'two' $(rm -rf /) `id` \\n", prompt: null,
-      env: { MEKO_AGENT_ID: 'claude_code:demo', AK_TRICKY: "a'b\"c$d`e`\\f\ng" }, unsetEnv: ['MEKO_CHECKPOINT_INTERVAL'],
+      env: { MEKO_AGENT_ID: 'claude_code:demo', KODE_TRICKY: "a'b\"c$d`e`\\f\ng" }, unsetEnv: ['MEKO_CHECKPOINT_INTERVAL'],
       ...over,
     };
   }
@@ -119,7 +119,7 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
   function run(s: LaunchSpec): { args: string[]; env: string[] } {
     const script = writeLauncher(paths, claudeLauncher(paths, s));
     // Started from inside Claude Code or Kiro: neither's markers reach the session.
-    execFileSync('sh', [script], { env: { ...process.env, HOME: home, AK_HOME: '/live/install', CLAUDECODE: '1', KIRO_SESSION_ID: 'k-1' }, stdio: 'ignore' });
+    execFileSync('sh', [script], { env: { ...process.env, HOME: home, KODE_HOME: '/live/install', CLAUDECODE: '1', KIRO_SESSION_ID: 'k-1' }, stdio: 'ignore' });
     const split = (f: string) => readFileSync(f, 'utf8').split('\0').slice(0, -1);
     return { args: split(out + '.args'), env: split(out + '.env') };
   }
@@ -134,19 +134,19 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
       '--add-dir', s.addDirs[0], '--plugin-dir', '/ak/run/mod/agentk', '--plugin-dir', '/ak/run/tools/claude', '--mcp-config', '/ak/run/tools/mcp.json',
       '--append-system-prompt', s.appendSystemPrompt, '--', s.prompt,
     ]);
-    expect(env).toEqual([s.worktree, 'yes', 'claude_code:demo', 'unset', 'unset', 'unset', 'unset', s.env.AK_TRICKY]);
+    expect(env).toEqual([s.worktree, 'yes', 'claude_code:demo', 'unset', 'unset', 'unset', 'unset', s.env.KODE_TRICKY]);
     // ~/.local/bin is where the installer puts Claude Code and gh, even when the profile leaves it out.
     expect(readFileSync(out + '.path', 'utf8').split(':')).toContain(join(home, '.local', 'bin'));
   });
 
   it("gives a code-review session its review subagents, on their models or the session's own, and takes its writes away", () => {
     const { args } = run(spec({
-      agents: [{ name: 'agentk-review-large', description: 'A step.', prompt: 'Do the step.', model: 'opus' }, { name: 'agentk-review-mid', description: 'A step.', prompt: 'Do the step.', model: '' }],
+      agents: [{ name: 'kode-review-large', description: 'A step.', prompt: 'Do the step.', model: 'opus' }, { name: 'kode-review-mid', description: 'A step.', prompt: 'Do the step.', model: '' }],
       disallowedTools: ['Bash', 'Edit'],
     }));
     expect(JSON.parse(args[args.indexOf('--agents') + 1])).toEqual({
-      'agentk-review-large': { description: 'A step.', prompt: 'Do the step.', model: 'opus' },
-      'agentk-review-mid': { description: 'A step.', prompt: 'Do the step.' },
+      'kode-review-large': { description: 'A step.', prompt: 'Do the step.', model: 'opus' },
+      'kode-review-mid': { description: 'A step.', prompt: 'Do the step.' },
     });
     expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash Edit');
   });
@@ -163,7 +163,7 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
   });
 });
 
-describe("AgentK's mod", () => {
+describe("Kode's mod", () => {
   let home: string;
   beforeEach(() => {
     home = tempDir('akl-mod-');
@@ -173,8 +173,8 @@ describe("AgentK's mod", () => {
   });
 
   it.each([
-    { name: 'agentk', write: writeModFiles, dir: modDirPath, other: viewDirPath },
-    { name: 'agentk-view', write: writeViewFiles, dir: viewDirPath, other: modDirPath },
+    { name: 'kode', write: writeModFiles, dir: modDirPath, other: viewDirPath },
+    { name: 'kode-view', write: writeViewFiles, dir: viewDirPath, other: modDirPath },
   ])('$name is copied to its own folder in the run folder from the repo, without its tests', ({ name, write, dir, other }) => {
     const paths = getPaths(join(home, 'ak'));
     expect(write(paths)).toBe(true);

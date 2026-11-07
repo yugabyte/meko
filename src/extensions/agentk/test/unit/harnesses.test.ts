@@ -24,7 +24,7 @@ function setup(
   return { cfg, harnesses, installed, readAll: () => Promise.all(harnesses.list().map((h) => h.version(cfg))) };
 }
 
-describe('the agent new sessions and Ask AgentK start on', () => {
+describe('the agent new sessions and Ask Kode start on', () => {
   it.each([
     ['the default while it is available', { claude: '2.1.300', kiro: '2.32.0' }, { default: 'kiro' as const }, 'kiro'],
     ['the first available one while the default is not installed', { claude: null, kiro: '2.32.0' }, {}, 'kiro'],
@@ -79,7 +79,7 @@ describe('new sessions start only on agents Meko has connected', () => {
     expect(reads).toBe(1);
   });
 
-  it("offers one Meko didn't find: Meko never sees AgentK's own command for it", async () => {
+  it("offers one Meko didn't find: Meko never sees Kode's own command for it", async () => {
     const s = setup(installed, { meko: () => list({ claude: 'connected' }) });
     await s.readAll();
     expect(s.harnesses.status(s.cfg).find((h) => h.id === 'kiro')).toMatchObject({ available: true, meko: { state: 'missing' } });
@@ -119,13 +119,13 @@ describe('new sessions start only on agents Meko has connected', () => {
     ['connected', 'connected' as const, true],
     ['elsewhere', 'elsewhere' as const, true],
     ['none', 'none' as const, false],
-  ])("counts OpenCode's meko server Meko reports (%s) as its own, which AgentK then leaves alone", (_, state, own) => {
+  ])("counts OpenCode's meko server Meko reports (%s) as its own, which Kode then leaves alone", (_, state, own) => {
     const s = setup(installed, { meko: () => list({ opencode: state }) });
     expect(s.harnesses.openCodeOwnMeko()).toBe(own);
   });
 });
 
-describe('a model name AgentK passes to an agent', () => {
+describe('a model name Kode passes to an agent', () => {
   it.each([
     ['opus', null],
     ['claude-opus-5-5', null],

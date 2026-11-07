@@ -39,7 +39,7 @@ export class Harnesses {
     meko?: () => MekoAgentList | null;
     /** Reads Meko's list again (`MekoAgents.refresh`), before a new session the list kept would refuse. */
     refreshMeko?: () => Promise<void>;
-    /** The agents AgentK connected to Meko by itself (`HarnessStatus.autoConnect`); left out, none is due. */
+    /** The agents Kode connected to Meko by itself (`HarnessStatus.autoConnect`); left out, none is due. */
     autoConnect?: MekoAutoConnect;
   }) {
     this.mekoList = deps.meko ?? (() => null);
@@ -59,7 +59,7 @@ export class Harnesses {
   }
 
   /**
-   * OpenCode has a `meko` MCP server of its own, which AgentK then leaves alone (`MekoStatus.opencode`):
+   * OpenCode has a `meko` MCP server of its own, which Kode then leaves alone (`MekoStatus.opencode`):
    * any Meko reports, else (nothing gated, or Meko didn't find it) one in its own config.
    */
   openCodeOwnMeko(): boolean {

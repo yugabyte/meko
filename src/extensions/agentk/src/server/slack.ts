@@ -93,7 +93,7 @@ export function signInSettings(dir = claudeUserDir()): Record<string, unknown> {
 }
 
 /**
- * The arguments for one Slack read, run in AgentK's empty folder: no built-in tools but ToolSearch
+ * The arguments for one Slack read, run in Kode's empty folder: no built-in tools but ToolSearch
  * (`--tools ToolSearch`, which only loads tools' schemas), the user's MCP servers and claude.ai
  * connectors loaded (no `--strict-mcp-config`), no settings file of theirs (`--setting-sources
  * project` finds none in that folder) but the sign-in part (`signInSettings`), the default permission
@@ -148,7 +148,7 @@ export function readSlackList(run: AskRun, cmd: string, timeoutSeconds: number):
   });
 }
 
-/** Reads the list `[work_queue] slack_list` links to with Claude Code, as `[work_queue]` says, in `cwd` (an empty folder of AgentK's). */
+/** Reads the list `[work_queue] slack_list` links to with Claude Code, as `[work_queue]` says, in `cwd` (an empty folder of Kode's). */
 export async function readList(cfg: Config, cwd: string, run: AskRunner = runClaudeOnce): Promise<SlackListItem[]> {
   const listId = slackListId(cfg.workQueue.slackList);
   if (!listId) throw new Error('Set the link to your Slack list in Settings › Work queue.');

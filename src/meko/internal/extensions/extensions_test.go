@@ -18,7 +18,7 @@ func TestRegistry(t *testing.T) {
 	if err != nil || len(r.Entries) != 0 {
 		t.Fatalf("empty registry: %v %v", r, err)
 	}
-	r.Entries["agentk"] = Entry{Command: "/bin/agent-k-local", InstalledByMeko: true}
+	r.Entries["kode"] = Entry{Command: "/bin/agent-k-local", InstalledByMeko: true}
 	if err = r.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -26,11 +26,88 @@ func TestRegistry(t *testing.T) {
 		t.Errorf("mode %v", fi.Mode().Perm())
 	}
 	again, err := Load(root)
-	if err != nil || again.Entries["agentk"].Command != "/bin/agent-k-local" || !again.Entries["agentk"].InstalledByMeko {
+	if err != nil || again.Entries["kode"].Command != "/bin/agent-k-local" || !again.Entries["kode"].InstalledByMeko {
 		t.Fatalf("reloaded %+v, %v", again, err)
 	}
-	if strings.Join(again.Names(), ",") != "agentk" {
+	if strings.Join(again.Names(), ",") != "kode" {
 		t.Errorf("names %v", again.Names())
+	}
+}
+
+// Kode was agentk in Meko before. Its entry loads under its new name, with its command and Update
+// automatically, but stays agentk on disk until Rename (past probation) writes it back, so a Meko
+// rolled back to one that knows only agentk still finds it.
+func TestAnEntryUnderAnOldNameIsTheNewOnesOnceRenamed(t *testing.T) {
+	root := t.TempDir()
+	off := false
+	old := `{"extensions": {"agentk": {"command": "/x/me_kode", "installed_by_meko": true, "auto_update": false}}}`
+	if err := os.WriteFile(File(root), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Load(root)
+	if err != nil || strings.Join(r.Names(), ",") != "kode" || r.Entries["kode"].Command != "/x/me_kode" ||
+		*r.Entries["kode"].AutoUpdate != off {
+		t.Fatalf("loaded %+v, %v", r.Entries, err)
+	}
+	if err := r.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(File(root)); !strings.Contains(string(b), `"agentk"`) || strings.Contains(string(b), `"kode"`) {
+		t.Errorf("saved before Rename:\n%s", b)
+	}
+	if err := r.Rename(root, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(File(root)); !strings.Contains(string(b), `"kode"`) || strings.Contains(string(b), `"agentk"`) {
+		t.Errorf("saved by Rename:\n%s", b)
+	}
+}
+
+// Kode's folder is extensions/agentk until its move makes extensions/kode, which leaves the old
+// name as a link (an old dir to remove with its data).
+func TestDirFallsBackToTheOldNameUntilTheNewFolderIsThere(t *testing.T) {
+	root := t.TempDir()
+	old, now := filepath.Join(root, "extensions", "agentk"), filepath.Join(root, "extensions", "kode")
+	if Dir(root, "kode") != now || len(OldDirs(root, "kode")) != 0 {
+		t.Errorf("neither there: %s %v", Dir(root, "kode"), OldDirs(root, "kode"))
+	}
+	if err := os.MkdirAll(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if Dir(root, "kode") != old || len(OldDirs(root, "kode")) != 0 {
+		t.Errorf("only the old one: %s %v", Dir(root, "kode"), OldDirs(root, "kode"))
+	}
+	if err := os.Rename(old, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(now, old); err != nil {
+		t.Fatal(err)
+	}
+	if Dir(root, "kode") != now || strings.Join(OldDirs(root, "kode"), ",") != old {
+		t.Errorf("moved: %s %v", Dir(root, "kode"), OldDirs(root, "kode"))
+	}
+}
+
+func TestOldNames(t *testing.T) {
+	if err := RenamedError("install", "agentk"); err == nil ||
+		err.Error() != "AgentK is called Kode now: run meko extension install kode" {
+		t.Errorf("RenamedError(agentk) = %v", err)
+	}
+	if err := RenamedError("install", "kode"); err != nil {
+		t.Errorf("RenamedError(kode) = %v", err)
+	}
+	if n, _, ok := Lookup("agentk"); !ok || n != "kode" {
+		t.Errorf("Lookup(agentk) = %q %v", n, ok)
+	}
+	cat := Known["kode"]
+	for handed, want := range map[string]string{"/ext/kode/": "/ext/kode/", "": "/ext/agentk/",
+		"/ext/agentk/": "/ext/agentk/", "/elsewhere/": "/ext/kode/"} {
+		if got := cat.WebPath("kode", handed); got != want {
+			t.Errorf("WebPath(%q) = %q, want %q", handed, got, want)
+		}
+	}
+	if got := Known["present"].WebPath("present", ""); got != "/ext/present/" {
+		t.Errorf("Present's WebPath = %q", got)
 	}
 }
 
@@ -55,7 +132,7 @@ func TestRunPassesTheActionAndTheDataFolderAndReportsFailure(t *testing.T) {
 		t.Errorf("status %v %q", ok, line)
 	}
 	out.Reset()
-	if err := e.Uninstall("/data/meko", Known["agentk"].UninstallArgs, &out, &out); err != nil ||
+	if err := e.Uninstall("/data/meko", Known["kode"].UninstallArgs, &out, &out); err != nil ||
 		out.String() != "ext uninstall --purge --delete-worktrees --non-interactive /data/meko\n" {
 		t.Errorf("uninstall: %v %q", err, out.String())
 	}
@@ -93,14 +170,14 @@ func TestCatalogFindsTheCommandByAnOldName(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ak := Known["agentk"]
-	// An AgentK from before the rename has only agent-k-local; a newer one has agentk too.
+	ak := Known["kode"]
+	// A Kode from before the rename has only agent-k-local; a newer one has agentk too.
 	put("agent-k-local")
-	if got := ak.Find("agentk", home, t.TempDir()); got != filepath.Join(bin, "agent-k-local") {
+	if got := ak.Find("kode", home, t.TempDir()); got != filepath.Join(bin, "agent-k-local") {
 		t.Fatalf("found %q", got)
 	}
 	put("agentk")
-	if got := ak.Find("agentk", home, t.TempDir()); got != filepath.Join(bin, "agentk") {
+	if got := ak.Find("kode", home, t.TempDir()); got != filepath.Join(bin, "agentk") {
 		t.Fatalf("found %q", got)
 	}
 }
@@ -110,7 +187,7 @@ func TestCatalogFindsTheCommandByAnOldName(t *testing.T) {
 func TestCatalogFindsTheCommandInItsHome(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	t.Setenv("PATH", t.TempDir())
-	ak := Known["agentk"]
+	ak := Known["kode"]
 	put := func(p string) {
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 			t.Fatal(err)
@@ -119,17 +196,17 @@ func TestCatalogFindsTheCommandInItsHome(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := ak.Find("agentk", home, root); got != "" {
+	if got := ak.Find("kode", home, root); got != "" {
 		t.Fatalf("found %q in empty folders", got)
 	}
 	old := filepath.Join(home, ".agent-k-local", "app", "current", "bin", "agent-k-local")
 	put(old)
-	if got := ak.Find("agentk", home, root); got != old {
+	if got := ak.Find("kode", home, root); got != old {
 		t.Fatalf("found %q, want the old home's %q", got, old)
 	}
-	moved := filepath.Join(Dir(root, "agentk"), "app", "current", "bin", "agentk")
+	moved := filepath.Join(Dir(root, "kode"), "app", "current", "bin", "agentk")
 	put(moved)
-	if got := ak.Find("agentk", home, root); got != moved {
+	if got := ak.Find("kode", home, root); got != moved {
 		t.Fatalf("found %q, want the data folder's %q", got, moved)
 	}
 }
@@ -178,16 +255,16 @@ func TestCatalogFindSkipsLinksIntoReleases(t *testing.T) {
 	}
 }
 
-// An AgentK installed while its command was agentk moves onto me_kode, with no command on PATH: its
+// A Kode installed while its command was agentk moves onto me_kode, with no command on PATH: its
 // version gets the new name, the registry runs app/current/bin/me_kode, and the ~/.local/bin links
 // of its old names into this data folder go. An old name's link into another data folder's release
 // stays.
 func TestRenameMovesAnInstallOntoItsNewCommand(t *testing.T) {
 	const v = "0.20261030.0"
 	home, root, other := t.TempDir(), t.TempDir(), t.TempDir()
-	ak := Known["agentk"]
+	ak := Known["kode"]
 	oldRelease := func(root string) update.App {
-		app := ak.App(root, "agentk")
+		app := ak.App(root, "kode")
 		bin := filepath.Join(app.Dir(v), "bin")
 		if err := os.MkdirAll(bin, 0o700); err != nil {
 			t.Fatal(err)
@@ -223,7 +300,7 @@ func TestRenameMovesAnInstallOntoItsNewCommand(t *testing.T) {
 		}
 	}
 	r, _ := Load(root)
-	r.Entries["agentk"] = Entry{Command: filepath.Join(bin, "agentk"), InstalledByMeko: true}
+	r.Entries["kode"] = Entry{Command: filepath.Join(bin, "agentk"), InstalledByMeko: true}
 	if err := r.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -236,9 +313,9 @@ func TestRenameMovesAnInstallOntoItsNewCommand(t *testing.T) {
 	if _, err := os.Stat(app.CurrentExe()); err != nil {
 		t.Errorf("app/current/bin/me_kode doesn't run: %v", err)
 	}
-	if again, _ := Load(root); again.Entries["agentk"].Command != app.CurrentExe() ||
-		!again.Entries["agentk"].InstalledByMeko {
-		t.Errorf("registry %+v", again.Entries["agentk"])
+	if again, _ := Load(root); again.Entries["kode"].Command != app.CurrentExe() ||
+		!again.Entries["kode"].InstalledByMeko {
+		t.Errorf("registry %+v", again.Entries["kode"])
 	}
 	if _, err := os.Lstat(filepath.Join(bin, "agentk")); !os.IsNotExist(err) {
 		t.Errorf("~/.local/bin/agentk is left: %v", err)
@@ -250,18 +327,18 @@ func TestRenameMovesAnInstallOntoItsNewCommand(t *testing.T) {
 	if err := r.Rename(root, home); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := Load(root); again.Entries["agentk"].Command != app.CurrentExe() {
-		t.Errorf("registry after a second run %+v", again.Entries["agentk"])
+	if again, _ := Load(root); again.Entries["kode"].Command != app.CurrentExe() {
+		t.Errorf("registry after a second run %+v", again.Entries["kode"])
 	}
 }
 
-// An AgentK installed while its command was me_koder moves onto me_kode the same way: its version,
+// A Kode installed while its command was me_koder moves onto me_kode the same way: its version,
 // whose bin/ has me_koder with agentk and agent-k-local linking to it, gets bin/me_kode, the
 // registry runs that, and ~/.local/bin/me_koder goes.
 func TestRenameMovesAMeKoderInstallOntoMeKode(t *testing.T) {
 	const v = "0.20261105.0"
 	home, root := t.TempDir(), t.TempDir()
-	app := Known["agentk"].App(root, "agentk")
+	app := Known["kode"].App(root, "kode")
 	bin := filepath.Join(app.Dir(v), "bin")
 	if err := os.MkdirAll(bin, 0o700); err != nil {
 		t.Fatal(err)
@@ -290,7 +367,7 @@ func TestRenameMovesAMeKoderInstallOntoMeKode(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, _ := Load(root)
-	r.Entries["agentk"] = Entry{Command: old, InstalledByMeko: true}
+	r.Entries["kode"] = Entry{Command: old, InstalledByMeko: true}
 	if err := r.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -303,8 +380,8 @@ func TestRenameMovesAMeKoderInstallOntoMeKode(t *testing.T) {
 	if _, err := os.Stat(app.CurrentExe()); err != nil {
 		t.Errorf("app/current/bin/me_kode doesn't run: %v", err)
 	}
-	if again, _ := Load(root); again.Entries["agentk"].Command != app.CurrentExe() {
-		t.Errorf("registry %+v", again.Entries["agentk"])
+	if again, _ := Load(root); again.Entries["kode"].Command != app.CurrentExe() {
+		t.Errorf("registry %+v", again.Entries["kode"])
 	}
 	if _, err := os.Lstat(old); !os.IsNotExist(err) {
 		t.Errorf("~/.local/bin/me_koder is left: %v", err)
@@ -461,26 +538,26 @@ func TestCommandsFindTheNodeTheyWereInstalledWith(t *testing.T) {
 	}
 }
 
-// AgentK's own [update] channel = "off" keeps Update automatically off until it's set; set, the
+// Kode's own [update] channel = "off" keeps Update automatically off until it's set; set, the
 // switch is what counts.
 func TestAutoUpdateReadsTheOldSwitch(t *testing.T) {
 	root := t.TempDir()
-	cat := Known["agentk"]
-	if !cat.AutoUpdate(root, "agentk", Entry{}) {
+	cat := Known["kode"]
+	if !cat.AutoUpdate(root, "kode", Entry{}) {
 		t.Error("off with no config")
 	}
-	if err := os.MkdirAll(Dir(root, "agentk"), 0o700); err != nil {
+	if err := os.MkdirAll(Dir(root, "kode"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(Dir(root, "agentk"), "config.toml"),
+	if err := os.WriteFile(filepath.Join(Dir(root, "kode"), "config.toml"),
 		[]byte("[update]\nchannel = \"off\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if cat.AutoUpdate(root, "agentk", Entry{}) {
+	if cat.AutoUpdate(root, "kode", Entry{}) {
 		t.Error("on with the old switch off")
 	}
 	on := true
-	if !cat.AutoUpdate(root, "agentk", Entry{AutoUpdate: &on}) {
+	if !cat.AutoUpdate(root, "kode", Entry{AutoUpdate: &on}) {
 		t.Error("the switch, once set, didn't count")
 	}
 	if !Known["present"].AutoUpdate(root, "present", Entry{}) {

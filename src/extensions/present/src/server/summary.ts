@@ -11,7 +11,7 @@ const colored = () => process.stdout.isTTY === true && !process.env.NO_COLOR && 
 
 /**
  * Meko's blue, for commands, picked for the terminal's background as Meko's rows pick it
- * (src/meko/internal/spin/background.go, and AgentK's tty.ts blueCode): #79aeff on dark, #1f5fd1 on
+ * (src/meko/internal/spin/background.go, and Kode's tty.ts blueCode): #79aeff on dark, #1f5fd1 on
  * light, or the nearest of the 256 colors without 24-bit color (the theme's own blue with only 16).
  * The background is MEKO_TERM_BG, else COLORFGBG's last field, else dark.
  */

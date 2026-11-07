@@ -48,7 +48,7 @@ describe('HTTP API: sharing, invites and Meko', () => {
     await noMeko(env);
     const none = await call('GET', '/api/meko/datapacks/dp-1/people');
     expect(none.statusCode).toBe(409);
-    expect(none.json().error).toBe("Meko isn't running on this computer, so AgentK can't share datapacks. Start it with meko start.");
+    expect(none.json().error).toBe("Meko isn't running on this computer, so Kode can't share datapacks. Start it with meko start.");
     expect(env.mekoApi.calls).toEqual([]);
     await testMeko(env);
     // A Meko that doesn't share (one not linked to Meko Cloud) says so itself, and that's the error.
@@ -113,11 +113,11 @@ describe('HTTP API: sharing, invites and Meko', () => {
     expect(partly.json()).toMatchObject({ members: [], invites: [], refreshError: expect.stringMatching(/Couldn't read the list again: boom/) });
     expect(env.mekoApi.calls.length).toBeGreaterThan(handler);
 
-    // Meko refuses AgentK's token: an error that says what to run.
+    // Meko refuses Kode's token: an error that says what to run.
     shareStatus = 401;
     const keyRefused = await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'carol@example.com', grant: 'viewer' });
     expect(keyRefused.statusCode).toBe(502);
-    expect(keyRefused.json().error).toBe("Meko: AgentK's token wasn't accepted (invalid or expired token). Run meko restart, then try again.");
+    expect(keyRefused.json().error).toBe("Meko: Kode's token wasn't accepted (invalid or expired token). Run meko restart, then try again.");
   });
 
   it('invites a list of emails one after another and says who went through', async () => {
@@ -176,7 +176,7 @@ describe('HTTP API: sharing, invites and Meko', () => {
     let sent = shares().length;
     const keyRefused = await post({ emails: ['j@example.com', 'k@example.com'], grant: 'viewer' });
     expect(keyRefused.statusCode).toBe(502);
-    expect(keyRefused.json().error).toMatch(/AgentK's token wasn't accepted/);
+    expect(keyRefused.json().error).toMatch(/Kode's token wasn't accepted/);
     expect(shares().length - sent).toBe(1);
     // …and after some went through, the rest are listed as failed with that error.
     refuse = { 'm@example.com': 401, 'n@example.com': 401 };
@@ -279,7 +279,7 @@ describe('HTTP API: sharing, invites and Meko', () => {
       expect((await call('PUT', url, { reset: true })).statusCode).toBe(409);
       const join = await call('POST', '/api/meko/share-links/join', { url: 'https://cloud.mekodata.ai/share/tok-2' });
       expect(join.statusCode).toBe(409);
-      expect(join.json().error).toMatch(/^Meko names no web app for share links, so AgentK can't join datapacks by link/);
+      expect(join.json().error).toMatch(/^Meko names no web app for share links, so Kode can't join datapacks by link/);
       expect(env.mekoApi.calls.length).toBe(before);
     }
   });
@@ -366,13 +366,13 @@ describe('HTTP API: sharing, invites and Meko', () => {
     expect(list[0]).not.toHaveProperty('ownerUserId');
   });
 
-  it("uses the Meko on this computer's /api/v1, linked or not, and never a key of AgentK's own", async () => {
+  it("uses the Meko on this computer's /api/v1, linked or not, and never a key of Kode's own", async () => {
     await env.core.refreshMeko();
     expect(resolveMekoApiUrl()).toBe('http://127.0.0.1:7778/api/v1');
     env.local.cloud = { account: '3f1c09a4be7d5e21', webUrl: 'https://cloud.mekodata.ai' };
     await env.core.refreshMeko();
     expect(resolveMekoApiUrl()).toBe('http://127.0.0.1:7778/api/v1');
-    // A key of AgentK's own from before Meko kept the link, in the environment, changes nothing.
+    // A key of Kode's own from before Meko kept the link, in the environment, changes nothing.
     vi.stubEnv('MEKO_API_KEY', 'mko_tkn_fromtheenvironment');
     vi.stubEnv('MEKO_MCP_URL', 'https://mcp.mekodata.ai/mcp');
     try {
@@ -437,7 +437,7 @@ describe('HTTP API: sharing, invites and Meko', () => {
     }
   });
 
-  it("shows when Claude Code's Meko differs, its MCP server from Meko and its capture from AgentK, and changes Claude Code only when asked", async () => {
+  it("shows when Claude Code's Meko differs, its MCP server from Meko and its capture from Kode, and changes Claude Code only when asked", async () => {
     const dir = process.env.CLAUDE_CONFIG_DIR!;
     /** What Meko's capture reads, as Meko's setup writes it: the plugin, and this server and token in Claude Code's settings. */
     const writeClaude = (url: string, token: string) => {
@@ -454,7 +454,7 @@ describe('HTTP API: sharing, invites and Meko', () => {
       await env.core.mekoAgents.refresh();
     };
     await project();
-    // AgentK's Meko, the one on this computer, at mcp.mekodata.ai here so the texts name a host.
+    // Kode's Meko, the one on this computer, at mcp.mekodata.ai here so the texts name a host.
     env.local.meko = { url: 'https://mcp.mekodata.ai/mcp', token: 'mko_tkn_abcdefghij1234' };
     await env.core.refreshMeko();
     // Claude Code is on another Meko (and installed: checked only once its version is in).
@@ -476,7 +476,7 @@ describe('HTTP API: sharing, invites and Meko', () => {
     await env.core.claudeMeko.refresh();
     expect(env.core.state().meko.claude.gaps).toEqual(["The token in Claude Code's settings isn't accepted by mcp.mekodata.ai."]);
 
-    // On this Meko, another account's token can't see the project's datapack, which AgentK's can.
+    // On this Meko, another account's token can't see the project's datapack, which Kode's can.
     env.meko.listDatapacks = async () => [
       { id: 'dp-1', name: 'adlc/proj/demo-repo/p', grant: 'owner', createdAt: null, ownerName: null, ownerEmail: null, description: null, ownerUserId: 'u-self' },
     ];

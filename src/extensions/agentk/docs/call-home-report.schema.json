@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yugabyte/agent-k-local/docs/call-home-report.schema.json",
-  "title": "AgentK CallHomeReport",
-  "description": "The daily usage report an AgentK release install sends to YugabyteDB's call home service, as the payload of yugabyted's envelope. Schema 1. Only counts, enums and version strings: no names, paths or free text.",
+  "title": "Kode CallHomeReport",
+  "description": "The daily usage report a Kode release install sends to YugabyteDB's call home service, as the payload of yugabyted's envelope. Schema 1. Only counts, enums and version strings: no names, paths or free text.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "installId", "sentAt", "install", "totals", "days"],
@@ -24,7 +24,7 @@
         "claudeCode": { "$ref": "#/$defs/optionalVersion" },
         "kiro": { "$ref": "#/$defs/optionalVersion", "description": "Kiro CLI's version; left out while Kiro is off or unreadable." },
         "opencode": { "$ref": "#/$defs/optionalVersion", "description": "OpenCode's version; left out while OpenCode is off or unreadable." },
-        "access": { "enum": ["local", "remote", "meko"], "description": "meko: the Meko on this computer serves AgentK to browsers, with its own access setting. local and remote are from versions that served browsers themselves; kept so their reports still validate." },
+        "access": { "enum": ["local", "remote", "meko"], "description": "meko: the Meko on this computer serves Kode to browsers, with its own access setting. local and remote are from versions that served browsers themselves; kept so their reports still validate." },
         "service": { "enum": ["systemd", "launchd", "none"] },
         "meko": {
           "type": "object",

@@ -13,7 +13,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/secrets"
 )
 
-// The client token is what MCP and REST clients (Claude Code, AgentK, the CLI's own MCP calls)
+// The client token is what MCP and REST clients (Claude Code, Kode, the CLI's own MCP calls)
 // send: one per install, made the first time it's needed and kept across restarts, because
 // clients store it once. It's the same kind of secret as the admin token, which changes at each
 // start and stays the CLI's alone.

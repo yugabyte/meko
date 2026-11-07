@@ -15,7 +15,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/testenv"
 )
 
-// rpc posts one JSON-RPC message to /mcp, as a 2025-06-18 client (Claude Code, AgentK's) sends it,
+// rpc posts one JSON-RPC message to /mcp, as a 2025-06-18 client (Claude Code, Kode's) sends it,
 // and returns the HTTP status and the reply's JSON (nil for none).
 func rpc(t *testing.T, e *testenv.Env, token string, msg map[string]any, header ...string) (int, map[string]any) {
 	t.Helper()
@@ -56,7 +56,7 @@ type callResult struct {
 	Raw     map[string]any
 }
 
-// call calls a tool with the client token, as AgentK's client does: one stateless POST.
+// call calls a tool with the client token, as Kode's client does: one stateless POST.
 func call(t *testing.T, e *testenv.Env, name string, args map[string]any) callResult {
 	t.Helper()
 	status, reply := rpc(t, e, testenv.ClientToken, map[string]any{"id": 1, "method": "tools/call",

@@ -217,7 +217,7 @@ class Pane {
 }
 
 /** Variables of this install that sessions must not inherit (a checkout run in a session would take them as its own). */
-const HOST_ONLY_ENV = new Set(['TMUX', 'TMUX_PANE', 'AK_HOME', 'AK_APP_DIR', 'AK_VERSION']);
+const HOST_ONLY_ENV = new Set(['TMUX', 'TMUX_PANE', 'KODE_HOME', 'KODE_APP_DIR', 'KODE_VERSION', 'AK_HOME', 'AK_APP_DIR', 'AK_VERSION']);
 
 /**
  * Starts the session host on `paths.hostSock`. Throws HostRunningError when another host runs on

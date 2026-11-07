@@ -197,11 +197,11 @@ func TestAgentConnect(t *testing.T) {
 
 	code, out, errs = run("agent", "connect", "--data-dir", dir, "kiro")
 	if code != 0 || errs != "" || out != "Connected Kiro CLI to Meko\n\nNext:\n"+
-		"  meko start                       start Meko\n"+
-		"  kiro-cli                         start a new Kiro CLI session, with Meko's tools "+
+		"  meko start                     start Meko\n"+
+		"  kiro-cli                       start a new Kiro CLI session, with Meko's tools "+
 		"(ones already running need a restart)\n"+
-		"  meko cloud-link                  share with your team through Meko Cloud\n"+
-		"  meko extension install agentk    add AgentK, which runs coding agents from task to merged PR\n" {
+		"  meko cloud-link                share with your team through Meko Cloud\n"+
+		"  meko extension install kode    add Kode, which runs coding agents from task to merged PR\n" {
 		t.Fatalf("agent connect kiro: %d %q %q", code, out, errs)
 	}
 	if !strings.Contains(readFile(t, kiroFile(t)), "Bearer "+tok) {

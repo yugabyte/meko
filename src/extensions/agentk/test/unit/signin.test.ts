@@ -8,7 +8,7 @@ const later = () => (clock += 10 * SIGN_IN_CHECK_MS);
 /** Meko's answer to GET /api/v1/auth/status: its envelope, or a status with no body, or no answer at all. */
 function meko(reply: { data: Record<string, unknown> } | number | 'down') {
   const assign = vi.fn();
-  vi.stubGlobal('location', { pathname: '/ext/agentk/p/a b/s/1', search: '?x=1', assign });
+  vi.stubGlobal('location', { pathname: '/ext/kode/p/a b/s/1', search: '?x=1', assign });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
@@ -27,7 +27,7 @@ describe('signing in through Meko', () => {
   it('goes to Meko’s sign-in screen, back to this page after, once remote access has no sign-in', async () => {
     const assign = meko({ data: { access: 'remote', signed_in: false, username: null } });
     expect(await checkSignIn(later())).toBe(false);
-    expect(assign).toHaveBeenCalledWith(`/signin?next=${encodeURIComponent('/ext/agentk/p/a b/s/1?x=1')}`);
+    expect(assign).toHaveBeenCalledWith(`/signin?next=${encodeURIComponent('/ext/kode/p/a b/s/1?x=1')}`);
   });
 
   it.each([

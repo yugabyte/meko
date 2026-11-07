@@ -70,7 +70,7 @@ describe('repos with no commits yet (real session host + git, fake claude)', () 
     const repo = initOnly(join(env.home, 'elsewhere', 'proto'));
     const empty = join(env.home, 'elsewhere', 'empty');
     mkdirSync(empty, { recursive: true });
-    // A project named Taken on each, as one opened before AgentK made first commits.
+    // A project named Taken on each, as one opened before Kode made first commits.
     for (const [id, dir] of [['p1', repo], ['p2', empty]]) {
       run(env.core.db, `INSERT INTO projects(id, name, repo_path, default_branch, position, settings_json, created_at)
                         VALUES (?, 'Taken', ?, 'main', 0, '{}', ?)`, id, dir, Date.now());
@@ -106,7 +106,7 @@ describe('repos with no commits yet (real session host + git, fake claude)', () 
 
   it("gives a session's repo with no commits its first commit at start, or refuses it before making the session", async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
-    // A scanned repo the session works in, as one opened before AgentK made first commits.
+    // A scanned repo the session works in, as one opened before Kode made first commits.
     const other = initOnly(join(code, 'scratch'));
     writeFileSync(join(other, 'draft.md'), 'draft\n');
     await expect(env.core.sessions.create(p.id, { name: 'There', prompt: 'hi', kind: 'quick', repoPath: other }))

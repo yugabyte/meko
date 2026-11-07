@@ -18,7 +18,7 @@ function argvLog(env: TestEnv): { args: string[]; cwd: string }[] {
   return readJsonl(f);
 }
 
-describe("moving AgentK's home into Meko's data folder (real session host + git, fake claude)", () => {
+describe("moving Kode's home into Meko's data folder (real session host + git, fake claude)", () => {
   let env: TestEnv;
   let from: string;
   let to: string;
@@ -107,7 +107,7 @@ describe("moving AgentK's home into Meko's data folder (real session host + git,
     expect(get(db, 'SELECT worktree_path AS w FROM sessions WHERE id = ?', s.session)).toEqual({ w: moved });
     expect(all(db, 'SELECT path FROM worktrees')).toEqual([{ path: moved }]);
     expect(all(db, 'SELECT path FROM usage_files WHERE offset = 3')).toEqual([{ path: newTranscript }]);
-    expect(all(db, "SELECT text FROM session_events WHERE kind = 'home-moved'")).toEqual([{ text: `AgentK moved its home to ${to}; the session resumed there` }]);
+    expect(all(db, "SELECT text FROM session_events WHERE kind = 'home-moved'")).toEqual([{ text: `Kode moved its home to ${to}; the session resumed there` }]);
     expect(existsSync(newTranscript) && !existsSync(s.transcript)).toBe(true);
     expect(JSON.parse(readFileSync(join(process.env.CLAUDE_CONFIG_DIR!, '.claude.json'), 'utf8')).projects[moved]).toEqual({ hasTrustDialogAccepted: true });
     expect(JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'sessions', 'cli', 'k-1.json'), 'utf8')).cwd).toBe(moved);
@@ -135,6 +135,6 @@ describe("moving AgentK's home into Meko's data folder (real session host + git,
     const db = openDb(join(to, 'state.db'));
     open.push({ close: () => db.close() });
     expect(all(db, "SELECT session_id FROM session_events WHERE kind = 'home-moved'")).toEqual([{ session_id: s.session }]);
-    expect(readdirSync(join(env.home, 'meko', 'extensions'))).toEqual(['agentk']);
+    expect(readdirSync(join(env.home, 'meko', 'extensions'))).toEqual(['kode']);
   });
 });

@@ -1,19 +1,19 @@
-// AgentK's view mod: draws AgentK's prompts in the terminal of each Claude Code session AgentK runs
+// Kode's view mod: draws Kode's prompts in the terminal of each Claude Code session Kode runs
 // as one line, "<first line> … (+N lines, ctrl+o to expand)". The full transcript (ctrl+o) shows them
 // in full, and Claude reads them whole: only the row's drawing changes.
 //
-// It's a plugin of its own, loaded beside AgentK's mod (src/mod/agentk) with a second --plugin-dir,
+// It's a plugin of its own, loaded beside Kode's mod (src/mod/agentk) with a second --plugin-dir,
 // because Claude Code never raises a plugin's `ui.render` hook for the rows of prompts that same
-// plugin submitted: AgentK's mod, which submits them, can't draw them.
+// plugin submitted: Kode's mod, which submits them, can't draw them.
 //
-// Which rows are AgentK's:
-//   - a prompt AgentK's mod submitted: origin `{ kind: 'plugin', name: 'agentk' }`, which the
+// Which rows are Kode's:
+//   - a prompt Kode's mod submitted: origin `{ kind: 'plugin', name: 'kode' }`, which the
 //     transcript keeps, so a resumed session draws it the same way;
-//   - the session's first prompt, which AgentK passes on claude's command line: Claude Code draws it
-//     like typed text, so the server names its first line in AK_FIRST_PROMPT at every launch
-//     (empty when the conversation didn't start with AgentK's prompt).
-// A prompt whose first line is AK_HIDDEN_PROMPT (a workshop host's "AgentK events:") draws as nothing.
-// A prompt AgentK typed into the terminal (while its mod wasn't linked) draws as Claude Code draws it.
+//   - the session's first prompt, which Kode passes on claude's command line: Claude Code draws it
+//     like typed text, so the server names its first line in KODE_FIRST_PROMPT at every launch
+//     (empty when the conversation didn't start with Kode's prompt).
+// A prompt whose first line is KODE_HIDDEN_PROMPT (a workshop host's "Kode events:") draws as nothing.
+// A prompt Kode typed into the terminal (while its mod wasn't linked) draws as Claude Code draws it.
 //
 // It must never get in Claude's way: a row it can't read draws as Claude Code draws it.
 //
@@ -21,17 +21,17 @@
 // module, typed by the declarations Claude Code writes into .claude-plugin/types when it loads the mod.
 import type { EngineInterface, Register } from 'claude-code'
 
-/** The plugin that submits AgentK's prompts (src/mod/agentk). */
-const SENDER = 'agentk'
+/** The plugin that submits Kode's prompts (src/mod/agentk). */
+const SENDER = 'kode'
 /** The most of a first line a drawn row keeps. */
 const LINE_MAX = 200
 /** What a hidden row draws. */
 const NOTHING = { type: 'Box', props: { display: 'none' } } as const
 
 interface Marks {
-  /** The first line of the conversation's first prompt, when AgentK sent it; '' otherwise. */
+  /** The first line of the conversation's first prompt, when Kode sent it; '' otherwise. */
   first: string
-  /** The first line of AgentK's hidden prompts; '' when it sends none. */
+  /** The first line of Kode's hidden prompts; '' when it sends none. */
   hidden: string
 }
 
@@ -39,8 +39,8 @@ let marks: Promise<Marks> | null = null
 
 function marksOf($: EngineInterface): Promise<Marks> {
   marks ??= (async () => ({
-    first: ((await $.env.get('AK_FIRST_PROMPT')) ?? '').trim(),
-    hidden: ((await $.env.get('AK_HIDDEN_PROMPT')) ?? '').trim(),
+    first: ((await $.env.get('KODE_FIRST_PROMPT')) ?? (await $.env.get('AK_FIRST_PROMPT')) ?? '').trim(),
+    hidden: ((await $.env.get('KODE_HIDDEN_PROMPT')) ?? (await $.env.get('AK_HIDDEN_PROMPT')) ?? '').trim(),
   }))()
   return marks
 }

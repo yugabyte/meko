@@ -8,15 +8,15 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/testenv"
 )
 
-// TestAgentKContract replays the calls AgentK's Meko client makes
+// TestAgentKContract replays the calls Kode's Meko client makes
 // (src/extensions/agentk/src/server/meko.ts, MekoClient), with the same tool names and arguments, and
 // checks every reply has what MekoClient reads from it. Keep it in step with meko.ts: when a method
-// there changes a call or reads a new field, change its step here. #189 replaces this with AgentK's
+// there changes a call or reads a new field, change its step here. #189 replaces this with Kode's
 // own tests against Meko.
 //
 // MekoClient treats a reply with an "error" key, or isError, as a failure, so the steps that must
 // succeed check both. Its transport behavior (retries, timeouts, reconnecting) is its own, and
-// stays tested against AgentK's FakeMeko.
+// stays tested against Kode's FakeMeko.
 func TestAgentKContract(t *testing.T) {
 	e := testenv.Start(t, testenv.Options{})
 	hex32 := regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -29,7 +29,7 @@ func TestAgentKContract(t *testing.T) {
 
 	// serviceConv() -> ensureConversation(AGENTK_AGENT_ID, null, SERVICE_KEY, ...): reads id.
 	svc := ok(t, e, "conversation_create", map[string]any{"agent_id": "agent-k-local", "datapack_id": nil,
-		"session_id": "agent-k-local-service", "title": "AgentK service"})
+		"session_id": "agent-k-local-service", "title": "Kode service"})
 	conv := str(svc.JSON["id"])
 	if !hex32.MatchString(conv) {
 		t.Fatalf("ensureConversation: id %q", conv)
@@ -56,7 +56,7 @@ func TestAgentKContract(t *testing.T) {
 	}
 
 	// setDatapackDescription(id, d): datapack_update {datapack_id, description, conversation_id}.
-	ok(t, e, "datapack_update", map[string]any{"datapack_id": dp, "description": "AgentK project \"app\"",
+	ok(t, e, "datapack_update", map[string]any{"datapack_id": dp, "description": "Kode project \"app\"",
 		"conversation_id": conv})
 
 	// describeDatapack(id): datapack_describe {datapack_id, conversation_id}: reads memory_count and
@@ -105,7 +105,7 @@ func TestAgentKContract(t *testing.T) {
 	ok(t, e, "memory_update", map[string]any{"memory_id": id,
 		"text": "Gotcha: migrations are append-only; never edit one.", "datapack_id": dp, "agent_id": agent,
 		"conversation_id": sess})
-	// ...and with agent_id null (a memory whose writer AgentK doesn't know): an error reply.
+	// ...and with agent_id null (a memory whose writer Kode doesn't know): an error reply.
 	wantError(t, e, "memory_update", map[string]any{"memory_id": id, "text": "x", "datapack_id": dp,
 		"agent_id": nil, "conversation_id": sess}, "not_found")
 

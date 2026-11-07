@@ -70,11 +70,11 @@ func TestUpdateWaitsForAnExtensionAction(t *testing.T) {
 	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed(), func(w *Web) {
 		w.Updates, w.Run = f, run.run
 	})
-	if code, _ := post(t, base+"/api/v1/extensions/agentk/install", nil); code != http.StatusAccepted {
+	if code, _ := post(t, base+"/api/v1/extensions/kode/install", nil); code != http.StatusAccepted {
 		t.Fatalf("install: %d", code)
 	}
 	code, env := post(t, base+"/api/v1/update/apply", nil)
-	if code != 409 || env.Error.Code != "EXTENSION_BUSY" || !strings.Contains(env.Error.Message, "AgentK's install") ||
+	if code != 409 || env.Error.Code != "EXTENSION_BUSY" || !strings.Contains(env.Error.Message, "Kode's install") ||
 		f.applies != 0 {
 		t.Errorf("apply: %d %+v", code, env.Error)
 	}

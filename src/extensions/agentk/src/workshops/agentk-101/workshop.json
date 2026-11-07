@@ -1,19 +1,19 @@
 {
   "id": "agentk-101",
-  "title": "AgentK tour",
-  "summary": "A guided tour of AgentK and what Meko adds, on a small Snake game with a teammate's fix to review.",
+  "title": "Kode tour",
+  "summary": "A guided tour of Kode and what Meko adds, on a small Snake game with a teammate's fix to review.",
   "guide": "GUIDE.md",
   "repo": {
     "dir": "repo",
-    "folder": "agentk-demo",
-    "author": { "name": "AgentK Demo", "email": "demo@example.com" },
+    "folder": "kode-demo",
+    "author": { "name": "Kode Demo", "email": "demo@example.com" },
     "date": "2026-10-01T09:00:00Z",
-    "message": "Start the AgentK tour's demo",
+    "message": "Start the Kode tour's demo",
     "branches": [{ "name": "demo/score-fix", "patch": "branches/demo-score-fix.patch" }]
   },
   "gotchas": {
     "file": "gotchas.md",
-    "datapack": "adlc/repo/agentk-demo/gotchas",
+    "datapack": "adlc/repo/kode-demo/gotchas",
     "about": "Traps earlier work on the demo game hit: how the arcade cabinet build uses its rules"
   },
   "codeReview": { "strategy": "sirius-1.0" },
@@ -29,7 +29,7 @@
       ],
       "needs": ["meko"],
       "learn": {
-        "about": "A small Snake game that runs in a web page, the demo of the AgentK tour. Its rules are plain functions in src/game.js, drawn by src/ui.js.",
+        "about": "A small Snake game that runs in a web page, the demo of the Kode tour. Its rules are plain functions in src/game.js, drawn by src/ui.js.",
         "where": "README.md, AGENTS.md, src/game.js and src/ui.js.",
         "months": 0
       }

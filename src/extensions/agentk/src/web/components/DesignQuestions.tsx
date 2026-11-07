@@ -21,13 +21,13 @@ function StateChip({ q, d, answerable }: { q: DesignQuestion; d: Draft; answerab
 }
 
 /**
- * Who settled a key design decision: the user, AgentK on its own, or AgentK on a question left to it. A
+ * Who settled a key design decision: the user, Kode on its own, or Kode on a question left to it. A
  * file from before `decidedBy` reads from its decision's words.
  */
 function DecidedChip({ q }: { q: DesignQuestion }) {
   if (q.decidedBy === 'user') return <span className="dq-chip user">You decided</span>;
-  if (q.kind === 'decision') return <span className="dq-chip agent">AgentK decided</span>;
-  if (q.decidedBy === 'agentk' || q.decision?.startsWith('Left to AgentK')) return <span className="dq-chip">Left to AgentK</span>;
+  if (q.kind === 'decision') return <span className="dq-chip agent">Kode decided</span>;
+  if (q.decidedBy === 'kode' || q.decision?.startsWith('Left to Kode') || q.decision?.startsWith('Left to AgentK')) return <span className="dq-chip">Left to Kode</span>;
   return <span className="dq-chip done">✓ Resolved</span>;
 }
 
@@ -49,7 +49,7 @@ function QuestionCard({
   foot,
 }: {
   q: DesignQuestion;
-  /** Its number as the user sees it: Q1, or D1 for one of AgentK's own decisions. */
+  /** Its number as the user sees it: Q1, or D1 for one of Kode's own decisions. */
   n: string;
   d: Draft;
   /** False past Design: nothing is picked for the user. */
@@ -57,7 +57,7 @@ function QuestionCard({
   editable: boolean;
   onChange: (d: Draft) => void;
   datapacks?: DatapackRef[];
-  /** Under the context: for a decision being changed, what AgentK decided. */
+  /** Under the context: for a decision being changed, what Kode decided. */
   lead?: ReactNode;
   foot?: ReactNode;
 }) {
@@ -89,7 +89,7 @@ function QuestionCard({
               <span className="dq-opt-text">
                 <span className="dq-label">
                   {o.label}
-                  {q.recommended === i && <span className="dq-rec">{q.kind === 'decision' ? 'AgentK’s pick' : 'Recommended'}</span>}
+                  {q.recommended === i && <span className="dq-rec">{q.kind === 'decision' ? 'Kode’s pick' : 'Recommended'}</span>}
                 </span>
                 {o.detail && <span className="dq-detail">{o.detail}</span>}
               </span>
@@ -109,7 +109,7 @@ function QuestionCard({
             />
             <span className="dq-opt-text">
               <span className="dq-label">Custom answer</span>
-              <span className="dq-detail">Tell AgentK what you want instead.</span>
+              <span className="dq-detail">Tell Kode what you want instead.</span>
             </span>
           </label>
         </div>
@@ -121,7 +121,7 @@ function QuestionCard({
         rows={2}
         value={d.text}
         disabled={!editable}
-        placeholder={answer ? 'Your answer' : q.options.length ? 'Add a note (optional)' : q.kind === 'decision' ? 'What AgentK should do instead' : 'Your answer (or leave it to AgentK)'}
+        placeholder={answer ? 'Your answer' : q.options.length ? 'Add a note (optional)' : q.kind === 'decision' ? 'What Kode should do instead' : 'Your answer (or leave it to Kode)'}
         aria-label={answer || !q.options.length ? `Your answer to ${n}` : `Note on ${n}`}
         data-reload-safe={draftsPersist() ? '' : undefined}
         onChange={(e) => onChange({ ...d, text: e.target.value })}
@@ -132,9 +132,9 @@ function QuestionCard({
 }
 
 /**
- * A key design decision, read-only: an answered question, or one AgentK made itself, with who decided
- * it, why, what else AgentK weighed and the Meko items it rests on. `onChange` (in Design) offers
- * Change this on AgentK's own decisions.
+ * A key design decision, read-only: an answered question, or one Kode made itself, with who decided
+ * it, why, what else Kode weighed and the Meko items it rests on. `onChange` (in Design) offers
+ * Change this on Kode's own decisions.
  */
 function DecidedCard({ q, n, datapacks, onChange }: { q: DesignQuestion; n: string; datapacks?: DatapackRef[]; onChange?: () => void }) {
   const weighed = q.kind === 'decision' ? alsoWeighed(q) : [];
@@ -170,7 +170,7 @@ function DecidedCard({ q, n, datapacks, onChange }: { q: DesignQuestion; n: stri
 }
 
 /**
- * The button Ctrl+Enter (⌘+Enter) presses in the questions: Answer while typing in AgentK is asking
+ * The button Ctrl+Enter (⌘+Enter) presses in the questions: Answer while typing in Kode is asking
  * (it goes on its own), else Approve. None while the approval waits for the turn's end, when Cancel
  * approval stands in its place.
  */
@@ -181,11 +181,11 @@ export function questionsSubmitButton(focused: Element, approve: HTMLButtonEleme
 
 /**
  * The design's questions for the user: open ones to answer (an option, with an optional note, or
- * a custom answer), the key design decisions (answered questions and AgentK's own, which the user can
- * change), and other feedback. The answers stay in this browser until they go to AgentK: with the
+ * a custom answer), the key design decisions (answered questions and Kode's own, which the user can
+ * change), and other feedback. The answers stay in this browser until they go to Kode: with the
  * approval, or to revise the design. Questions Claude is asking right now (AskUserQuestion,
- * through AgentK's mod) come first, answered on their own. In Design, the key design decisions
- * start collapsed: they open for a change to one of AgentK's decisions, and each time
+ * through Kode's mod) come first, answered on their own. In Design, the key design decisions
+ * start collapsed: they open for a change to one of Kode's decisions, and each time
  * `showDecisions` is bumped (the Design tab's decisions bar, or Approve with a change to finish).
  * Past Design they're all there is to read, so they start open. With `onAutoRun`, the footer
  * holds Run to merge beside its Approve (or Cancel approval).
@@ -213,7 +213,7 @@ export function DesignQuestions({
   const [sending, setSending] = useState<'revise' | 'approve' | 'cancel' | null>(null);
   const approve = useRef<HTMLButtonElement>(null);
   // The line saying a revision was sent goes once that revision's turn is over (the design panel's
-  // header shows AgentK at work meanwhile).
+  // header shows Kode at work meanwhile).
   const revising = useRevision(session.id) !== null;
   useEffect(() => {
     if (!revising) setNote(null);
@@ -226,7 +226,7 @@ export function DesignQuestions({
   const resolved = doc.questions.filter((q) => q.kind === 'decision' || q.status === 'resolved');
   const number = decisionNumbers(doc.questions);
   const request = toRequest(doc.questions, drafts);
-  // AgentK's decisions the user is changing (Change this), until the decision itself changes.
+  // Kode's decisions the user is changing (Change this), until the decision itself changes.
   const changing = (q: DesignQuestion) => q.kind === 'decision' && drafts.answers[q.id]?.against === q.decision;
   // A change in progress opens the key design decisions; Approve opens them again to finish it.
   const changingAny = resolved.some(changing);
@@ -247,11 +247,11 @@ export function DesignQuestions({
       else delete answers[id];
       return { ...x, answers };
     });
-  const notDesign = !editable ? 'Answers go to AgentK only while the session is in Design.' : null;
+  const notDesign = !editable ? 'Answers go to Kode only while the session is in Design.' : null;
   const blocker = notDesign ?? draftsBlocker(doc.questions, drafts) ?? designApprovalBlocker(session);
   const reviseBlocker = notDesign ?? draftsBlocker(doc.questions, drafts) ?? designReviseBlocker(session)
     ?? (!request.answers.length && !request.feedback.trim() ? 'Answer a question or write feedback first.' : null);
-  // AgentK is mid-turn with its mod running: answers go now and wait in Claude, an approval waits here.
+  // Kode is mid-turn with its mod running: answers go now and wait in Claude, an approval waits here.
   const held = heldForTurnEnd(session);
   // Answers to questions that are no longer open (resolved as they were sent) are done with.
   useEffect(() => {
@@ -259,9 +259,9 @@ export function DesignQuestions({
     if (pruned) saveDrafts(session.id, pruned);
   }, [doc.questions, session.id]);
   const queued = session.approvalQueued
-    ? 'Approved: it goes to AgentK when this turn ends. If the turn changes the design, you’re asked again.'
+    ? 'Approved: it goes to Kode when this turn ends. If the turn changes the design, you’re asked again.'
     : null;
-  const waiting = held && !reviseBlocker ? 'AgentK is working: your answers go now, and it takes them when this turn ends.' : null;
+  const waiting = held && !reviseBlocker ? 'Kode is working: your answers go now, and it takes them when this turn ends.' : null;
   // Shown in the footer too, as tooltips aren't seen on a phone.
   const busy = session.busy ? SESSION_BUSY : null;
 
@@ -275,7 +275,7 @@ export function DesignQuestions({
         const at = Date.now();
         await api.reviseDesign(session.id, request);
         revisionSent(session.id, at);
-        setNote(held ? 'Sent. AgentK takes them when this turn ends, then revises the design.' : 'Sent to AgentK. The design is updated when its turn ends.');
+        setNote(held ? 'Sent. Kode takes them when this turn ends, then revises the design.' : 'Sent to Kode. The design is updated when its turn ends.');
       } else {
         // An approval queued for the turn's end keeps the answers until it's sent, in case it's dropped.
         approvalSent(await api.approveDesign(session.id, request));
@@ -303,8 +303,8 @@ export function DesignQuestions({
         }}
       >
         {session.asking && (
-          <section className="dq-section" aria-label="AgentK is asking">
-            <h4>AgentK is asking</h4>
+          <section className="dq-section" aria-label="Kode is asking">
+            <h4>Kode is asking</h4>
             <AskForm key={session.asking.id} session={session} ask={session.asking} />
           </section>
         )}
@@ -329,9 +329,9 @@ export function DesignQuestions({
             {resolved.length
               ? 'Every question is resolved.'
               : doc.questionsSource === null
-                ? 'AgentK listed no open questions for this design.'
+                ? 'Kode listed no open questions for this design.'
                 : 'No open questions.'}{' '}
-            {editable && 'You can still send AgentK feedback on the design below.'}
+            {editable && 'You can still send Kode feedback on the design below.'}
           </p>
         )}
         {doc.questionsSource === 'markdown' && open.length > 0 && (
@@ -354,13 +354,13 @@ export function DesignQuestions({
                     datapacks={datapacks}
                     lead={
                       <p className="dq-decision">
-                        <span className="dq-decision-label">{q.decidedBy === 'user' ? 'You decided' : 'AgentK decided'}</span> {q.decision}
+                        <span className="dq-decision-label">{q.decidedBy === 'user' ? 'You decided' : 'Kode decided'}</span> {q.decision}
                       </p>
                     }
                     foot={
                       <div className="dq-actions">
                         <button type="button" className="btn small" disabled={!canEdit} onClick={() => setDraft(q.id, null)}>
-                          Keep AgentK’s decision
+                          Keep Kode’s decision
                         </button>
                       </div>
                     }
@@ -391,7 +391,7 @@ export function DesignQuestions({
               rows={3}
               value={drafts.feedback}
               disabled={!canEdit}
-              placeholder="Anything else AgentK should change"
+              placeholder="Anything else Kode should change"
               data-reload-safe={draftsPersist() ? '' : undefined}
               onChange={(e) => {
                 const feedback = e.target.value;
@@ -410,7 +410,7 @@ export function DesignQuestions({
           <button
             className="btn small"
             disabled={!!reviseBlocker || !!sending || !!busy}
-            title={busy ?? reviseBlocker ?? 'AgentK revises the design to match your answers'}
+            title={busy ?? reviseBlocker ?? 'Kode revises the design to match your answers'}
             onClick={() => void go('revise')}
           >
             {sending === 'revise' ? <Busy label="Sending" /> : 'Send for revision'}
@@ -427,7 +427,7 @@ export function DesignQuestions({
               disabled={!!blocker || !!sending || !!busy}
               aria-keyshortcuts={isMac() ? 'Meta+Enter' : 'Control+Enter'}
               title={busy ?? blocker ?? `${held
-                ? 'AgentK is mid-turn: the approval goes when the turn ends, if the design stays the same'
+                ? 'Kode is mid-turn: the approval goes when the turn ends, if the design stays the same'
                 : 'Approve the design with your answers, and move to Code'} (${isMac() ? '⌘' : 'Ctrl+'}Enter)`}
               onClick={() => void go('approve')}
             >

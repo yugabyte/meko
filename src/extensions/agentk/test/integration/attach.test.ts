@@ -141,7 +141,7 @@ describe('sessions on an existing branch or an open PR (real session host + git,
     await env.cleanup();
   });
 
-  it("works on a PR's branch against its base, with the PR linked and AgentK told to build on it", async () => {
+  it("works on a PR's branch against its base, with the PR linked and Kode told to build on it", async () => {
     const p = await project();
     const head = push('feature/widget', 'widget.ts');
     pr(12, { baseRefName: 'release' });

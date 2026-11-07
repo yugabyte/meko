@@ -11,7 +11,7 @@ Add the footer lines your harness asks for (a `Claude-Session:` or `Co-Authored-
 a session URL at the end of a PR description) exactly as it gives them. Trailers go last in a
 commit message, after the body.
 
-In a PR description, the Meko lines AgentK's PR prompt asks for
+In a PR description, the Meko lines Kode's PR prompt asks for
 (`<Meko host>://<datapack id>;<datapack name>`, `meko_design:<name>;<hash>` when the session has a
 design, and `meko_conversation_id:<id>`) stay together and last: put the harness's lines just
 above them.
@@ -22,8 +22,8 @@ pass `--author` or change the identity.
 ## Nothing personal
 
 The repo is public, and commit messages and PR descriptions stay with it. Besides the author's
-identity, the harness's footer lines and AgentK's Meko lines above (left exactly as given:
-AgentK reads them back), they carry no secrets or personal data (the repo root's AGENTS.md
+identity, the harness's footer lines and Kode's Meko lines above (left exactly as given:
+Kode reads them back), they carry no secrets or personal data (the repo root's AGENTS.md
 has the rule): no passwords, tokens, keys or cookies, no one's name, email
 address, user name or handle, no customer or company names, no internal hostnames or paths,
 and nothing a user wrote or stored (prompts, transcripts, memories, datapack contents). Say "a
@@ -38,11 +38,11 @@ the diff itself: check the staged files for secrets and personal data before com
 ```
 
 The release workflows read commit subjects. The repo releases three products, each on its own train:
-Meko (`meko-release.yml`, tags `meko-v0.YYYYMMDD.N`), AgentK (`agentk-release.yml`, tags
-`agentk-v0.YYYYMMDD.N`) and Present (`present-release.yml`, tags `present-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
+Meko (`meko-release.yml`, tags `meko-v0.YYYYMMDD.N`), Kode (`agentk-release.yml`, tags
+`kode-v0.YYYYMMDD.N`, `agentk-v…` before Meko called it Kode) and Present (`present-release.yml`, tags `present-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
 product's last release cuts its next version, and those subjects become its release notes (and
-AgentK's **What's new**). Subjects naming `meko` release Meko; `present` releases Present;
-subjects naming any other component (`agentk`, `repo`) release AgentK
+Kode's **What's new**). Subjects naming `meko` release Meko; `present` releases Present;
+subjects naming any other component (`agentk`, `repo`) release Kode
 (`scripts/release/release-notes.sh --product`), so `feat(agentk,meko): …` releases both. Every other type
 lands without a release. Use exactly one of these nine types:
 
@@ -73,24 +73,24 @@ The rest of the subject:
 
   | Component | Where |
   |---|---|
-  | `agentk` | AgentK, `src/extensions/agentk` |
+  | `agentk` | Kode, `src/extensions/agentk` |
   | `meko` | Meko, `src/meko` |
   | `present` | Present, `src/extensions/present` (its own train, `present-release.yml`) |
   | `repo` | The shared root: `.github/`, `scripts/`, `assets/`, root docs, `.claude/` |
 
-  A root file that belongs to one component (`agentk-release.yml` builds AgentK) takes that
+  A root file that belongs to one component (`agentk-release.yml` builds Kode) takes that
   component, not `repo`. The list is `COMPONENTS` in `scripts/check-title.sh`; a new extension
   adds its name there.
 - A change that ships in more than one component names each, comma-separated with no spaces,
   each once and each with its own optional area: `feat(agentk,meko): …`,
   `fix(agentk/meko,meko/cli): …`. It releases every product it names, so name a component only
-  when the change alters what it ships; one that only touches another (AgentK's tests reading a
+  when the change alters what it ships; one that only touches another (Kode's tests reading a
   root script) takes the one it ships in. Meko's release workflow runs only on pushes that change
   `src/meko/**`, `scripts/release/**` or `.github/workflows/meko-release.yml` (Present's:
   `src/extensions/present/**`, `scripts/release/**` or its workflow), so a `meko` in a title whose
   PR changes none of them waits for the next push that does.
 - `/<area>` is optional: one lowercase name (letters, digits, dashes) for the part of the
-  component it touches, e.g. `agentk/web`, `agentk/server`, `agentk/meko` (AgentK's Meko
+  component it touches, e.g. `agentk/web`, `agentk/server`, `agentk/meko` (Kode's Meko
   integration), `agentk/update`, `meko/store`.
 - `!` after the component (or the list) marks a breaking change (`feat(agentk)!:`, `fix(agentk/web)!:`), or add a
   `BREAKING CHANGE:` footer. Only `feat`, `fix`, `perf` and `deps` can be breaking: a breaking
@@ -130,7 +130,7 @@ type is up to you, and it's what keeps a fix from missing its release.
 1. `git status` and `git diff --staged` (and unstaged `git diff`) to see what's changing.
 2. Stage only the files that belong to this change. Never stage secrets, `.env`, `state.db`,
    certificates, or anything from Meko's data folder (`~/.meko`, or wherever `MEKO_HOME` points)
-   or AgentK's old home `~/.agent-k-local`. Check `git diff --staged` for secrets and personal data
+   or Kode's old home `~/.agent-k-local`. Check `git diff --staged` for secrets and personal data
    (see Nothing personal) and replace them with made-up values.
 3. Write the message per the rules above, with nothing personal in it, and check its subject with
    `sh scripts/check-title.sh "<subject>"`.

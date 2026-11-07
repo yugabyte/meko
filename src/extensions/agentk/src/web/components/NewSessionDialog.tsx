@@ -534,7 +534,7 @@ export function NewSessionDialog({
         </Field>
         {learn && learnFirst && (
           <p className="ns-learn-offer" id="ns-learn-offer">
-            The project's datapack is empty. Start by having AgentK learn the project, so later sessions start with what it found.
+            The project's datapack is empty. Start by having Kode learn the project, so later sessions start with what it found.
           </p>
         )}
         <StartPicker id="ns-start" value={learn ? 'learn' : start === 'learn' ? 'design' : start} learn={learnOffered} onChange={chooseStart} />
@@ -543,7 +543,7 @@ export function NewSessionDialog({
             <input id="ns-auto-run" type="checkbox" checked={autoRun} onChange={(e) => setAutoRun(e.target.checked)} />
             <span>
               Run to merge
-              <span className="muted small check-hint">AgentK opens the PR when it has made the change, then merges it once nothing blocks it.</span>
+              <span className="muted small check-hint">Kode opens the PR when it has made the change, then merges it once nothing blocks it.</span>
             </span>
           </label>
         )}
@@ -560,7 +560,7 @@ export function NewSessionDialog({
                 onChange={(e) => setAbout(e.target.value)}
               />
             </Field>
-            <Field label="Where are its files? (optional)" hint="Folders and files in the repo, docs, and other places to look. Left empty, AgentK starts from the README and docs.">
+            <Field label="Where are its files? (optional)" hint="Folders and files in the repo, docs, and other places to look. Left empty, Kode starts from the README and docs.">
               <textarea
                 id="ns-learn-where"
                 className="input"
@@ -611,11 +611,11 @@ export function NewSessionDialog({
         {!learn && (
           <>
             <Field
-              label={review ? 'Notes for AgentK (optional)' : 'First prompt (optional)'}
+              label={review ? 'Notes for Kode (optional)' : 'First prompt (optional)'}
               hint={
                 (review
-                  ? 'Anything to focus on. AgentK sums up the PR and then waits for your questions.'
-                  : 'What should AgentK do? Left empty, AgentK starts on the name as the task.') + ' Images can be pasted or dropped in.'
+                  ? 'Anything to focus on. Kode sums up the PR and then waits for your questions.'
+                  : 'What should Kode do? Left empty, Kode starts on the name as the task.') + ' Images can be pasted or dropped in.'
               }
             >
               <textarea
@@ -724,7 +724,7 @@ export function NewSessionDialog({
                   />
                   {agentCaps && !agentCaps.artifacts && (
                     <span className="hint">
-                      {agentCaps.label} writes its designs as markdown, and AgentK types its prompts into the terminal.
+                      {agentCaps.label} writes its designs as markdown, and Kode types its prompts into the terminal.
                     </span>
                   )}
                 </div>
@@ -788,7 +788,7 @@ export function NewSessionDialog({
               </Field>
               {review && (
                 <p className="hint">
-                  The base and the branch come from the PR: AgentK checks out its latest commit on {reviewBranch || 'a review branch'}, where a
+                  The base and the branch come from the PR: Kode checks out its latest commit on {reviewBranch || 'a review branch'}, where a
                   plain git push is refused.
                 </p>
               )}
@@ -842,8 +842,8 @@ export function NewSessionDialog({
                       label="Branch"
                       hint={
                         typedExists
-                          ? `${branch.trim()} already exists: AgentK works on it as it is, without starting a new branch.`
-                          : 'Left empty, AgentK names it from the session name.'
+                          ? `${branch.trim()} already exists: Kode works on it as it is, without starting a new branch.`
+                          : 'Left empty, Kode names it from the session name.'
                       }
                     >
                       <input
@@ -861,7 +861,7 @@ export function NewSessionDialog({
                   {!learn && workOn === 'branch' && (
                     <Field
                       label="Branch"
-                      hint="One of your local branches, or type one that's only on origin. AgentK checks it out as it is (fast-forwarded to origin when it's behind) and picks up its open PR."
+                      hint="One of your local branches, or type one that's only on origin. Kode checks it out as it is (fast-forwarded to origin when it's behind) and picks up its open PR."
                     >
                       <input
                         id="ns-existing-branch"

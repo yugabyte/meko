@@ -13,7 +13,7 @@ function claude(o: { settings?: string | null; settingsUrl?: string | null } = {
 
 const OK = (datapacks: string[]): TokenTry => ({ ok: true, datapacks });
 
-/** A watch over stand-ins: AgentK on Meko Cloud with key `agentk`, two projects' datapacks. */
+/** A watch over stand-ins: Kode on Meko Cloud with key `agentk`, two projects' datapacks. */
 function setup(o: { claude?: ClaudeMeko; tokens?: Record<string, TokenTry>; own?: string[] | Error; key?: string; available?: boolean } = {}) {
   const tried: string[] = [];
   let now = 1_000_000;
@@ -60,7 +60,7 @@ describe("Claude Code's Meko: the watch", () => {
     expect(s.tried).toEqual([]);
   });
 
-  it("doesn't try a token that's AgentK's own", async () => {
+  it("doesn't try a token that's Kode's own", async () => {
     const s = setup();
     await s.watch.refresh();
     expect(s.watch.status).toEqual({ gaps: [], capture: [], unchecked: [], checking: false });
@@ -68,7 +68,7 @@ describe("Claude Code's Meko: the watch", () => {
     expect(s.ownCalls()).toBe(0);
   });
 
-  it('accepts another token that sees the project datapacks AgentK sees', async () => {
+  it('accepts another token that sees the project datapacks Kode sees', async () => {
     const s = setup({ claude: claude({ settings: 'mine' }), tokens: { mine: OK(['dp1', 'dp2', 'extra']) } });
     await s.watch.refresh();
     expect(s.watch.status.gaps).toEqual([]);
@@ -87,9 +87,9 @@ describe("Claude Code's Meko: the watch", () => {
   });
 
   it.each([
-    ['2 of them', ['dp9'], "The token in Claude Code's settings can't see 2 of AgentK's project datapacks (adlc/proj/repo/one, adlc/proj/repo/two) on mcp.mekodata.ai."],
+    ['2 of them', ['dp9'], "The token in Claude Code's settings can't see 2 of Kode's project datapacks (adlc/proj/repo/one, adlc/proj/repo/two) on mcp.mekodata.ai."],
     ['one', ['dp1'], "The token in Claude Code's settings can't see the datapack adlc/proj/repo/two on mcp.mekodata.ai."],
-  ])("names the datapacks another account's token can't see (%s), ignoring ones AgentK can't see either", async (_, sees, gap) => {
+  ])("names the datapacks another account's token can't see (%s), ignoring ones Kode can't see either", async (_, sees, gap) => {
     const s = setup({ claude: claude({ settings: 'other' }), tokens: { other: OK(sees) } });
     await s.watch.refresh();
     expect(s.watch.status.gaps).toEqual([gap]);
@@ -108,11 +108,11 @@ describe("Claude Code's Meko: the watch", () => {
     expect(s.tried).toEqual(['slow', 'slow']);
   });
 
-  it("can't check tokens when AgentK can't list its own datapacks", async () => {
+  it("can't check tokens when Kode can't list its own datapacks", async () => {
     const s = setup({ claude: claude({ settings: 'mine' }), tokens: { mine: OK([]) }, own: new Error('Meko is down') });
     await s.watch.refresh();
     expect(s.watch.status.gaps).toEqual([]);
-    expect(s.watch.status.unchecked[0]).toMatch(/AgentK couldn't list its own datapacks \(Meko is down\)/);
+    expect(s.watch.status.unchecked[0]).toMatch(/Kode couldn't list its own datapacks \(Meko is down\)/);
     expect(s.tried).toEqual([]);
   });
 
@@ -130,7 +130,7 @@ describe("Claude Code's Meko: the watch", () => {
     expect(s.ownCalls()).toBe(3);
   });
 
-  it("checks again when AgentK's key or the project datapacks change", async () => {
+  it("checks again when Kode's key or the project datapacks change", async () => {
     const s = setup({ claude: claude({ settings: 'mine' }), tokens: { mine: OK(['dp1', 'dp2']) } });
     await s.watch.refresh();
     s.t.meko.apiKey = 'agentk-new';
@@ -177,7 +177,7 @@ describe("Claude Code's Meko: the watch", () => {
 });
 
 describe("Claude Code's Meko: the installer's token check", () => {
-  it('counts only a token Meko turns down, and never tries AgentK’s own', async () => {
+  it('counts only a token Meko turns down, and never tries Kode’s own', async () => {
     const tried: string[] = [];
     const tryToken = async (_url: string, token: string): Promise<TokenTry> => {
       tried.push(token);

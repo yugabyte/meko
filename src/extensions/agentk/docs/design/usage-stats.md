@@ -1,10 +1,10 @@
 # Usage stats
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 Each release install sends a small report of counts once a day (every hour in its first day) to
 YugabyteDB's call home service (described below), so we know how many installs are active and how
-much work goes through them. Releases from before also sent it to a collector the AgentK team ran
+much work goes through them. Releases from before also sent it to a collector the Kode team ran
 (`services/ak-local-call-home` in yugabyte/agent-k); they keep doing so until they update, and
 nothing here sends there now. What goes out is `CallHomeReport` in `src/shared/types.ts`, and
 [`docs/call-home-report.schema.json`](../call-home-report.schema.json) is the same contract as a
@@ -13,16 +13,16 @@ the report goes up when a field changes meaning or is removed; adding a field do
 
 **What's in it** (`src/server/callhome.ts`, `buildReport`):
 
-- *The install:* a random `installId` (made on first use, kept in `kv`; one per AgentK home, so
-  hosts sharing a home count once), the version, the update channel (always `stable`: Meko installs AgentK's updates by its own channel), platform, CPU, Node and
+- *The install:* a random `installId` (made on first use, kept in `kv`; one per Kode home, so
+  hosts sharing a home count once), the version, the update channel (always `stable`: Meko installs Kode's updates by its own channel), platform, CPU, Node and
   Claude Code versions (`claude --version`; `''` when it can't be read; Kiro CLI's too, as `kiro`, while Kiro is on, and OpenCode's, as `opencode`, while it's on; our version or
   Node's, when the schema wouldn't take it, such as a `git describe` build or a Node nightly, is
-  cut to its leading numbers, else `0.0.0`), `access: meko` (the Meko on this computer serves AgentK; older versions sent `local` or `remote`), the service manager, whether there's a Meko (`keySource`: `meko` for the Meko on this computer,
+  cut to its leading numbers, else `0.0.0`), `access: meko` (the Meko on this computer serves Kode; older versions sent `local` or `remote`), the service manager, whether there's a Meko (`keySource`: `meko` for the Meko on this computer,
   linked to Meko Cloud or not, or `none`; and `sharing`: `api` whenever there's a Meko, since that
   Meko says itself whether it shares, else `none`), and the UTC day of the first report. Older
   versions sent other key sources, and `meko` meant something else in them: `meko` was Meko Cloud
   through Meko's link, `local` the Meko on this computer unlinked, and `config`, `env` and `claude`
-  a key of AgentK's own; their `sharing` was `none` while no API URL was known, which included the
+  a key of Kode's own; their `sharing` was `none` while no API URL was known, which included the
   unlinked Meko on this computer. Read across versions, `meko` and `local` together are "a Meko on
   this computer".
 - *All-time totals:* projects (current, deleted, with a dedicated datapack, shared datapacks
@@ -38,7 +38,7 @@ the report goes up when a field changes meaning or is removed; adding a field do
   pushes and commits, reviews handed to Claude, CI failures, review comment batches, recoveries,
   resumes, reused worktrees, file types, tokens by model (an OpenCode model the price table doesn't know is sent as
   `other`: it can be a name the user gave a provider's model), Meko use (left out of a day with none),
-  and [Ask AgentK](palette.md#ask-agentk) asks (`agentk_asks`: asks, the ones that failed and the actions their
+  and [Ask Kode](palette.md#ask-kode) asks (`agentk_asks`: asks, the ones that failed and the actions their
   answers proposed; left out of a day with none; a cancelled ask isn't counted), and Kiro (`kiro`:
   sessions started on it, its finished turns and the credits they billed, rounded to thousandths;
   left out of a day with none), and [code reviews](code-review.md) (`codeReview`, below).
@@ -67,7 +67,7 @@ the report goes up when a field changes meaning or is removed; adding a field do
   found something, came back empty or failed, saves, the tokens found lookups brought in, and the
   estimated savings (searches and seeds credited, tokens, and dollars in whole cents). It adds calls
   by tool, naming only the lookup and save tools (every other Meko tool counts as `other`), and
-  AgentK's searches at session start by outcome with the milliseconds they took in all. Calls go on
+  Kode's searches at session start by outcome with the milliseconds they took in all. Calls go on
   the day they were made, seeds and searches at start on the day the search ran. Added since
   (optional, so older installs' reports still check): about how many tokens Claude's calls sent to
   Meko (their input, characters ÷ 4), also by tool; [learn steps](recall-and-learn.md#the-learn-step) by trigger
@@ -75,17 +75,17 @@ the report goes up when a field changes meaning or is removed; adding a field do
   on Meko's Context Gaps they marked taught and dismissed (`taught`, `dismissed`, optional, added later; how many they
   were offered isn't sent, since the 7-day report with every count at its largest has no room left in 64 KB), their Meko searches,
   failed calls and tokens sent, and their model calls' tokens (the fork, the duplicate check, and
-  typed turns) with their price in whole cents; AgentK's own Meko calls (`meko_agentk_calls`,
+  typed turns) with their price in whole cents; Kode's own Meko calls (`meko_agentk_calls`,
   recorded in `MekoClient.call`: searches at start, designs, the learn step's) with
   failures, tokens sent, time taken and the 9 most used tools (the rest as `other`); and the Meko
-  plugin's transcript captures AgentK ran (`meko_capture_runs`: runs, failures, time). What a
-  capture sends isn't counted: AgentK can't see it. Each goes on the day it began, and is left out
+  plugin's transcript captures Kode ran (`meko_capture_runs`: runs, failures, time). What a
+  capture sends isn't counted: Kode can't see it. Each goes on the day it began, and is left out
   when there was none. Versions from before Meko kept its [Context Gaps](recall-and-learn.md#mekos-context-gaps)
   also sent searches that found nothing relevant (`weak`) and the questions people dismissed and
   taught (`gaps`); the schema keeps both so their reports still check, and Meko's own report counts
   them now.
 
-Never sent: project, session, repo, branch, datapack or file names, paths, prompts (and what's asked of Ask AgentK), designs,
+Never sent: project, session, repo, branch, datapack or file names, paths, prompts (and what's asked of Ask Kode), designs,
 transcripts or code, PR titles, URLs or numbers, user names, emails, GitHub logins, host names and
 the server name, Meko keys or ids, and Meko queries, results and tool inputs. Model ids that aren't plain ids (a Bedrock ARN carries an
 account number) are sent as `other`.
@@ -99,7 +99,7 @@ check comes 1 to 5 minutes after start (or when the next report is due, if that'
 restart doesn't skip one), and a report goes out when the last one is 55 minutes old, so at every
 hourly check. Reports are stamped with the check's time, so the time a send takes doesn't push
 the next one past its check. Installs that reported before `yb_call_home_first_sent` was
-kept have none and stay daily. The keys are named `yb_` from when reports also went to AgentK's
+kept have none and stay daily. The keys are named `yb_` from when reports also went to Kode's
 own collector, whose `call_home_last_sent` and `call_home_first_sent` stay in `kv` unread. A report
 over 64 KB (`MAX_REPORT_BYTES`: a busy install's 30-day first report, with every day's file types
 and models full) drops its oldest days until it fits. It POSTs the JSON with a 15-second timeout;
@@ -116,9 +116,9 @@ envelope with the report as its payload (`YbCallHome` in `src/shared/types.ts`):
 service routes on `callhome_type` to its `agentk` table. `timestamp` is UTC with microseconds and
 no zone (`2026-11-09T17:05:32.123000`), the only form it parses. It answers 200 even when it
 couldn't store a row, so check a change to the envelope by finding the row in BigQuery. Only release
-installs (with `AK_APP_DIR`) send, unless `[call_home] diagnostics_url` names another URL; dev
+installs (with `KODE_APP_DIR`) send, unless `[call_home] diagnostics_url` names another URL; dev
 servers and tests have neither, so they send nothing. The setting keeps that name rather than
-Meko's `[call_home] url`, which named AgentK's collector's report URL here: a `config.toml` that
+Meko's `[call_home] url`, which named Kode's collector's report URL here: a `config.toml` that
 still has `url` would otherwise send the envelope to the collector. An old `url` is ignored, and
 dropped from the file at its next save.
 

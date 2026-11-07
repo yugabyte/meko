@@ -87,38 +87,38 @@ func TestRunExtensionStartsAndStops(t *testing.T) {
 	ext, sock := filepath.Join(short, "agentk"), filepath.Join(short, "web.sock")
 	log := webExtension(t, ext, sock)
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: ext, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
 	w := testListener(t, dir)
-	if got := w.Installed(); len(got) != 1 || got[0] != "agentk" {
+	if got := w.Installed(); len(got) != 1 || got[0] != "kode" {
 		t.Errorf("installed %v", got)
 	}
 	// A look at the list while it starts forgot the socket and held off asking again.
-	w.asked["agentk"] = time.Now()
+	w.asked["kode"] = time.Now()
 	listenAfter(t, sock, 1500*time.Millisecond)
 	var out bytes.Buffer
 	begun := time.Now()
-	if err := w.RunExtension(context.Background(), "agentk", "start", &out); err != nil || out.String() != "ext start\n" {
+	if err := w.RunExtension(context.Background(), "kode", "start", &out); err != nil || out.String() != "ext start\n" {
 		t.Fatalf("start: %v %q", err, out.String())
 	}
-	if time.Since(begun) < time.Second || w.sockets["agentk"] != sock {
-		t.Errorf("returned after %s, before the socket answered, or forgot it (%q)", time.Since(begun), w.sockets["agentk"])
+	if time.Since(begun) < time.Second || w.sockets["kode"] != sock {
+		t.Errorf("returned after %s, before the socket answered, or forgot it (%q)", time.Since(begun), w.sockets["kode"])
 	}
 	out.Reset()
-	if err := w.RunExtension(context.Background(), "agentk", "stop", &out); err != nil || out.String() != "ext stop\n" {
+	if err := w.RunExtension(context.Background(), "kode", "stop", &out); err != nil || out.String() != "ext stop\n" {
 		t.Fatalf("stop: %v %q", err, out.String())
 	}
 	if got := readLog(t, log); !strings.HasPrefix(got, "start\n_handoff --json\n") || !strings.HasSuffix(got, "stop\n") {
 		t.Errorf("extension ran %q", got)
 	}
 
-	delete(reg.Entries, "agentk")
+	delete(reg.Entries, "kode")
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.RunExtension(context.Background(), "agentk", "start", &out); err == nil ||
+	if err := w.RunExtension(context.Background(), "kode", "start", &out); err == nil ||
 		!strings.Contains(err.Error(), "isn't installed") {
 		t.Errorf("not installed: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestRunExtensionStartThatNeverAnswers(t *testing.T) {
 	ext := filepath.Join(short, "agentk")
 	webExtension(t, ext, filepath.Join(short, "web.sock"))
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: ext, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -141,16 +141,16 @@ func TestRunExtensionStartThatNeverAnswers(t *testing.T) {
 	t.Cleanup(func() { extensions.ListenTimeout = old })
 	w := testListener(t, dir)
 	var out bytes.Buffer
-	err := w.RunExtension(context.Background(), "agentk", "start", &out)
-	if err == nil || !strings.Contains(err.Error(), "AgentK started, but isn't answering after 500ms") {
+	err := w.RunExtension(context.Background(), "kode", "start", &out)
+	if err == nil || !strings.Contains(err.Error(), "Kode started, but isn't answering after 500ms") {
 		t.Fatalf("start: %v", err)
 	}
-	if !w.asked["agentk"].IsZero() {
+	if !w.asked["kode"].IsZero() {
 		t.Error("the next request won't ask it again at once")
 	}
 }
 
-// The page's Install sets AgentK up as meko extension install does, never asking questions, and the
+// The page's Install sets Kode up as meko extension install does, never asking questions, and the
 // client token it passes never reaches the output.
 func TestRunExtensionInstallsWithoutATerminal(t *testing.T) {
 	dir, port := setup(t)
@@ -166,15 +166,15 @@ func TestRunExtensionInstallsWithoutATerminal(t *testing.T) {
 	listenAfter(t, sock, 0)
 	w := testListener(t, dir)
 	var b bytes.Buffer
-	if err := w.RunExtension(context.Background(), "agentk", "install", &b); err != nil {
+	if err := w.RunExtension(context.Background(), "kode", "install", &b); err != nil {
 		t.Fatalf("install: %v (%s)", err, b.String())
 	}
 	got := b.String()
 	if tok == "" || strings.Contains(got, tok) || !strings.Contains(got, "--meko-key [hidden] --non-interactive") ||
-		!strings.Contains(got, "✓ AgentK is installed\n") || strings.Contains(got, "start and stop it") {
+		!strings.Contains(got, "✓ Kode is installed\n") || strings.Contains(got, "start and stop it") {
 		t.Errorf("output %q", got)
 	}
-	if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Command != ak {
+	if reg, _ := extensions.Load(dir); reg.Entries["kode"].Command != ak {
 		t.Errorf("registry %+v", reg.Entries)
 	}
 }

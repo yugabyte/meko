@@ -32,8 +32,8 @@ export interface StartupState {
  * `merge` is Merge & Close: merging the PR, then the Meko summary, worktree and branch cleanup.
  * `explore` is a task's optional first stage: no gates, the user moves the session on from it.
  * `reviewing-pr` is a Review a PR session's only stage: the user reviews someone else's PR, with
- * AgentK assisting, until they close the review.
- * `reviewing-code` is a code-review session's only stage: AgentK's code review of its parent task's
+ * Kode assisting, until they close the review.
+ * `reviewing-code` is a code-review session's only stage: Kode's code review of its parent task's
  * change before the PR opens (docs/design/code-review.md).
  */
 export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done' | 'reviewing-pr' | 'reviewing-code';
@@ -41,8 +41,8 @@ export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 
 /**
  * What a session is: a task, which runs on Explore → Design → Code → Pull Request → Merge & Close
  * from the stage it starts at, a Review a PR (someone else's PR), which has one stage, or a
- * code-review session: AgentK's code review of a task's change, a child of the task
- * (`Session.parentId`) that AgentK starts at Open PR and shows only as part of the task's tab.
+ * code-review session: Kode's code review of a task's change, a child of the task
+ * (`Session.parentId`) that Kode starts at Open PR and shows only as part of the task's tab.
  */
 export type SessionKind = 'task' | 'review-pr' | 'code-review';
 
@@ -95,7 +95,7 @@ export const LEARN_WARN_PRS = 200;
 export const LEARN_WARN_FILES = 5_000;
 
 /**
- * A workshop bundled with AgentK (`src/workshops/<id>/`): a script for a host session (Session.purpose
+ * A workshop bundled with Kode (`src/workshops/<id>/`): a script for a host session (Session.purpose
  * `guide`) and the demo repo it's played in, built locally with no remote (docs/design/workshops.md).
  */
 export interface Workshop {
@@ -110,7 +110,7 @@ export interface Workshop {
   learn: LearnBrief | null;
 }
 
-/** The AgentK tour: the workshop a fresh install starts by itself, and the empty state and palette offer. */
+/** The Kode tour: the workshop a fresh install starts by itself, and the empty state and palette offer. */
 export const AGENTK_TOUR = 'agentk-101';
 
 /** POST /api/workshops/:id/start: the workshop's project and its host session. */
@@ -136,10 +136,10 @@ export interface LearnScope {
 /** One line on what each start (and Review a PR, and a learn session) is for, shown under the choice in the New session dialog. */
 export const START_HINTS: Record<StartStage | 'review-pr' | 'learn', string> = {
   explore: "Investigate, answer questions, build POCs and run experiments. Move on to Design, Code or a PR when you're ready.",
-  design: 'AgentK writes a design for you to approve, then codes, opens a PR, handles review and merges.',
-  code: 'For small tasks. AgentK codes straight away, then opens a PR, handles review and merges.',
-  'review-pr': "Review someone else's PR. AgentK checks it out, sums it up for you, then helps with whatever you ask. It posts to GitHub only when you say.",
-  learn: "AgentK reads the code you point it to and the repo's past PRs, and saves what it learns to Meko for your team. It changes no files, and the session closes when it's done.",
+  design: 'Kode writes a design for you to approve, then codes, opens a PR, handles review and merges.',
+  code: 'For small tasks. Kode codes straight away, then opens a PR, handles review and merges.',
+  'review-pr': "Review someone else's PR. Kode checks it out, sums it up for you, then helps with whatever you ask. It posts to GitHub only when you say.",
+  learn: "Kode reads the code you point it to and the repo's past PRs, and saves what it learns to Meko for your team. It changes no files, and the session closes when it's done.",
 };
 
 /**
@@ -183,7 +183,7 @@ export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done' | 'pr'>[]> =
 
 /**
  * `pr` and `review` are one step in the UI, so they share a label: the PR's reviews, CI and
- * conflicts. AgentK's code review is the Code Review step before it (`reviewing-code`, also a review
+ * conflicts. Kode's code review is the Code Review step before it (`reviewing-code`, also a review
  * session's own stage).
  */
 export const STAGE_LABELS: Record<Stage, string> = {
@@ -209,7 +209,7 @@ export type CiState = 'none' | 'pending' | 'success' | 'failure';
 
 /**
  * A gate pressed before it could go, kept until it can (`Session.queued`): Open PR pressed while
- * AgentK was mid-turn goes when the turn ends; Merge & Close pressed while only blockers that clear
+ * Kode was mid-turn goes when the turn ends; Merge & Close pressed while only blockers that clear
  * by themselves were left goes once nothing blocks it.
  */
 export type QueuedGate = 'open-pr' | 'merge';
@@ -309,30 +309,30 @@ export interface MekoLearning {
 }
 
 /**
- * About how many tokens Meko brought into sessions' first turns: what AgentK's search at session
+ * About how many tokens Meko brought into sessions' first turns: what Kode's search at session
  * start passed to Claude (the seed, `src/server/recall.ts`), and Claude's own lookups before the turn ended.
  * Characters ÷ 4, like `MekoUsage.foundTokens`. Only sessions in projects with datapacks count.
  */
 export interface MekoFirstTurn {
   /** Sessions whose first turn has ended. */
   sessions: number;
-  /** …where AgentK's search at session start ran (sessions from before it was added have none). */
+  /** …where Kode's search at session start ran (sessions from before it was added have none). */
   startSearches: number;
   /** Tokens from lookups by Claude (or a subagent) that found something before the first turn ended. */
   searchedTokens: number;
-  /** Tokens AgentK's search at session start passed to Claude: the seed. */
+  /** Tokens Kode's search at session start passed to Claude: the seed. */
   seedTokens: number;
 }
 
 /**
- * An estimate of what Meko saved: each search that found something, and each seed AgentK passed at
+ * An estimate of what Meko saved: each search that found something, and each seed Kode passed at
  * session start, is credited with the exploring it most likely replaced, by a fixed formula
  * (`src/server/mekosavings.ts`).
  */
 export interface MekoSavings {
   /** Searches that found something: the only calls that count. */
   searches: number;
-  /** Seeds: what AgentK's search at session start passed to Claude, each credited like a search. */
+  /** Seeds: what Kode's search at session start passed to Claude, each credited like a search. */
   seeds: number;
   tokens: number;
   /** USD at API list prices; null when none of the searches' (or seeds') models has a known price. */
@@ -384,7 +384,7 @@ export interface CodeReviewCounts {
    * raised so far.
    */
   candidates: number;
-  /** Kept findings, every round's: what the `me_ak_review:` line says. */
+  /** Kept findings, every round's: what the `me_kode_review:` line says. */
   findings: SeverityCounts;
   /** What the task said it did with kept findings (`review_outcome`). */
   fixed: number;
@@ -483,12 +483,12 @@ export interface CallHomeInstall {
   kiro?: string;
   /** OpenCode's version, left out when it's off or can't be read. */
   opencode?: string;
-  /** 'meko': the Meko on this computer serves AgentK to browsers. Older versions sent 'local' or 'remote'. */
+  /** 'meko': the Meko on this computer serves Kode to browsers. Older versions sent 'local' or 'remote'. */
   access: 'meko';
   service: 'systemd' | 'launchd' | 'none';
   /**
    * `keySource`: 'meko' with a Meko (the one on this computer), 'none' without. `sharing`: 'api' when
-   * AgentK shares through Meko's API (whenever there's a Meko), 'none' when it can't. Older versions
+   * Kode shares through Meko's API (whenever there's a Meko), 'none' when it can't. Older versions
    * sent 'local', 'config', 'env' or 'claude' as the key's source.
    */
   meko: { enabled: boolean; keySource: 'meko' | 'none'; sharing: 'api' | 'none' };
@@ -519,7 +519,7 @@ export interface CallHomeMeko {
   byTool: Partial<Record<CallHomeMekoTool, number>>;
   /** `MekoSavings`, with the dollars in whole cents (0 when nothing was priced) and never below 0. */
   savings: { searches: number; seeds: number; tokens: number; usdCents: number; unpricedSearches: number; unpricedSeeds: number };
-  /** AgentK's search at session start, by outcome, and the milliseconds they took in all (for an average). */
+  /** Kode's search at session start, by outcome, and the milliseconds they took in all (for an average). */
   starts: { found: number; empty: number; error: number; late: number; ms: number };
   /** About how many tokens Claude's calls sent to Meko (characters ÷ 4); left out by installs from before it. */
   sentTokens?: number;
@@ -527,9 +527,9 @@ export interface CallHomeMeko {
   sentByTool?: Partial<Record<CallHomeMekoTool, number>>;
   /** Learn steps (src/server/learn.ts) begun then; left out when there were none. */
   learn?: CallHomeLearn;
-  /** The Meko calls AgentK made itself (searches at start, designs, the learn step's); left out when there were none. */
+  /** The Meko calls Kode made itself (searches at start, designs, the learn step's); left out when there were none. */
   agentk?: CallHomeAgentkMeko;
-  /** The Meko plugin's transcript captures AgentK ran; left out when there were none. */
+  /** The Meko plugin's transcript captures Kode ran; left out when there were none. */
   capture?: { runs: number; failures: number; ms: number };
 }
 
@@ -538,7 +538,7 @@ export interface CallHomeLearn {
   runs: number;
   /** `discard` is optional in the schema: reports from before Discard ran learn steps lack it. */
   byTrigger: { merge: number; manual: number; discard: number };
-  /** `mod`: through AgentK's mod; `turn`: a typed prompt; `none`: skipped at Merge & Close or Discard. */
+  /** `mod`: through Kode's mod; `turn`: a typed prompt; `none`: skipped at Merge & Close or Discard. */
   byPath: { mod: number; turn: number; none: number };
   byOutcome: { done: number; failed: number; interrupted: number; skipped: number };
   /** Facts proposed, then added, corrected and found known already (a typed turn counts its adds and corrections). */
@@ -565,7 +565,7 @@ export interface CallHomeLearn {
   usdCents: number;
 }
 
-/** AgentK's own Meko calls: how many, how many failed, about how many tokens they sent, the time they took, and by tool. */
+/** Kode's own Meko calls: how many, how many failed, about how many tokens they sent, the time they took, and by tool. */
 export interface CallHomeAgentkMeko {
   calls: number;
   errors: number;
@@ -643,7 +643,7 @@ export interface CallHomeDay {
   meko?: CallHomeMeko;
   /** Kiro on the day: sessions started on it, its finished turns, and the credits they billed. Left out of a day with none. */
   kiro?: { sessionsCreated: number; turns: number; credits: number };
-  /** Ask AgentK on the day: asks, the ones that failed, and the actions the answers proposed. Left out of a day with none. */
+  /** Ask Kode on the day: asks, the ones that failed, and the actions the answers proposed. Left out of a day with none. */
   askAgentk?: { asks: number; failed: number; actions: number };
   /** Code reviews on the day: started then, or whose sessions spent tokens then. Left out of a day with neither. */
   codeReview?: CallHomeCodeReview;
@@ -651,7 +651,7 @@ export interface CallHomeDay {
 
 export interface CallHomeReport {
   schema: 1;
-  /** A random id made on first use, one per AgentK home. */
+  /** A random id made on first use, one per Kode home. */
   installId: string;
   sentAt: string;
   install: CallHomeInstall;
@@ -693,7 +693,7 @@ export interface ProjectSettings {
 /**
  * The open questions on Meko's Context Gaps for a project's dedicated datapack (the searches Meko
  * found nothing, or nothing relevant, for), by how their latest ask went: the project home's line,
- * which links to the tab (both counts 0 with none open). Meko keeps them; AgentK only reads the counts.
+ * which links to the tab (both counts 0 with none open). Meko keeps them; Kode only reads the counts.
  */
 export interface MekoGaps {
   datapackId: string;
@@ -718,7 +718,7 @@ export interface Project {
   createdAt: number;
   /**
    * The bundled workshop that opened it (`Workshop.id`), or null for a project the user opened. A
-   * workshop's project is on a demo repo AgentK built with no remote, so it opens no PR: Open PR,
+   * workshop's project is on a demo repo Kode built with no remote, so it opens no PR: Open PR,
    * Run to merge and a move to Pull Request are refused there, and its Code gate offers Run code
    * review instead.
    */
@@ -729,8 +729,8 @@ export interface Project {
 export interface LearnProgress {
   /**
    * Through the mod: `extract`, Claude looks back over the session for what it learned; `search`,
-   * AgentK finds what Meko already has on each fact; `check`, a small model checks them against
-   * it; `save`, AgentK writes them. Without the mod, `turn`: Claude saves them itself in a typed turn.
+   * Kode finds what Meko already has on each fact; `check`, a small model checks them against
+   * it; `save`, Kode writes them. Without the mod, `turn`: Claude saves them itself in a typed turn.
    */
   step: 'extract' | 'search' | 'check' | 'save' | 'turn';
   /** The facts Claude found (0 while extracting, and for a turn). */
@@ -760,7 +760,7 @@ export interface Session {
    */
   model: string | null;
   /**
-   * AgentK's key for the session's conversation: Claude Code's session id (Resume continues it), and
+   * Kode's key for the session's conversation: Claude Code's session id (Resume continues it), and
    * for every harness the key of its Meko conversation.
    */
   claudeSessionId: string;
@@ -793,17 +793,17 @@ export interface Session {
   /** Why Merge is disabled, in plain words. Empty when canMerge. */
   mergeBlockers: string[];
   /**
-   * Merge & Close can be queued: it isn't mergeable yet, but every blocker clears by itself (AgentK
+   * Merge & Close can be queued: it isn't mergeable yet, but every blocker clears by itself (Kode
    * working or waiting on you mid-turn, CI running, or a review's findings being addressed). The
    * gate reads Merge when ready.
    */
   mergeQueueable: boolean;
   /**
    * The merge blockers only the user can clear (a part of `mergeBlockers`): a review held for them,
-   * failing CI or merge conflicts AgentK handed over after its attempts on this head, or conflicts
+   * failing CI or merge conflicts Kode handed over after its attempts on this head, or conflicts
    * while Resolve merge conflicts on PRs is off; and with Run to merge every other blocker that doesn't
    * clear by itself, except a question in the terminal (the status says it), changes requested while
-   * AgentK addresses a review, and failing CI or conflicts AgentK still has attempts for. In Pull
+   * Kode addresses a review, and failing CI or conflicts Kode still has attempts for. In Pull
    * Request the session's dot shows Needs you while there's one (`dotState()`).
    */
   waitsOnYou: string[];
@@ -812,7 +812,7 @@ export interface Session {
   /** The user's instructions for a queued Open PR (OpenPrRequest); null when it has none, or none is queued. */
   queuedInstructions: string | null;
   /**
-   * Run to merge: AgentK passes Open PR when a Code turn ends and Merge & Close once nothing blocks
+   * Run to merge: Kode passes Open PR when a Code turn ends and Merge & Close once nothing blocks
    * it, by keeping the gate queued (`queued`) in each stage. In Design it waits for the approval.
    */
   autoRun: boolean;
@@ -834,16 +834,16 @@ export interface Session {
   comments: { drafts: number; queued: number };
   /** How many of the design's questions are open, for the user to answer. */
   designQuestions: { open: number };
-  /** Reviews on the session's PR held for the user to send to AgentK or dismiss, and their authors. */
+  /** Reviews on the session's PR held for the user to send to Kode or dismiss, and their authors. */
   heldReviews: { count: number; authors: string[] };
   /**
-   * AgentK's mod is running in the session's Claude (`[claude] mod` on, and the mod polling): answers
-   * to the design can be sent and the design approved while AgentK works, and Claude's questions
+   * Kode's mod is running in the session's Claude (`[claude] mod` on, and the mod polling): answers
+   * to the design can be sent and the design approved while Kode works, and Claude's questions
    * (`asking`) answered here.
    */
   modLive: boolean;
   /**
-   * A turn is running: AgentK is working, or Claude waits on you (a permission prompt, a question)
+   * A turn is running: Kode is working, or Claude waits on you (a permission prompt, a question)
    * during a turn. False for a Needs you with no turn behind it, like a design waiting for approval.
    */
   midTurn: boolean;
@@ -851,16 +851,16 @@ export interface Session {
   promptsHeld: number;
   /** The question Claude is asking with its AskUserQuestion tool, waiting for an answer; null when none (or without the mod). */
   asking: AskRequest | null;
-  /** The user approved the design while AgentK was busy: the approval goes when this turn ends, if the turn leaves the design alone. */
+  /** The user approved the design while Kode was busy: the approval goes when this turn ends, if the turn leaves the design alone. */
   approvalQueued: boolean;
-  /** AgentK is saving what the session learned to its project's datapack (the learn step, or its typed turn). */
+  /** Kode is saving what the session learned to its project's datapack (the learn step, or its typed turn). */
   learning: boolean;
   /** Where that learn step is, while `learning`; null otherwise. */
   learnProgress: LearnProgress | null;
   /** Where Merge & Close is, while the session is in that stage; null in every other stage. */
   closeStep: CloseStep | null;
   /**
-   * The session's agent is running a Meko tool call (Claude's as AgentK's mod reports it, Kiro's and
+   * The session's agent is running a Meko tool call (Claude's as Kode's mod reports it, Kiro's and
    * OpenCode's as their hooks do), or started one less than 1.5 s ago, so a quick call still shows.
    */
   mekoCall: boolean;
@@ -868,7 +868,7 @@ export interface Session {
    * Work the agent left running in the background when its last turn ended, which wakes it again
    * when it's done: Claude Code's background shells, subagents and monitors (its `Stop` hook's
    * `background_tasks`), less the watch on each Artifact the agent publishes, which never ends;
-   * OpenCode's background shells and subagents (from AgentK's plugin). Empty when there's none, and
+   * OpenCode's background shells and subagents (from Kode's plugin). Empty when there's none, and
    * always for Kiro, whose hooks don't say. Kept in memory: replaced at each turn's end, and cleared
    * when the agent exits or relaunches.
    */
@@ -895,7 +895,7 @@ export interface Session {
   openPrReview: OpenPrReview;
   usage: TokenUsage;
   /**
-   * How full Claude's context window is, in percent, as AgentK's mod last measured it (after each
+   * How full Claude's context window is, in percent, as Kode's mod last measured it (after each
    * turn); null without the mod, or before its first reading since Claude started or was cleared.
    */
   contextPercent: number | null;
@@ -910,10 +910,10 @@ export interface Session {
   archivedAt: number | null;
   recoveredAt: number | null;
   /**
-   * When AgentK stopped the session's agent because it sat idle past `[sessions] idle_stop_hours`
+   * When Kode stopped the session's agent because it sat idle past `[sessions] idle_stop_hours`
    * (ms); null otherwise. The status is `exited` meanwhile, and the agent starts again with
    * `--resume` on Resume, a key typed into its terminal, an action that sends it a prompt, or an
-   * AgentK step that needs it.
+   * Kode step that needs it.
    */
   idleStoppedAt: number | null;
 }
@@ -931,7 +931,7 @@ export interface ReviewingPr {
   /** Commits on the PR since reviewSha; null when the PR's history was rewritten (a force-push). */
   newCommits: number | null;
   prState: 'OPEN' | 'CLOSED' | 'MERGED';
-  /** The PR's design (from Meko) has a version AgentK hasn't read: Update to latest has it read, with no new commits too. */
+  /** The PR's design (from Meko) has a version Kode hasn't read: Update to latest has it read, with no new commits too. */
   designUnread: boolean;
 }
 
@@ -942,7 +942,7 @@ export interface ProjectWithSessions extends Project {
 }
 
 /**
- * What AgentK knows about its own updates. Meko installs them and keeps what's available, the job and
+ * What Kode knows about its own updates. Meko installs them and keeps what's available, the job and
  * the switch for automatic updates (the page reads those from Meko's own routes: `MekoExtension`).
  */
 export interface UpdateStatus {
@@ -954,7 +954,7 @@ export interface UpdateStatus {
 }
 
 /**
- * AgentK's row in Meko's extension list (`GET /api/v1/extensions` on Meko's origin, not AgentK's): the
+ * Kode's row in Meko's extension list (`GET /api/v1/extensions` on Meko's origin, not Kode's): the
  * fields the Update banner and Settings › Updates read. An older Meko leaves the update fields out.
  */
 export interface MekoExtension {
@@ -1033,28 +1033,28 @@ export interface MekoStatus {
    * says so itself.
    */
   configured: boolean;
-  /** The Meko MCP server AgentK uses (and sets the agents up with); null when there's none. */
+  /** The Meko MCP server Kode uses (and sets the agents up with); null when there's none. */
   url: string | null;
   /** The web app Meko names for share links (Meko Cloud's while it's linked to it); null when it names none, and there are no share links. */
   webUrl: string | null;
   /**
-   * Whether Claude Code's sessions reach the Meko AgentK uses: its `meko` MCP server, as Meko reports
+   * Whether Claude Code's sessions reach the Meko Kode uses: its `meko` MCP server, as Meko reports
    * it (`HarnessStatus.meko`), then what Meko's capture needs in Claude Code: the plugin, and the
-   * server and a token that works (accepted, and seeing AgentK's project datapacks) in its settings.
+   * server and a token that works (accepted, and seeing Kode's project datapacks) in its settings.
    * Fixed only when the user asks (Meko's connect, then POST /api/settings/meko/claude-setup).
    * Empty lists while Meko is off.
    */
   claude: MekoClaudeStatus;
   /**
-   * Whether Kiro's sessions reach the Meko AgentK uses: its `meko` MCP server, as Meko reports it
+   * Whether Kiro's sessions reach the Meko Kode uses: its `meko` MCP server, as Meko reports it
    * (`HarnessStatus.meko`), and the agent Kiro sessions are built from loading it (its
    * `includeMcpJson`). Meko's capture hooks aren't checked. Null when Kiro isn't available or Meko is
    * off. Fixed only when the user asks (Meko's connect, then POST /api/settings/meko/kiro-setup).
    */
   kiro: MekoAgentGaps | null;
   /**
-   * Which Meko OpenCode's sessions use: AgentK's (`own: false`), which AgentK adds to their config
-   * as a remote `meko` MCP server, or OpenCode's own `meko` server (`own: true`), which AgentK leaves
+   * Which Meko OpenCode's sessions use: Kode's (`own: false`), which Kode adds to their config
+   * as a remote `meko` MCP server, or OpenCode's own `meko` server (`own: true`), which Kode leaves
    * alone. Own when Meko reports one (`HarnessStatus.meko`, any state but `none`), else when OpenCode's
    * own config has one. Null when OpenCode isn't available or Meko is off.
    */
@@ -1073,13 +1073,13 @@ export interface MekoStatus {
   local: LocalMekoState;
 }
 
-/** What keeps an agent's sessions off AgentK's Meko, one sentence each. */
+/** What keeps an agent's sessions off Kode's Meko, one sentence each. */
 export interface MekoAgentGaps {
   /** Everything: its MCP server, as Meko reports it (`HarnessStatus.meko`), then `capture`. */
   gaps: string[];
   /**
    * The gaps Meko's setup package fixes (Claude Code's plugin and settings, Kiro's agent), which
-   * AgentK checks itself; while there are any, Settings offers Set up … with this Meko.
+   * Kode checks itself; while there are any, Settings offers Set up … with this Meko.
    */
   capture: string[];
 }
@@ -1106,20 +1106,20 @@ export interface AppState {
   serverHost: string;
   /** The account's plan usage limits, or null when no session has reported them (API-key accounts never do). */
   limits: PlanLimits | null;
-  /** Kiro's plan allowance (`kiro-cli chat /usage`), or null until Kiro has been used in AgentK and read, or while it isn't available. */
+  /** Kiro's plan allowance (`kiro-cli chat /usage`), or null until Kiro has been used in Kode and read, or while it isn't available. */
   kiroPlan: KiroPlan | null;
   /** Project datapacks shared with you that aren't a project here yet (not the ones put off with Later). */
   invites: DatapackInvite[];
   /** New sessions whose worktree couldn't be made, newest first, until dismissed (kept in memory: a restart forgets them). */
   failedStarts: FailedStart[];
-  /** The Claude Code sessions launch with, and whether it runs AgentK's mod. */
+  /** The Claude Code sessions launch with, and whether it runs Kode's mod. */
   claudeCode: ClaudeCodeStatus;
-  /** gh, GitHub's command-line tool, as AgentK last found it, and the GitHub dialog's install or sign-in under way. */
+  /** gh, GitHub's command-line tool, as Kode last found it, and the GitHub dialog's install or sign-in under way. */
   gh: GhStatus;
   /** Each harness sessions can run on, in HARNESS_IDS order, and the default for new sessions. */
   harnesses: HarnessStatus[];
-  /** `[ask_agentk] enabled` and a coding agent available to answer: the command palette offers Ask AgentK. */
-  askAgentk: boolean;
+  /** `[ask_kode] enabled` and a coding agent available to answer: the command palette offers Ask Kode. */
+  askKode: boolean;
   /** The session host that runs every Claude, as it last answered. */
   sessionHost: SessionHostStatus;
   /** The work queue's open items, in its order (closed ones: `GET /api/work-items?status=closed`). */
@@ -1140,7 +1140,7 @@ export interface HarnessStatus {
   enabled: boolean;
   /** What `<command> --version` printed, or null when it can't be read (or hasn't been yet). */
   version: string | null;
-  /** The oldest version AgentK runs sessions on. */
+  /** The oldest version Kode runs sessions on. */
   minVersion: string | null;
   /**
    * New sessions can start on it: enabled, its version read and new enough, and not kept off by
@@ -1167,7 +1167,7 @@ export interface HarnessStatus {
   updating: boolean;
   /**
    * The page connects it to Meko by itself (`autoConnectDue`), claiming the try first (POST
-   * /api/harnesses/:id/auto-connect): AgentK hasn't tried before for this agent.
+   * /api/harnesses/:id/auto-connect): Kode hasn't tried before for this agent.
    */
   autoConnect: boolean;
 }
@@ -1194,17 +1194,17 @@ export interface SessionHostStatus {
 }
 
 /**
- * The Claude Code the next session launch gets (`[claude] command`), as AgentK's mod needs it. A
+ * The Claude Code the next session launch gets (`[claude] command`), as Kode's mod needs it. A
  * running session keeps the version it started with until Claude restarts in it.
  */
 export interface ClaudeCodeStatus {
   /** What `claude --version` printed, or null when it can't be read (or hasn't been yet). */
   version: string | null;
-  /** The oldest Claude Code AgentK's mod runs in. */
+  /** The oldest Claude Code Kode's mod runs in. */
   minModVersion: string;
   /** Whether `version` runs the mod; null while the version is unknown. */
   supportsMod: boolean | null;
-  /** `[claude] mod`: when it's off, the version doesn't matter to AgentK. */
+  /** `[claude] mod`: when it's off, the version doesn't matter to Kode. */
   modEnabled: boolean;
   /** `claude update` is running (POST /api/claude/update). */
   updating: boolean;
@@ -1221,11 +1221,11 @@ export interface ClaudeCodeStatus {
  */
 export const GH_NEEDED = 'GH_NEEDED';
 
-/** Whether AgentK can use gh: `ok` (installed and signed in), `missing`, `signed-out`, or `unknown` until checked. */
+/** Whether Kode can use gh: `ok` (installed and signed in), `missing`, `signed-out`, or `unknown` until checked. */
 export type GhState = 'ok' | 'missing' | 'signed-out' | 'unknown';
 
 /**
- * gh as AgentK last found it (`gh --version`, `gh auth token`), and what the GitHub dialog started
+ * gh as Kode last found it (`gh --version`, `gh auth token`), and what the GitHub dialog started
  * (POST /api/gh/install, POST /api/gh/login; DELETE /api/gh/job forgets it).
  */
 export interface GhStatus {
@@ -1279,7 +1279,7 @@ export interface PlanLimits {
 
 /**
  * Kiro's plan allowance: the account's credits this period, as `kiro-cli chat /usage` prints it
- * (all Kiro use, in AgentK or not). Kiro calls it an estimate.
+ * (all Kiro use, in Kode or not). Kiro calls it an estimate.
  */
 export interface KiroPlan {
   /** As Kiro names it, without "Kiro": "Free", "Pro". Null when it didn't say. */
@@ -1447,7 +1447,7 @@ export type ShareLinkState = { link: ShareLink } | { link: null; unavailable: 'p
 /** PUT /api/meko/datapacks/:id/share-link: one change. Turning the link on names the role it gives. */
 export type ShareLinkChange = { active: true; grant: LinkGrant } | { active: false } | { grant: LinkGrant } | { reset: true };
 
-/** POST /api/meko/share-links/join: a share link pasted into Ask AgentK. */
+/** POST /api/meko/share-links/join: a share link pasted into Ask Kode. */
 export interface JoinByLinkRequest {
   url: string;
 }
@@ -1516,7 +1516,7 @@ export interface ReviewablePr {
   /** What to clone when there's no local clone. */
   cloneUrl: string;
   /**
-   * A typed PR only: a datapack its description names (AgentK's Meko lines) that isn't one of the
+   * A typed PR only: a datapack its description names (Kode's Meko lines) that isn't one of the
    * project's, so the author's design can be had by attaching it. Null otherwise.
    */
   otherDatapackId: string | null;
@@ -1550,7 +1550,7 @@ export interface LinkPlan {
   project: LinkProject | null;
   /** The other open projects on the repo, in rail order, offered too (`why: 'repo'`). Empty when `project` is null. */
   others: LinkProject[];
-  /** The project AgentK opens when no open project fits. */
+  /** The project Kode opens when no open project fits. */
   newProject: LinkNewProject | null;
   /** Running sessions already on it: a review of the PR, or tasks whose first prompt names the issue's link. */
   existing: { sessionId: string; projectId: string; name: string }[];
@@ -1586,7 +1586,7 @@ export interface LinkNewProject {
 export interface StartFromLinkRequest {
   /** The pasted link, or `owner/name#N`. */
   ref: string;
-  /** The open project to start in; left out, AgentK opens the plan's new project (or uses an open one that fits by now). */
+  /** The open project to start in; left out, Kode opens the plan's new project (or uses an open one that fits by now). */
   projectId?: string;
   /** An issue's task: where it starts. Defaults to `design`. */
   start?: 'design' | 'code';
@@ -1731,13 +1731,13 @@ export interface WorkLinkMatch {
   session: { id: string; projectId: string; name: string; stage: Stage; closed: boolean; prNumber: number | null; prUrl: string | null } | null;
 }
 
-/** The most characters an instruction for Ask AgentK takes (`AskAgentkRequest.text`). */
+/** The most characters an instruction for Ask Kode takes (`AskAgentkRequest.text`). */
 export const ASK_AGENTK_TEXT_MAX = 2000;
 /** The most earlier exchanges an ask carries (`AskAgentkRequest.history`); older ones are left out. */
 export const ASK_AGENTK_HISTORY_MAX = 10;
 
 /**
- * POST /api/ask-agentk: an instruction in plain words from the command palette's Ask AgentK. AgentK
+ * POST /api/ask-kode: an instruction in plain words from the command palette's Ask Kode. Kode
  * hands it to Claude Code once, with no tools, and Claude answers with a reply and the actions to offer.
  */
 export interface AskAgentkRequest {
@@ -1760,13 +1760,13 @@ export interface AskAgentkTurn {
  * picks through the route the UI already uses, which checks it again: `start` as POST
  * /api/projects/:id/sessions, `link` through the palette's GitHub link lookup, `move` and `openPr`
  * as the session's move and open-pr routes, `openProject` as POST /api/actions/run; `go` only
- * navigates. **Do all** runs every one but `go` with POST /api/actions/run, as AgentK's session
+ * navigates. **Do all** runs every one but `go` with POST /api/actions/run, as Kode's session
  * tools do (`src/server/actions.ts`).
  */
 export type AskAgentkAction =
   /**
    * `autoRun`: Run to merge (Session.autoRun), only with `start` `code`. `harness` and `model`: the
-   * agent and its model (CreateSessionRequest's), which only AgentK's session tools give. `branch`:
+   * agent and its model (CreateSessionRequest's), which only Kode's session tools give. `branch`:
    * an existing branch to work on as it is (the session tools' start_sessions), as the New session
    * dialog's Existing branch.
    */
@@ -1799,7 +1799,7 @@ export type AskAgentkAction =
 export const ACTIONS_MAX = 8;
 
 export interface AskAgentkResult {
-  /** What AgentK says back: what it proposes, an answer, or a question when it can't tell what's meant. */
+  /** What Kode says back: what it proposes, an answer, or a question when it can't tell what's meant. */
   reply: string;
   /** At most ACTIONS_MAX, in the order Claude gave them. */
   actions: AskAgentkAction[];
@@ -1812,7 +1812,7 @@ export interface AskAgentkResult {
   notes: string[];
 }
 
-/** POST /api/actions/run: actions to run in order (Ask AgentK's **Do all**), checked again against the state now. */
+/** POST /api/actions/run: actions to run in order (Ask Kode's **Do all**), checked again against the state now. */
 export interface RunActionsRequest {
   /** At most ACTIONS_MAX; `go` actions are left out (they only navigate). */
   actions: AskAgentkAction[];
@@ -1904,7 +1904,7 @@ export interface ProjectHome {
   learnOffered: boolean;
   activity: ActivityItem[];
   usage: ProjectUsage;
-  /** Open questions on Meko's Context Gaps, while AgentK uses the Meko on this computer and it answers (null otherwise). */
+  /** Open questions on Meko's Context Gaps, while Kode uses the Meko on this computer and it answers (null otherwise). */
   mekoGaps: MekoGaps | null;
 }
 
@@ -1931,19 +1931,19 @@ export interface Settings {
   idleWorktreesPerRepo: number;
   /** Days an idle worktree may go unused before it's removed (0 to 365; 0 keeps it until the cap trims it). */
   idleWorktreeDays: number;
-  /** `[sessions] idle_stop_hours`: hours a session's agent may sit idle before AgentK stops it (0 to MAX_IDLE_STOP_HOURS; 0 never stops one). */
+  /** `[sessions] idle_stop_hours`: hours a session's agent may sit idle before Kode stops it (0 to MAX_IDLE_STOP_HOURS; 0 never stops one). */
   idleStopHours: number;
   /** `[call_home] enabled`: send anonymous usage stats (the checkbox on Settings › General). */
   callHomeEnabled: boolean;
   /**
-   * Set while YB_DISABLE_CALLHOME in AgentK's environment turns usage stats off whatever `callHomeEnabled`
+   * Set while YB_DISABLE_CALLHOME in Kode's environment turns usage stats off whatever `callHomeEnabled`
    * says: the checkbox is then off and disabled. Read-only.
    */
   callHomeOffBy?: 'YB_DISABLE_CALLHOME';
-  /** `[pr] resolve_conflicts`: AgentK resolves a PR's merge conflicts with its base (the General tab's checkbox). */
+  /** `[pr] resolve_conflicts`: Kode resolves a PR's merge conflicts with its base (the General tab's checkbox). */
   resolveConflicts: boolean;
   /**
-   * `[tools] enabled`: sessions get AgentK's session tools (the `agentk_sessions` MCP server and its
+   * `[tools] enabled`: sessions get Kode's session tools (the `kode_sessions` MCP server and its
    * skill), which open projects, start sessions and move them between stages (the General tab's checkbox).
    */
   toolsEnabled: boolean;
@@ -1954,13 +1954,13 @@ export interface Settings {
   /** `[opencode] enabled`: offer OpenCode for new sessions when its CLI answers. */
   opencodeEnabled: boolean;
   /**
-   * `[opencode] disable_tracking`: the OpenCode AgentK runs sends no telemetry, checks for no update and offers none of
+   * `[opencode] disable_tracking`: the OpenCode Kode runs sends no telemetry, checks for no update and offers none of
    * OpenCode Zen's free models (whose providers may train on prompts), from a session's next launch or resume.
    */
   opencodeDisableTracking: boolean;
   /** `[kiro] enabled`: offer Kiro for new sessions when its CLI answers. */
   kiroEnabled: boolean;
-  /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`; on Kiro 3.0 as `agentk-trusted`), so Kiro runs any tool without asking. */
+  /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`; on Kiro 3.0 as `kode-trusted`), so Kiro runs any tool without asking. */
   kiroTrustTools: boolean;
   /** `[work_queue] github`: the work queue's sync pulls in the PRs asking for your review (Settings › Work queue). */
   workQueueGithub: boolean;
@@ -1985,7 +1985,7 @@ export const WORK_SYNC_MINUTES_MAX = 1440;
 
 /**
  * The Meko on this computer, as `meko token --json` last said: running, installed but stopped, none
- * found, or `meko` there but failing (an error, too slow, or an answer AgentK can't read).
+ * found, or `meko` there but failing (an error, too slow, or an answer Kode can't read).
  */
 export type LocalMekoState = 'running' | 'stopped' | 'none' | 'failed';
 
@@ -2043,7 +2043,7 @@ export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /**
  * POST /api/sessions/:id/knowledge: a file added to the knowledge base of the session's project
- * datapack. `processing`: the file is in Meko's storage and Meko indexes it, and AgentK reports when
+ * datapack. `processing`: the file is in Meko's storage and Meko indexes it, and Kode reports when
  * it's done (a `knowledge` event). `already_uploaded`: Meko already had the same bytes. The server
  * no longer sends `uploaded` or `already_processed` (answers of Meko's removed single-call upload
  * route); the UI still reads them as added and as already there.
@@ -2229,10 +2229,10 @@ export interface DesignDoc {
   html: string | null;
   artifactUrl: string | null;
   updatedAt: number | null;
-  /** The design's questions for the user, open and resolved, in the order AgentK listed them. */
+  /** The design's questions for the user, open and resolved, in the order Kode listed them. */
   questions: DesignQuestion[];
   /**
-   * Where the questions came from: `file` (the questions file AgentK writes beside the design),
+   * Where the questions came from: `file` (the questions file Kode writes beside the design),
    * `markdown` (the list under an "Open questions" heading of a markdown design), or null (none).
    */
   questionsSource: 'file' | 'markdown' | null;
@@ -2248,50 +2248,50 @@ export interface DesignQuestionOption {
   detail: string | null;
 }
 
-/** A Meko item a design decision (or a recommendation) rests on, as AgentK cited it. */
+/** A Meko item a design decision (or a recommendation) rests on, as Kode cited it. */
 export interface MekoRef {
   kind: 'memory' | 'knowledge';
   /** Meko's id for the item. */
   id: string;
-  /** The datapack it's in, when AgentK said. */
+  /** The datapack it's in, when Kode said. */
   datapackId: string | null;
-  /** The words AgentK relied on, as it read them. */
+  /** The words Kode relied on, as it read them. */
   excerpt: string | null;
 }
 
 /**
- * One of the design's Key Design Decisions (KDDs): a question AgentK asks the user, with the options it
- * sees, if any, or (`kind: 'decision'`) a decision AgentK made itself, with the alternatives it
+ * One of the design's Key Design Decisions (KDDs): a question Kode asks the user, with the options it
+ * sees, if any, or (`kind: 'decision'`) a decision Kode made itself, with the alternatives it
  * weighed as its options and the one it picked as `recommended`.
  */
 export interface DesignQuestion {
   /** Stable across revisions of the design: lowercase letters, digits and dashes. */
   id: string;
-  /** `decision`: one AgentK made without asking. It's always resolved, and the user can change it. */
+  /** `decision`: one Kode made without asking. It's always resolved, and the user can change it. */
   kind: 'question' | 'decision';
   /** The question, or for a decision, the decision point. */
   question: string;
-  /** Why it matters; for a decision, why AgentK chose as it did. */
+  /** Why it matters; for a decision, why Kode chose as it did. */
   context: string | null;
   options: DesignQuestionOption[];
-  /** The option AgentK recommends, or picked (an index into `options`), or null. */
+  /** The option Kode recommends, or picked (an index into `options`), or null. */
   recommended: number | null;
   status: 'open' | 'resolved';
   /** What was decided, once resolved. */
   decision: string | null;
   /**
-   * Who settled it, once resolved: the user (an answer, or a change to AgentK's decision) or
-   * AgentK (its own decision, or a question left to it); null while open, or when not known.
+   * Who settled it, once resolved: the user (an answer, or a change to Kode's decision) or
+   * Kode (its own decision, or a question left to it); null while open, or when not known.
    */
-  decidedBy: 'user' | 'agentk' | null;
+  decidedBy: 'user' | 'kode' | null;
   /** The Meko items its decision or recommendation rests on (at most 5). */
   meko: MekoRef[];
 }
 
 /**
- * The user's answer to one of the design's open questions, or a change to one of AgentK's own
+ * The user's answer to one of the design's open questions, or a change to one of Kode's own
  * decisions. Answers aren't stored on the server: the browser keeps them until an approval goes to
- * AgentK, and after a request to revise until their questions are no longer open (a decision's
+ * Kode, and after a request to revise until their questions are no longer open (a decision's
  * until it changes). Once sent, the server resolves the question with the answer as its decision,
  * in the questions file (a markdown design's questions only with an approval).
  */
@@ -2304,8 +2304,8 @@ export interface DesignAnswerInput {
   /** With an option, an optional note on it; for a custom answer, the answer itself (required). */
   text: string;
   /**
-   * For a change to one of AgentK's own decisions: the decision as the user saw it, so a change to
-   * a decision AgentK has revised since is refused (409). Required for a decision.
+   * For a change to one of Kode's own decisions: the decision as the user saw it, so a change to
+   * a decision Kode has revised since is refused (409). Required for a decision.
    */
   decision?: string | null;
 }
@@ -2319,9 +2319,9 @@ export interface CloseSessionRequest {
 }
 
 /**
- * Answers to the design's open questions, changes to AgentK's own decisions, and other feedback on
- * it. An open question left out is sent as unanswered: AgentK goes with its recommendation, or its
- * own judgment when it has none; a decision left out stays as AgentK made it.
+ * Answers to the design's open questions, changes to Kode's own decisions, and other feedback on
+ * it. An open question left out is sent as unanswered: Kode goes with its recommendation, or its
+ * own judgment when it has none; a decision left out stays as Kode made it.
  */
 export interface DesignAnswersRequest {
   answers: DesignAnswerInput[];
@@ -2346,7 +2346,7 @@ export interface AskQuestion {
 }
 
 /**
- * Questions Claude is asking with its AskUserQuestion tool (1 to 4), through AgentK's mod. They're
+ * Questions Claude is asking with its AskUserQuestion tool (1 to 4), through Kode's mod. They're
  * kept in memory only while Claude's tool call waits: answered here or in the terminal, whichever
  * comes first.
  */
@@ -2506,7 +2506,7 @@ export interface CreateSessionRequest {
   review?: ReviewOverrides;
   /**
    * For `kind: 'review-pr'` (and required there): the PR to review. `repoPath` is then a local clone
-   * of `repo`; the base and branch come from the PR, and `prompt` holds the user's notes for AgentK.
+   * of `repo`; the base and branch come from the PR, and `prompt` holds the user's notes for Kode.
    * For a task (Advanced → Pull request): the open PR to keep working on, in the repo's origin (or
    * its upstream, for a fork's clone). The session works on the PR's head branch (fetched from the
    * remote of the PR's head repo, a fork's included) against the PR's base, with the PR linked;
@@ -2554,7 +2554,7 @@ export interface MoveSessionRequest {
   /**
    * The task, for a session that has none yet (one started at Explore without a first prompt, before
    * the name became the task); the stage's start prompt then goes with it. Optional: without it, the
-   * move's prompt has AgentK carry on from the conversation, as it does for a session that has a task.
+   * move's prompt has Kode carry on from the conversation, as it does for a session that has a task.
    */
   task?: string;
   /**
@@ -2572,7 +2572,7 @@ export interface OpenPrRequest {
 
 export type SessionAction =
   | 'approve-design'
-  /** Withdraws an approval waiting for AgentK's turn to end (`Session.approvalQueued`). */
+  /** Withdraws an approval waiting for Kode's turn to end (`Session.approvalQueued`). */
   | 'cancel-approval'
   /** Sends the PR prompt, or mid-turn queues it for the turn's end (`Session.queued`); takes an optional OpenPrRequest. */
   | 'open-pr'
@@ -2583,7 +2583,7 @@ export type SessionAction =
   | 'resume'
   | 'archive'
   | 'discard'
-  /** Review a PR: check out the PR's latest head and have AgentK sum up what changed. */
+  /** Review a PR: check out the PR's latest head and have Kode sum up what changed. */
   | 'update-pr'
   /** Review a PR: end the review (archives the session and deletes its local review branch). */
   | 'close-review'
@@ -2598,7 +2598,7 @@ export type SessionAction =
   | 'review-cancel'
   /** A task's failed or cancelled code review: review again, reusing the steps already reported. */
   | 'review-retry'
-  /** A task's failed or cancelled code review (not one the user ran): send the PR prompt without a `me_ak_review:` line. */
+  /** A task's failed or cancelled code review (not one the user ran): send the PR prompt without a `me_kode_review:` line. */
   | 'review-open-anyway'
   /** A task's code review whose findings wait on the user (`triage`): send them to the task, with the user's notes, leaving out the dismissed ones. */
   | 'review-send';
@@ -2630,7 +2630,7 @@ export type ServerEvent =
   | { type: 'notify'; projectId: string; sessionId: string; title: string; body: string }
   /**
    * A file added to a session's knowledge base finished indexing (`indexed`), failed (`failed`), or
-   * AgentK stopped following it without an answer (`unknown`): still indexing after 15 minutes, or
+   * Kode stopped following it without an answer (`unknown`): still indexing after 15 minutes, or
    * Meko refused to say (a refused key, no status route).
    */
   | { type: 'knowledge'; sessionId: string; filename: string; result: 'indexed' | 'failed' | 'unknown' }
@@ -2692,7 +2692,7 @@ export type TermServerMessage =
 // Some errors add a machine-readable `code` next to `error`: DATAPACK_LIMIT (402, the Meko plan's
 // datapack limit), MEKO_OFF (409).
 // The server listens only on its unix socket (`Paths.webSock`), and Meko serves it to browsers at
-// /ext/agentk/ with the prefix stripped: Meko decides who gets in, so every request on the socket is
+// /ext/kode/ with the prefix stripped: Meko decides who gets in, so every request on the socket is
 // let in. Writes and WebSocket upgrades still refuse a cross-origin `Origin`.
 //
 // GET    /healthz                              → { ok: true, version, pid, startedAt }
@@ -2711,7 +2711,7 @@ export type TermServerMessage =
 // GET    /api/meko/datapacks/:id/share-link    → ShareLinkState   (the datapack's share link, or why there's none)
 // PUT    /api/meko/datapacks/:id/share-link ShareLinkChange → ShareLink   (turns it on with a role, off, changes the
 //        role or resets it; the token is never logged)
-//        The six above answer 409 when AgentK can't share (Meko is off, or its API URL isn't known).
+//        The six above answer 409 when Kode can't share (Meko is off, or its API URL isn't known).
 // POST   /api/meko/share-links/join JoinByLinkRequest → JoinByLinkResult   (joins the datapack a share link on Meko's
 //        web app shares, then syncs the shares; 400 for any other URL, which never reaches Meko)
 // GET    /api/share-contacts                   → ShareContact[]   (the people invited before, every project's, ranked:
@@ -2728,7 +2728,7 @@ export type TermServerMessage =
 //        host; a workshop whose project is open goes to its host, starting one when none is open; 404 for an unknown
 //        workshop, 500 with the reason when the demo can't be built)
 // POST   /api/workshops/:id/go                 → 204   (the user's go at a level's pause, as "go" typed to its host does:
-//        after the first look, the gotchas go into Meko and AgentK reviews again; 404 when the workshop isn't open,
+//        after the first look, the gotchas go into Meko and Kode reviews again; 404 when the workshop isn't open,
 //        409 when nothing waits for a go)
 // GET    /api/projects/:id                     → Project   (404 once it's closed: the UI asks for a project it just
 //        opened when a state push comes without it)
@@ -2757,12 +2757,12 @@ export type TermServerMessage =
 // POST   /api/github-link/start StartFromLinkRequest → StartFromLinkResult   (starts a Review a PR session on a PR, or a
 //        task on an issue, in `projectId` or in a project it opens (cloning the repo if needed); 400 for a PR that isn't
 //        open, 409 for a PR a running session reviews; then as POST /api/projects/:id/sessions)
-// POST   /api/ask-agentk AskAgentkRequest  → AskAgentkResult   (an instruction in plain words, answered by one `claude -p`
-//        with no tools, or Kiro's one-shot chat; 400 for empty or too long text, 403 when [ask_agentk] is off, 409 when no
+// POST   /api/ask-kode AskAgentkRequest  → AskAgentkResult   (an instruction in plain words, answered by one `claude -p`
+//        with no tools, or Kiro's one-shot chat; 400 for empty or too long text, 403 when [ask_kode] is off, 409 when no
 //        coding agent is available, 429 with two asks already running,
 //        502 when Claude Code fails, isn't signed in or its answer can't be read, 503 when it can't be run, 504 after
-//        [ask_agentk] timeout_seconds. Closing the request stops Claude.)
-// POST   /api/actions/run RunActionsRequest → RunActionsResult   (Ask AgentK's Do all: the actions checked against the state
+//        [ask_kode] timeout_seconds. Closing the request stops Claude.)
+// POST   /api/actions/run RunActionsRequest → RunActionsResult   (Ask Kode's Do all: the actions checked against the state
 //        now, those that fit run in order, each with its result; 400 for more than ACTIONS_MAX or none that fit)
 // GET    /api/sessions/search?q=[&project=] → SessionMatch[]   (sessions, archived ones included, whose name, task, PR
 //        title, branch or design has the words in `q` (at least half of them), best first, at most 20; in the
@@ -2795,14 +2795,14 @@ export type TermServerMessage =
 //        for POST /api/sessions/:id/images, 404 for an unknown project. Saved under ~/.agent-k-local/pastes/.new/<project>/
 //        until a session is created with it, which moves it to the session's folder; removed after a day otherwise,
 //        or when the project is closed)
-// PATCH  /api/sessions/:id    UpdateSessionRequest → Session   (renames it in AgentK and its Meko conversation; the
+// PATCH  /api/sessions/:id    UpdateSessionRequest → Session   (renames it in Kode and its Meko conversation; the
 //        branch, worktree, Meko agent id and Claude Code's own name for the conversation stay; 400 for an empty or too
 //        long name or one with control characters, 409 for an archived session. A new baseBranch is what the diff, the
 //        PR and the prompts use from then on: 400 for a branch that isn't here, on origin or on upstream, or that has no
 //        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone.
 //        toTop moves it first in its project's list; 400 when it isn't a boolean, 409 for an archived session.
 //        autoRun turns Run to merge on or off: on in Design waits for the approval, in Code it queues Open PR (sent now
-//        when AgentK is at its prompt) and in Pull Request the merge, which then stays queued through any blocker; off
+//        when Kode is at its prompt) and in Pull Request the merge, which then stays queued through any blocker; off
 //        drops the gate it queued. 400 when it isn't a boolean, 409 for an archived session, a review, Explore, Merge &
 //        Close, a design in plan mode, or while the merge is being requested)
 // GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
@@ -2810,11 +2810,11 @@ export type TermServerMessage =
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction; approve-design takes an optional
 //        DesignAnswersRequest, sent ahead of the approval: 400 for a bad answer or answers too long for one prompt, 409
-//        when AgentK's questions changed since, in plan mode, or while Claude holds answers sent during a turn
+//        when Kode's questions changed since, in plan mode, or while Claude holds answers sent during a turn
 //        (Session.promptsHeld). Mid-turn (Session.midTurn), with the mod live, the approval is queued for the turn's
 //        end (Session.approvalQueued) and dropped if the turn changes the design; without the mod that's a 409. Once
-//        sent, every open question is resolved, with its answer or left to AgentK (reopened on a move back to Design).
-//        cancel-approval withdraws it: 409 when none is queued. open-pr while AgentK is mid-turn or Claude is starting is
+//        sent, every open question is resolved, with its answer or left to Kode (reopened on a move back to Design).
+//        cancel-approval withdraws it: 409 when none is queued. open-pr while Kode is mid-turn or Claude is starting is
 //        queued for the turn's end (Session.queued), and 409 when Claude exited or waits on the user with no turn behind it;
 //        it takes an optional OpenPrRequest (400 for instructions that aren't text or are too long), whose instructions
 //        go after the PR prompt and are kept with a queued one (Session.queuedInstructions). Pressed again while one is
@@ -2828,26 +2828,26 @@ export type TermServerMessage =
 //        run first. A discard that runs one answers with the session still running (Session.discarding) and discards it
 //        when the step ends; asked again with skipLearn, it discards now). review-run starts a task's code review now, in
 //        Code or Pull Request (409 for a session that isn't a task, in another stage, in Pull Request before the PR is found or
-//        while the last one's fixes wait to be taken, while one runs, and while AgentK is mid-turn, waiting on the user or
+//        while the last one's fixes wait to be taken, while one runs, and while Kode is mid-turn, waiting on the user or
 //        exited). review-cancel stops a task's running code review
 //        (409 when none runs); review-retry reviews again, reusing the steps already reported, and review-open-anyway sends
-//        the PR prompt without a me_ak_review line: both 409 unless the review failed or was cancelled; review-retry
+//        the PR prompt without a me_kode_review line: both 409 unless the review failed or was cancelled; review-retry
 //        409 too for a review the user ran in another stage than the task's now, and review-open-anyway for any review
 //        the user ran. review-send sends the findings that wait on the user (a review in triage) to the task, with
 //        their notes and without the dismissed ones: the fix prompt through the prompt queue, or the PR prompt; 409
 //        when none wait, or when the task left the review's stage)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
-//        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
+//        missing task, or instructions that aren't text or are too long; 409 while Kode is mid-turn, in Merge & Close,
 //        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited, and for a move to
 //        Pull Request with work to push, while prompts from the user wait or a stopped code review holds the PR in Code
 //        (Retry it, or Open anyway), whether the review is on or off now, as for Open PR; 502 when its prompt couldn't be sent: the move stays made, except a PR prompt's, which
 //        goes back to where it was. A move to Pull Request that the code review takes over answers with the session
 //        in Code, the review running)
 // GET    /api/sessions/:id/design              → DesignDoc
-// POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design,
+// POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for Kode to revise the design,
 //        and resolves the questions answered with their answers in questions.json, unless the questions come from a
-//        markdown design's list; 409 outside Design, while AgentK works or Claude waits on something else (mid-turn with the mod live they're
-//        sent anyway, and Claude takes them when the turn ends), while an approval is queued, or when AgentK's questions
+//        markdown design's list; 409 outside Design, while Kode works or Claude waits on something else (mid-turn with the mod live they're
+//        sent anyway, and Claude takes them when the turn ends), while an approval is queued, or when Kode's questions
 //        changed since; 400 for a bad answer or answers too long for one prompt; 502 when sending failed)
 // POST   /api/sessions/:id/ask/:askId AskAnswerRequest → 204   (answers the questions Claude is asking, Session.asking;
 //        400 for an answer that doesn't fit them, 409 once they're gone: answered in the terminal, or Claude moved on)
@@ -2881,7 +2881,7 @@ export type TermServerMessage =
 // DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
 // GET    /api/sessions/:id/held-reviews        → HeldReview[]   (held for the user, oldest first)
-// POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in Pull Request, or dismiss)
+// POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to Kode in Pull Request, or dismiss)
 // GET    /api/settings                         → Settings   (reads the Meko on this computer and its Meko Cloud link again first,
 //                                                           waiting 1.5 s at most, and Meko's list of agents in the
 //                                                           background. The link is Meko's: its web UI's
@@ -2894,11 +2894,11 @@ export type TermServerMessage =
 //                                                           '' goes back to the host name; callHomeEnabled,
 //                                                           resolveConflicts and toolsEnabled are booleans; defaultHarness must be a
 //                                                           known harness (while it isn't available, new sessions and
-//                                                           Ask AgentK that name none start on the first available one);
+//                                                           Ask Kode that name none start on the first available one);
 //                                                           claudeEnabled, opencodeEnabled, opencodeDisableTracking, kiroEnabled
 //                                                           and kiroTrustTools are booleans; the agents'
 //                                                           commands are set in config.toml)
-// POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
+// POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with Kode's Meko, only when
 //                                                           the user asks and only while what Meko's capture needs is
 //                                                           missing (the plugin, its settings); then checks Claude Code's
 //                                                           Meko and Meko's list of agents again. The page connects the
@@ -2908,9 +2908,9 @@ export type TermServerMessage =
 //        Meko's own routes, which the page calls on its origin (not under BASE) with its sign-in, in Meko's
 //        { data, error } envelope: POST /api/v1/agents/:id/connect connects an agent's `meko` MCP server (Settings ›
 //        Harness's Connect to Meko, and before either setup above), then the page calls POST /api/harnesses/refresh.
-//        AgentK's server only reads GET /api/v1/agents, on Meko's API listener with the client token: at startup,
+//        Kode's server only reads GET /api/v1/agents, on Meko's API listener with the client token: at startup,
 //        on Settings open and Check again, after either setup, and when Meko's Meko Cloud link changes.
-// POST   /_meko/changed       { what }         → 204        (Meko, on AgentK's socket: something AgentK reads from Meko changed;
+// POST   /_meko/changed       { what }         → 204        (Meko, on Kode's socket: something Kode reads from Meko changed;
 //                                                           `cloud`, the Meko Cloud link, reads `meko token --json` again.
 //                                                           Outside /api, a write from another origin is refused)
 // POST   /api/harnesses/refresh                → HarnessStatus[]   (Check again in Settings: reads the version of every harness
@@ -2940,7 +2940,7 @@ export type TermServerMessage =
 //        by the too-old banner's Update Claude Code and by Settings › Harness's)
 // GET    /api/update                           → UpdateStatus   (the version, and the update it came from: Meko installs
 //        updates; the page checks, updates and sets Update automatically through Meko's own routes, on its origin:
-//        GET /api/v1/extensions, POST /api/v1/extensions/agentk/check and /update, PATCH /api/v1/extensions/agentk)
+//        GET /api/v1/extensions, POST /api/v1/extensions/kode/check and /update, PATCH /api/v1/extensions/kode)
 // GET    /api/update/notes?from=&to=           → ReleaseNotes   (What's new: the feat, fix, perf and deps commits between
 //        the two versions' tags (agentk-v… or v…), from GitHub; 400 unless both are versions and from is older,
 //        502 when GitHub can't compare them)

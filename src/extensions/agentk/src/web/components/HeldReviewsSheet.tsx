@@ -10,7 +10,7 @@ const KINDS: Record<HeldReview['kind'], string> = { person: '', bot: 'bot', outs
 
 /**
  * The reviews on the session's PR held for the user (`Session.heldReviews`): each one's text and
- * inline comments, checked to start, and **Send to AgentK** (Pull Request only) or **Dismiss** for
+ * inline comments, checked to start, and **Send to Kode** (Pull Request only) or **Dismiss** for
  * the checked ones. Refetched whenever the count changes.
  */
 export function HeldReviewsSheet({ session, onClose }: { session: Session; onClose: () => void }) {
@@ -70,15 +70,15 @@ export function HeldReviewsSheet({ session, onClose }: { session: Session; onClo
           <button
             className="btn primary"
             disabled={!n || !!busy || !canSend}
-            title={canSend ? 'AgentK addresses the checked reviews' : 'Held reviews go to AgentK in Pull Request'}
+            title={canSend ? 'Kode addresses the checked reviews' : 'Held reviews go to Kode in Pull Request'}
             onClick={() => void act('send')}
           >
-            {busy === 'send' ? <Busy label="Sending" /> : n ? `Send ${n} to AgentK` : 'Send to AgentK'}
+            {busy === 'send' ? <Busy label="Sending" /> : n ? `Send ${n} to Kode` : 'Send to Kode'}
           </button>
         </>
       }
     >
-      {!canSend && <p className="hint">Held reviews go to AgentK in Pull Request. Move the session back there to send them, or dismiss them.</p>}
+      {!canSend && <p className="hint">Held reviews go to Kode in Pull Request. Move the session back there to send them, or dismiss them.</p>}
       {!reviews && !error && <Busy label="Reading the held reviews" />}
       {reviews && !reviews.length && <p className="muted">No reviews are held now.</p>}
       {reviews && reviews.length > 0 && (
@@ -97,7 +97,7 @@ export function HeldReviewsSheet({ session, onClose }: { session: Session; onClo
                 <a className="btn small" href={r.url} target="_blank" rel="noreferrer">On GitHub</a>
               </div>
               {r.kind === 'outsider' && (
-                <p className="held-warn">@{r.author} has no role on this repo. Read it before you send it: AgentK will act on what it says.</p>
+                <p className="held-warn">@{r.author} has no role on this repo. Read it before you send it: Kode will act on what it says.</p>
               )}
               {r.body.trim() ? <MarkdownView markdown={r.body} /> : <p className="hint">No summary: only inline comments.</p>}
               {r.comments.length > 0 && (

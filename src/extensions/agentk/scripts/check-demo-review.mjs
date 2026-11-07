@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // npm run check:demo-review [-- --sock <web.sock>] [--runs 3]
 //
-// Measures that the AgentK tour's Level 1 trap needs Meko (docs/design/workshops.md): against a
-// running AgentK with a real coding agent and Meko, it runs the code review of the teammate's fix
+// Measures that the Kode tour's Level 1 trap needs Meko (docs/design/workshops.md): against a
+// running Kode with a real coding agent and Meko, it runs the code review of the teammate's fix
 // (demo/score-fix) <runs> times with the demo's MEKO.md, which lists the gotchas datapack, and
 // <runs> times with MEKO.md taken out of the worktree, so the review has no datapacks. It passes only
 // when every review with the datapack keeps a finding that credits MG-2, and no review without it
@@ -27,7 +27,7 @@ const { values } = parseArgs({ options: { sock: { type: 'string', default: '.dev
 const sock = values.sock;
 const runs = Number(values.runs);
 if (!existsSync(sock)) {
-  console.error(`No AgentK server socket at ${sock}. Start one (npm run dev), or name it with --sock.`);
+  console.error(`No Kode server socket at ${sock}. Start one (npm run dev), or name it with --sock.`);
   process.exit(2);
 }
 
@@ -89,11 +89,11 @@ async function review(projectId, n, withMeko) {
 }
 
 const tour = (await api('GET', '/api/workshops')).find((w) => w.id === TOUR);
-if (!tour) throw new Error(`This AgentK has no ${TOUR} workshop.`);
+if (!tour) throw new Error(`This Kode has no ${TOUR} workshop.`);
 const projectId = tour.projectId ?? (await api('POST', `/api/workshops/${TOUR}/start`, {})).projectId;
 
 // The gotchas must be indexed before the measured reviews, which this script runs by hand. The
-// level's open session in the tour, or else a new one, gets AgentK's review by itself: a first look
+// level's open session in the tour, or else a new one, gets Kode's review by itself: a first look
 // while the gotchas datapack is empty, then (on the user's go, given here) the gotchas and the
 // review proper; once a finished tour put the gotchas in, the review proper alone.
 const open = (await api('GET', '/api/state')).projects.find((p) => p.id === projectId)?.sessions.find((s) => s.branch === BRANCH && s.codeReview);
@@ -101,15 +101,15 @@ const level = open ?? await api('POST', `/api/projects/${projectId}/sessions`, {
   name: 'check-demo-review gotchas', start: 'code', branch: BRANCH, existingBranch: true, prompt: 'Reply in one line that you are waiting, then stop. Change nothing.',
 });
 const settled = (d) => ['done', 'triage', 'failed', 'cancelled'].includes(d.review.state);
-const first = await until("AgentK's review of the level", async () => {
+const first = await until("Kode's review of the level", async () => {
   const d = await api('GET', `/api/sessions/${level.id}/code-review`).catch(() => null);
   return d && settled(d) ? d : null;
 }, REVIEW_TIMEOUT_MS);
-if (first.review.firstLook && first.review.state !== 'done') throw new Error(`AgentK's first look ${first.review.state}: ${first.review.detail ?? ''}`);
+if (first.review.firstLook && first.review.state !== 'done') throw new Error(`Kode's first look ${first.review.state}: ${first.review.detail ?? ''}`);
 if (first.review.firstLook) {
   // Nothing waits for a go (409) when the tour's user already gave it.
   await api('POST', `/api/workshops/${TOUR}/go`, {}).catch(() => undefined);
-  await until("AgentK's review with the gotchas", async () => {
+  await until("Kode's review with the gotchas", async () => {
     const d = await api('GET', `/api/sessions/${level.id}/code-review`).catch(() => null);
     return d && !d.review.firstLook && settled(d) ? d : null;
   }, REVIEW_TIMEOUT_MS * 2);

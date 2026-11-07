@@ -12,9 +12,20 @@ export function oldHome(home: string = homedir()): string {
   return join(home, OLD_HOME_NAME);
 }
 
-/** AgentK's home in Meko's data folder: `<data folder>/extensions/agentk`. */
+/** Kode's folder name in Meko's data folder's `extensions/`. */
+export const HOME_NAME = 'kode';
+
+/** Its name there before Meko called it Kode: `extensions/agentk`, which the move leaves as a link. */
+export const OLD_HOME_IN_MEKO = 'agentk';
+
+/** Kode's home in Meko's data folder: `<data folder>/extensions/kode`. */
 export function homeIn(mekoDir: string): string {
-  return join(mekoDir, 'extensions', 'agentk');
+  return join(mekoDir, 'extensions', HOME_NAME);
+}
+
+/** Its home there before Meko called it Kode: `<data folder>/extensions/agentk`. */
+export function oldHomeIn(mekoDir: string): string {
+  return join(mekoDir, 'extensions', OLD_HOME_IN_MEKO);
 }
 
 /** Meko's data folder can't be used: a MEKO_HOME (or `[meko] home`) on a network filesystem. */
@@ -22,7 +33,7 @@ export class MekoHomeError extends Error {}
 
 export interface MekoHomeOptions {
   env?: NodeJS.ProcessEnv;
-  /** The folder Meko last told AgentK (`[meko] home`), used when MEKO_HOME isn't set. */
+  /** The folder Meko last told Kode (`[meko] home`), used when MEKO_HOME isn't set. */
   configured?: string;
   home?: string;
   user?: string;
@@ -34,7 +45,7 @@ export interface MekoHomeOptions {
 /**
  * Meko's data folder, by Meko's own rule (`Resolve` in src/meko/internal/paths/paths.go; both are
  * tested against src/meko/internal/paths/testdata/resolve-cases.json): MEKO_HOME (or the folder
- * Meko last told AgentK), refused on a network filesystem; else ~/.meko on a local disk; else, for
+ * Meko last told Kode), refused on a network filesystem; else ~/.meko on a local disk; else, for
  * a home folder on a network filesystem, $XDG_STATE_HOME/meko when that's local, else
  * /var/tmp/<user>/meko. Makes nothing: `makeHomeParent` in movehome.ts does that.
  */
@@ -67,38 +78,43 @@ function existingAncestor(p: string): string {
 
 /**
  * The home of a release install: the folder its running release is in (`<home>/app/<version>`,
- * `AK_APP_DIR` as the launcher sets it), or null when this isn't one (a source checkout).
+ * `KODE_APP_DIR` as the launcher sets it), or null when this isn't one (a source checkout).
  */
-export function releaseHome(appDir: string | undefined = process.env.AK_APP_DIR): string | null {
+export function releaseHome(appDir: string | undefined = process.env.KODE_APP_DIR): string | null {
   if (!appDir) return null;
   const app = dirname(appDir);
   return basename(app) === 'app' ? dirname(app) : null;
 }
 
 /**
- * Where an install without a release keeps its home: `<Meko's data folder>/extensions/agentk` when
- * it's there, else `~/.agent-k-local` when that's there (an install the move hasn't reached), else
- * the new one. With Meko's data folder refused, the old home if there is one.
+ * Where an install without a release keeps its home: `<Meko's data folder>/extensions/kode` when
+ * it's there, else `extensions/agentk` beside it or `~/.agent-k-local` when one of them is there
+ * (an install the move hasn't reached), else the new one. With Meko's data folder refused, the old
+ * home if there is one.
  */
 export function defaultHome(o: MekoHomeOptions = {}): string {
   const old = oldHome(o.home);
   let next: string;
+  let meko: string;
   try {
-    next = homeIn(mekoHome(o));
+    meko = mekoHome(o);
+    next = homeIn(meko);
   } catch (e) {
     if (existsSync(old)) return old;
     throw e;
   }
-  return existsSync(next) || !existsSync(old) ? next : old;
+  if (existsSync(next)) return next;
+  if (existsSync(oldHomeIn(meko))) return oldHomeIn(meko);
+  return existsSync(old) ? old : next;
 }
 
 /**
- * Root of all AgentK state. A release install's is the folder its release is in, whatever AK_HOME
- * says: users don't pick where AgentK keeps its data, it's always in Meko's data folder (the move
- * brings older homes there, movehome.ts). AK_HOME names it only without a release (tests, dev).
+ * Root of all Kode state. A release install's is the folder its release is in, whatever KODE_HOME
+ * says: users don't pick where Kode keeps its data, it's always in Meko's data folder (the move
+ * brings older homes there, movehome.ts). KODE_HOME names it only without a release (tests, dev).
  */
 export function akHome(): string {
-  return releaseHome() ?? process.env.AK_HOME ?? defaultHome();
+  return releaseHome() ?? process.env.KODE_HOME ?? defaultHome();
 }
 
 export interface Paths {
@@ -120,7 +136,7 @@ export interface Paths {
   run: string;
   hookSock: string;
   /**
-   * The server's socket, its only listener: Meko's web listener serves it to browsers at /ext/agentk/
+   * The server's socket, its only listener: Meko's web listener serves it to browsers at /ext/kode/
    * (`me_kode _handoff --json` tells Meko where it is). Only this user can connect to it.
    */
   webSock: string;

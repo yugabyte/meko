@@ -1,6 +1,6 @@
 # REVIEW.md: the web UI
 
-What to check on changes under `src/web/`, on top of AgentK's [REVIEW.md](../../REVIEW.md). The
+What to check on changes under `src/web/`, on top of Kode's [REVIEW.md](../../REVIEW.md). The
 rules behind these checks are in [AGENTS.md](AGENTS.md). A UI change that breaks the phone layout is
 a **major** finding.
 

@@ -1,4 +1,4 @@
-// Every MCP call Meko answered, newest first, a page at a time, filtered by agent, tool, AgentK's own
+// Every MCP call Meko answered, newest first, a page at a time, filtered by agent, tool, Kode's own
 // and failed ones; a call opens to its trace and, while Settings keeps call contents, what it sent and
 // got back. Reached from Settings; the filters are in the address (/calls?agent=<agent id>).
 
@@ -95,7 +95,7 @@ export function CallsPage() {
               { label: "When", cell: (c) => timeAgo(c.at), className: "whitespace-nowrap text-xs text-muted-foreground" },
               { label: "Tool", cell: (c) => c.tool, className: "text-xs" },
               { label: "Agent", cell: (c) => c.agent_id || "—", className: "max-w-[14rem] truncate text-xs text-muted-foreground" },
-              { label: "By", cell: (c) => (c.client === "agentk" ? "AgentK" : "Agent"), className: "text-xs" },
+              { label: "By", cell: (c) => (c.client === "kode" ? "Kode" : "Agent"), className: "text-xs" },
               { label: "Results", cell: callResults, className: "text-xs text-muted-foreground" },
               { label: "Took", right: true, cell: (c) => duration(c.ms) },
               {
@@ -147,12 +147,12 @@ function Filters({ filter, onChange }: { filter: CallFilter; onChange: (f: CallF
       <Button type="submit">Filter</Button>
       <label className="flex items-center gap-2">
         <input
-          id="calls-agentk"
+          id="calls-kode"
           type="checkbox"
-          checked={filter.client === "agentk"}
-          onChange={(e) => onChange({ ...filter, client: e.target.checked ? "agentk" : undefined })}
+          checked={filter.client === "kode"}
+          onChange={(e) => onChange({ ...filter, client: e.target.checked ? "kode" : undefined })}
         />
-        <span>AgentK's only</span>
+        <span>Kode's only</span>
       </label>
       <label className="flex items-center gap-2">
         <input

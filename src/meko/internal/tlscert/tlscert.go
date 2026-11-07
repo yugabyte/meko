@@ -1,6 +1,6 @@
 // Package tlscert is the certificate browsers get with remote access: the one [tls] names, or a
-// self-signed pair Meko makes in the data folder's certs/, the way AgentK made its own (an AgentK
-// pair is copied there when Meko takes over from AgentK, so browsers that trusted it still do).
+// self-signed pair Meko makes in the data folder's certs/, the way Kode made its own (a Kode
+// pair is copied there when Meko takes over from Kode, so browsers that trusted it still do).
 package tlscert
 
 import (
@@ -33,7 +33,7 @@ const (
 	RenewBefore = 30 * 24 * time.Hour
 )
 
-// The self-signed pair's files in the certs folder (AgentK's names).
+// The self-signed pair's files in the certs folder (Kode's names).
 const (
 	CertName = "self-signed.crt"
 	KeyName  = "self-signed.key"

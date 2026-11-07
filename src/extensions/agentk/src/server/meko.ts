@@ -19,7 +19,7 @@ export interface MekoDatapackRow extends MekoDatapack {
   ownerUserId: string | null;
 }
 
-/** Agent id of AgentK's own Meko calls: its service conversation, a project's conversation and search. */
+/** Agent id of Kode's own Meko calls: its service conversation, a project's conversation and search. */
 export const AGENTK_AGENT_ID = 'agent-k-local';
 
 /** The client part of a session's agent id, by its harness (Meko's `<client>:<project>` convention). */
@@ -37,7 +37,7 @@ export function sessionAgentId(session: { id: string; slug: string; harness?: st
 }
 
 /**
- * The agent id a session's Claude runs with, for AgentK's writes and conversation for it: its own,
+ * The agent id a session's Claude runs with, for Kode's writes and conversation for it: its own,
  * or for a session launched before sessions had their own, its project's, until it's launched again.
  */
 export function launchedAgentId(r: { project_id: string; meko_agent_id: string | null }): string {
@@ -59,7 +59,7 @@ export function pinSlug(agentId: string): string {
 
 type Json = Record<string, unknown>;
 
-/** One Meko call AgentK made itself (not Claude's), for the usage report: never its content. */
+/** One Meko call Kode made itself (not Claude's), for the usage report: never its content. */
 export interface MekoCallRecord {
   tool: string;
   at: number;
@@ -71,7 +71,7 @@ export interface MekoCallRecord {
   tag: string | null;
 }
 
-/** Tags AgentK's Meko calls made inside `mekoTag.run(tag, fn)`, such as a learn step's. */
+/** Tags Kode's Meko calls made inside `mekoTag.run(tag, fn)`, such as a learn step's. */
 export const mekoTag = new AsyncLocalStorage<string>();
 
 /** A memory like a given text, as `similar` finds them: what an update needs to name it. */
@@ -92,11 +92,11 @@ const NOT_IDEMPOTENT = new Set(['datapack_create', 'memory_add', 'artifact_put',
 const CONNECT_TIMEOUT_MS = 15000;
 
 /**
- * The header on every request AgentK's own client sends Meko: Meko records no question on its
+ * The header on every request Kode's own client sends Meko: Meko records no question on its
  * Context Gaps for these calls (the search at session start, whose query is the task, and the learn
  * step's lookups), only for the agents' own searches. Not a tool argument, which Meko Cloud refuses.
  */
-export const MEKO_CLIENT_HEADER = { 'X-Meko-Client': 'agentk' } as const;
+export const MEKO_CLIENT_HEADER = { 'X-Meko-Client': 'kode' } as const;
 /** How long the health check waits for Meko. */
 const CHECK_TIMEOUT_MS = 10000;
 
@@ -284,7 +284,7 @@ export class MekoClient {
     const gen = this.gen;
     let id: string;
     try {
-      id = await this.ensureConversation(AGENTK_AGENT_ID, null, SERVICE_KEY, 'AgentK service', timeoutMs);
+      id = await this.ensureConversation(AGENTK_AGENT_ID, null, SERVICE_KEY, 'Kode service', timeoutMs);
     } catch (e) {
       if (!(e instanceof MekoError)) throw e; // Meko unreachable: try again next time
       id = createHash('sha256').update(SERVICE_KEY).digest('hex').slice(0, 32);
@@ -327,7 +327,7 @@ export class MekoClient {
     return { id, name: String(d.datapack_name ?? d.name ?? name) };
   }
 
-  /** Deletes a datapack and everything in it: only for one AgentK just made and nothing uses (a workshop whose demo couldn't be built). */
+  /** Deletes a datapack and everything in it: only for one Kode just made and nothing uses (a workshop whose demo couldn't be built). */
   async deleteDatapack(id: string): Promise<void> {
     await this.call('datapack_delete', { datapack_id: id, conversation_id: await this.serviceConv() }, 60000);
   }

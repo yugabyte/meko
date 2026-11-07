@@ -10,9 +10,9 @@ import { dedicatedDatapack } from './store.js';
 const FAST_POLL_MS = 5000;
 const FAST_FOR_MS = 60_000;
 const SLOW_POLL_MS = 30_000;
-/** When AgentK stops following an upload that's still indexing. */
+/** When Kode stops following an upload that's still indexing. */
 const GIVE_UP_MS = 15 * 60_000;
-/** How an upload AgentK followed ended. */
+/** How an upload Kode followed ended. */
 export type KnowledgeResult = 'indexed' | 'failed' | 'unknown';
 
 /** Meko's document states that end an upload without indexing it. */
@@ -29,7 +29,7 @@ const TIMING: KnowledgeTiming = { fastPollMs: FAST_POLL_MS, fastForMs: FAST_FOR_
 
 /** An upload Meko is still indexing, followed until it's done. Kept in memory only: a restart drops them. */
 interface Followed {
-  /** The session to tell (a `knowledge` event), or null for one AgentK uploaded itself (`onDone`). */
+  /** The session to tell (a `knowledge` event), or null for one Kode uploaded itself (`onDone`). */
   sessionId: string | null;
   onDone: ((result: KnowledgeResult) => void) | null;
   datapackId: string;
@@ -74,13 +74,13 @@ export function uploadError(e: unknown, datapackName: string): HttpError {
       : `Meko's file storage refused the upload: ${e.message} Try again in a minute; if it keeps failing, add it from Meko's web app.`);
   }
   // Never a 401 to the browser: that signs it out.
-  if (e.status === 401 || /SCOPE/i.test(e.code)) return new HttpError(502, "Meko didn't accept AgentK's token. Run meko restart, then try again.");
+  if (e.status === 401 || /SCOPE/i.test(e.code)) return new HttpError(502, "Meko didn't accept Kode's token. Run meko restart, then try again.");
   if (e.status === 403) {
     return new HttpError(403, `You can't add files to ${datapackName}: only its owner and maintainers can. Ask the owner for maintainer access.`);
   }
   // A 404 without Meko's envelope: the route itself isn't there (an older Meko).
   if (e.status === 404 && e.code === 'HTTP_404') {
-    return new HttpError(502, "This Meko doesn't take uploads from AgentK yet. Add the file from Meko's web app, or ask whoever runs that Meko server to update it.");
+    return new HttpError(502, "This Meko doesn't take uploads from Kode yet. Add the file from Meko's web app, or ask whoever runs that Meko server to update it.");
   }
   if (e.status === 404) return new HttpError(502, `Meko couldn't find ${datapackName}: ${e.message}. Check the project's datapack on its home page.`);
   if (e.status === 400 || e.status === 413 || e.status === 415) return new HttpError(e.status, e.message);
@@ -130,15 +130,15 @@ export class KnowledgeService {
     }
     if (error || !upload) throw uploadError(error, dp.name);
     const status = upload.alreadyUploaded ? 'already_uploaded' : 'processing';
-    // Meko's settings changed while it uploaded: its document may not be on the Meko AgentK asks now.
+    // Meko's settings changed while it uploaded: its document may not be on the Meko Kode asks now.
     if (status === 'processing' && generation === this.generation) this.follow(row.id, null, dp.id, upload.key, filename);
     return { filename, documentKey: upload.key, datapackName: dp.name, status };
   }
 
   /**
-   * Adds a file AgentK has (a workshop's gotchas) to a datapack's knowledge base, and follows its
+   * Adds a file Kode has (a workshop's gotchas) to a datapack's knowledge base, and follows its
    * indexing: <onDone> gets the result once (`indexed` at once when Meko already had these bytes,
-   * `unknown` when AgentK stops following it: Meko changed or went off). A refused upload throws,
+   * `unknown` when Kode stops following it: Meko changed or went off). A refused upload throws,
    * in uploadError's words. While the server stops, nothing more is called.
    */
   async uploadFile(datapack: { id: string; name: string }, filename: string, bytes: Uint8Array, onDone: (result: KnowledgeResult) => void): Promise<void> {
@@ -161,14 +161,14 @@ export class KnowledgeService {
     this.forget();
   }
 
-  /** An upload with a callback that AgentK stopped following: it ends as `unknown`, unless the server is stopping. */
+  /** An upload with a callback that Kode stopped following: it ends as `unknown`, unless the server is stopping. */
   private dropped(onDone: Followed['onDone']): void {
     if (onDone && !this.stopped) onDone('unknown');
   }
 
   /**
    * Stops following every upload, telling no session: Meko was turned off, or its URL or key
-   * changed, so their datapack and document keys may not be on the Meko AgentK talks to now. An
+   * changed, so their datapack and document keys may not be on the Meko Kode talks to now. An
    * upload with a callback ends as `unknown`.
    */
   forget(): void {
@@ -211,7 +211,7 @@ export class KnowledgeService {
     } catch (e) {
       stuck = !passing(e);
       const quiet = e instanceof MekoApiError && e.status === 404 && !stuck;
-      if (!quiet && (stuck || !f.warned)) this.core.log.warn(`checking how ${f.filename} is indexing failed${stuck ? '; AgentK stopped checking' : ''}`, errMsg(e));
+      if (!quiet && (stuck || !f.warned)) this.core.log.warn(`checking how ${f.filename} is indexing failed${stuck ? '; Kode stopped checking' : ''}`, errMsg(e));
       if (!quiet) f.warned = true;
     }
     if (this.stopped || this.followed.get(key) !== f) return;

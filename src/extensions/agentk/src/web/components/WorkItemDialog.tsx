@@ -19,7 +19,7 @@ export function WorkItemDialog({ item, onClose }: { item?: WorkItem; onClose: ()
   const bad = read.find((r) => !r.link);
   const ghFirst = read[0]?.link?.kind === 'github';
   const needsTitle = !title.trim() && (!!item || !ghFirst);
-  const blocker = bad ? `"${bad.t.slice(0, 60)}" isn't a link AgentK can read.` : needsTitle ? 'Give the work item a title.' : null;
+  const blocker = bad ? `"${bad.t.slice(0, 60)}" isn't a link Kode can read.` : needsTitle ? 'Give the work item a title.' : null;
 
   const save = async () => {
     if (blocker || busy) return;

@@ -55,7 +55,7 @@ async function click(
 
 const open = (projectId: string, sessionId: string) => ({ type: 'ak-open', projectId, sessionId });
 
-describe.each(['/', '/ext/agentk/'])('service worker notification clicks, served under %s', (base) => {
+describe.each(['/', '/ext/kode/'])('service worker notification clicks, served under %s', (base) => {
   const data = { projectId: 'p1', sessionId: 's1' };
   const at = (data: Record<string, string>, open: Parameters<typeof click>[2]) => click(base, data, open);
 
@@ -102,7 +102,7 @@ describe.each(['/', '/ext/agentk/'])('service worker notification clicks, served
 
 describe('service worker notification clicks behind Meko', () => {
   it('leaves Meko’s own pages on the same origin alone', async () => {
-    const log = await click('/ext/agentk/', { projectId: 'p1', sessionId: 's1' }, [{ path: '/p/p1/s/s1', focused: true }, { path: '/account' }]);
-    expect(log).toEqual(['close', 'open /ext/agentk/p/p1/s/s1']);
+    const log = await click('/ext/kode/', { projectId: 'p1', sessionId: 's1' }, [{ path: '/p/p1/s/s1', focused: true }, { path: '/account' }]);
+    expect(log).toEqual(['close', 'open /ext/kode/p/p1/s/s1']);
   });
 });

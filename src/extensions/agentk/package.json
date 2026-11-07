@@ -13,7 +13,7 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,web \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "AK_HOME=\"${AK_DEV_HOME:-$PWD/.dev-home}\" tsx watch src/server/cli.ts serve",
+    "dev:server": "KODE_HOME=\"${KODE_DEV_HOME:-$PWD/.dev-home}\" tsx watch src/server/cli.ts serve",
     "dev:web": "vite",
     "build": "npm run build:server && npm run build:mod && npm run build:tools && npm run build:workshops && npm run build:web",
     "build:server": "tsc -p tsconfig.server.json",

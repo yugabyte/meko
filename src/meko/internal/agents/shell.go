@@ -22,7 +22,7 @@ import (
 var LoginShell = defaultShell()
 
 // LoginPathWait is how long after the first read of the login shell's PATH starts the lists wait
-// for it, all of them together, within the 5 s AgentK gives the agents' list. LoginPathTimeout
+// for it, all of them together, within the 5 s Kode gives the agents' list. LoginPathTimeout
 // bounds the shell's run, which goes on in the background past the wait: a heavy profile can take
 // seconds under a service, and the lists after it ends get its PATH. LoginPathTTL is how long Find
 // keeps its PATH before it reads it again in the background, so no list waits for the shell after

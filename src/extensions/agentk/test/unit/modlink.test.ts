@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ACCEPT_MS, LEARN_PROTOCOL, LINK_STALE_MS, ModLinks, POLL_HOLD_MS, type DroppedPrompt } from '../../src/server/modlink.js';
 
-describe('the link to AgentK\'s mod', () => {
+describe('the link to Kode\'s mod', () => {
   let now = 1_000_000;
   let dropped: [string, DroppedPrompt][];
   let links: ModLinks;
@@ -51,10 +51,10 @@ describe('the link to AgentK\'s mod', () => {
 
   it('marks a hidden prompt for the mod, which hides a bare OK in its turn', async () => {
     links.hello('s1');
-    void links.send('s1', 'AgentK events:\n- A turn ended', true);
+    void links.send('s1', 'Kode events:\n- A turn ended', true);
     void links.send('s1', 'Implement the design.');
     expect((await links.poll('s1'))?.prompts).toEqual([
-      { id: expect.any(String), text: 'AgentK events:\n- A turn ended', hidden: true },
+      { id: expect.any(String), text: 'Kode events:\n- A turn ended', hidden: true },
       { id: expect.any(String), text: 'Implement the design.' },
     ]);
   });
@@ -153,7 +153,7 @@ describe('the link to AgentK\'s mod', () => {
     const handed = (await polls[1])!.prompts[0].id;
     links.closeAll();
     expect(await polls[0]).toBeNull();
-    expect(await caught).toBe('AgentK is stopping');
+    expect(await caught).toBe('Kode is stopping');
     expect(links.accepting).toBe(false);
     expect(links.accept('b', handed)).toBe(false); // its ack arrives late: not run
   });
@@ -312,8 +312,8 @@ describe('the link to AgentK\'s mod', () => {
     links.queueLearn('s1', { id: 'L1', kind: 'extract', prompt: 'What did you learn?' });
     links.withdrawLearn('s1', 'L2'); // another step's: left alone
     links.withdrawLearn('s1', 'L1');
-    links.queueToast('s1', "AgentK couldn't save what this session learned.");
-    expect(await links.poll('s1')).toEqual({ prompts: [], toast: "AgentK couldn't save what this session learned." });
+    links.queueToast('s1', "Kode couldn't save what this session learned.");
+    expect(await links.poll('s1')).toEqual({ prompts: [], toast: "Kode couldn't save what this session learned." });
   });
 
   it("knows a mod's protocol from its polls, after a server restart lost its hello", () => {

@@ -58,7 +58,7 @@ export function MekoUsageSection({
 /**
  * "9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant", or "No open questions
  * Meko couldn't answer", opening the datapack's Context Gaps in Meko's web UI (on this origin: the
- * server sends the counts only while AgentK uses the Meko on this computer) in a new tab.
+ * server sends the counts only while Kode uses the Meko on this computer) in a new tab.
  */
 function GapsLine({ gaps }: { gaps: MekoGaps }) {
   const line = gapsLine(gaps);
@@ -85,7 +85,7 @@ function LearningStat({ tile, label }: { tile: LearningTile; label: string }) {
   );
 }
 
-/** Tokens Meko brought into first turns, split into the seed AgentK passed at start and Claude's searches (`firstTurnText`). */
+/** Tokens Meko brought into first turns, split into the seed Kode passed at start and Claude's searches (`firstTurnText`). */
 function FirstTurnStat({ firstTurn: t }: { firstTurn: MekoFirstTurn }) {
   const { split, title } = firstTurnText(t);
   return (

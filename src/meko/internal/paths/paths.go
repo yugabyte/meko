@@ -10,7 +10,7 @@
 //	  logs/            meko.log, start.log, context-engine.log, service.log (the service's stderr)
 //	  secrets/         secrets kept in files ([secrets] store = "file"); the client token stays in client.token
 //	  extensions.json  the extensions meko start and stop run
-//	  extensions/      each extension's own folder (extensions/agentk is AgentK's home); meko destroy
+//	  extensions/      each extension's own folder (extensions/kode is Kode's home); meko destroy
 //	                   keeps it unless told to remove the extensions too
 //	  update.json      what the last update check found
 //	  models/          embedding model files, downloaded on first start
@@ -164,7 +164,7 @@ func (l Layout) BeforeRenames() Layout {
 const HomeEnv = "MEKO_HOME"
 
 // networkFS are filesystems SQLite's locking and flock can't be trusted on. The names are the
-// ones AgentK checks (src/extensions/agentk/src/server/fstype.ts, and its scripts/install.sh): Linux
+// ones Kode checks (src/extensions/agentk/src/server/fstype.ts, and its scripts/install.sh): Linux
 // mount types and macOS statfs names.
 var networkFS = map[string]bool{
 	"nfs": true, "nfs4": true, "cifs": true, "smb2": true, "smbfs": true, "fuse.sshfs": true,
@@ -226,9 +226,9 @@ func existingAncestor(path string) string {
 var SharedTmp = "/var/tmp"
 
 // localFallback is a local-disk data folder for a home folder on a network filesystem:
-// $XDG_STATE_HOME/meko if that's local, else /var/tmp/<user>/meko (as AgentK does
+// $XDG_STATE_HOME/meko if that's local, else /var/tmp/<user>/meko (as Kode does
 // for its state.db). A relative XDG_STATE_HOME is ignored, as the XDG spec says (and as
-// AgentK's mekoHome and install.sh do).
+// Kode's mekoHome and install.sh do).
 func localFallback() (string, error) {
 	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" && filepath.IsAbs(xdg) {
 		dir := filepath.Join(xdg, "meko")
@@ -250,7 +250,7 @@ func localFallback() (string, error) {
 // EnsurePrivateDir creates dir in a shared place like /var/tmp, where another user could have
 // made the folders first. It refuses unless dir and its parent are real folders (not symlinks)
 // owned by this user and the parent isn't writable by others (group write is fine for the user's
-// own primary group, as AgentK allows), then makes dir 0700.
+// own primary group, as Kode allows), then makes dir 0700.
 func EnsurePrivateDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err

@@ -1,15 +1,15 @@
 /**
- * AgentK's updates are Meko's: Meko checks for them, installs them (restarting only AgentK's server,
+ * Kode's updates are Meko's: Meko checks for them, installs them (restarting only Kode's server,
  * so sessions keep running), rolls back one that keeps failing, and keeps the Update automatically
  * switch. The page reads and drives them through Meko's own routes, root-absolute on Meko's origin
- * (not under BASE), as `signin.ts` does: `GET /api/v1/extensions` (AgentK's row), `POST
- * /api/v1/extensions/agentk/check` and `/update`, and `PATCH /api/v1/extensions/agentk`.
+ * (not under BASE), as `signin.ts` does: `GET /api/v1/extensions` (Kode's row), `POST
+ * /api/v1/extensions/kode/check` and `/update`, and `PATCH /api/v1/extensions/kode`.
  *
- * One store for the page (`useMekoUpdate`): AgentK's row is read when a view first needs it, every
- * IDLE_POLL_MS after, and every JOB_POLL_MS while Meko runs a job on AgentK. While that job is an
+ * One store for the page (`useMekoUpdate`): Kode's row is read when a view first needs it, every
+ * IDLE_POLL_MS after, and every JOB_POLL_MS while Meko runs a job on Kode. While that job is an
  * update, the events connection retries fast (`setUpdateInstalling`), and once the server answers as
  * the new version the page reloads into it (`reload.ts`). When the row isn't `updatable`, the store
- * says why: Meko's `not_updatable` (a build from source, or an AgentK still in ~/.agent-k-local,
+ * says why: Meko's `not_updatable` (a build from source, or a Kode still in ~/.agent-k-local,
  * which Meko updates once it has moved), else, from a Meko too old to say or none at all (`npm run
  * dev`), that Meko needs updating first.
  */
@@ -18,12 +18,12 @@ import type { MekoExtension } from '../shared/types';
 import { setUpdateInstalling } from './events';
 
 const ROUTE = '/api/v1/extensions';
-const NAME = 'agentk';
+const NAME = 'kode';
 export const JOB_POLL_MS = 2000;
 export const IDLE_POLL_MS = 10 * 60_000;
 
 /** What an older Meko, or none, means for updates. */
-export const UPDATE_MEKO_FIRST = "This Meko doesn't install AgentK's updates. Update Meko first: meko update.";
+export const UPDATE_MEKO_FIRST = "This Meko doesn't install Kode's updates. Update Meko first: meko update.";
 
 async function mekoCall<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
@@ -35,7 +35,7 @@ async function mekoCall<T>(method: string, path: string, body?: unknown): Promis
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
-    throw new Error("Can't reach Meko, which installs AgentK's updates.");
+    throw new Error("Can't reach Meko, which installs Kode's updates.");
   }
   type Envelope = { data?: unknown; error?: { message?: unknown } };
   const json = (await res.json().catch(() => null)) as Envelope | null;
@@ -48,35 +48,35 @@ async function mekoCall<T>(method: string, path: string, body?: unknown): Promis
   return json?.data as T;
 }
 
-/** Meko's routes for AgentK's updates. */
+/** Meko's routes for Kode's updates. */
 export const mekoUpdates = {
-  /** AgentK's row in Meko's extension list, or null when Meko doesn't list it. */
+  /** Kode's row in Meko's extension list, or null when Meko doesn't list it. */
   async row(): Promise<MekoExtension | null> {
     const list = await mekoCall<unknown>('GET', ROUTE);
     return (Array.isArray(list) ? (list as MekoExtension[]).find((e) => e?.name === NAME) : undefined) ?? null;
   },
-  /** Asks GitHub for AgentK's newest release now. */
+  /** Asks GitHub for Kode's newest release now. */
   check: () => mekoCall<MekoExtension>('POST', `${ROUTE}/${NAME}/check`),
-  /** Starts installing the newest release, as Meko's job on AgentK. */
+  /** Starts installing the newest release, as Meko's job on Kode. */
   update: () => mekoCall<MekoExtension>('POST', `${ROUTE}/${NAME}/update`),
   /** Turns Update automatically on or off. */
   setAuto: (on: boolean) => mekoCall<MekoExtension>('PATCH', `${ROUTE}/${NAME}`, { auto_update: on }),
 };
 
-/** Meko is installing an update of AgentK (its job, someone's or the automatic one). */
+/** Meko is installing an update of Kode (its job, someone's or the automatic one). */
 export function installing(row: MekoExtension | null | undefined): boolean {
   return row?.job?.action === 'update' && row.job.state === 'running';
 }
 
-/** The last update Meko ran on AgentK failed (rolled back, or never switched): its error. */
+/** The last update Meko ran on Kode failed (rolled back, or never switched): its error. */
 export function updateFailed(row: MekoExtension | null | undefined): string | null {
   return row?.job?.action === 'update' && row.job.state === 'failed' ? row.job.error || 'Meko gave no reason.' : null;
 }
 
 export interface MekoUpdateState {
-  /** AgentK's row on Meko, when Meko could be asked. */
+  /** Kode's row on Meko, when Meko could be asked. */
   row: MekoExtension | null;
-  /** Why the page can't update AgentK through Meko (unreachable, older, not listing it), or null. */
+  /** Why the page can't update Kode through Meko (unreachable, older, not listing it), or null. */
   error: string | null;
   loaded: boolean;
 }
@@ -101,14 +101,14 @@ function schedule(): void {
   timer = setTimeout(() => void refreshMekoUpdate(), job ? JOB_POLL_MS : IDLE_POLL_MS);
 }
 
-/** Why the page can't update AgentK through this row, or null when it can. */
+/** Why the page can't update Kode through this row, or null when it can. */
 function rowError(row: MekoExtension | null): string | null {
-  if (!row) return "Meko doesn't list AgentK.";
+  if (!row) return "Meko doesn't list Kode.";
   if (row.updatable) return null;
-  return row.not_updatable ? `Meko can't update this AgentK: ${row.not_updatable}` : UPDATE_MEKO_FIRST;
+  return row.not_updatable ? `Meko can't update this Kode: ${row.not_updatable}` : UPDATE_MEKO_FIRST;
 }
 
-/** Reads AgentK's row from Meko again (one read at a time). */
+/** Reads Kode's row from Meko again (one read at a time). */
 export function refreshMekoUpdate(): Promise<void> {
   reading ??= mekoUpdates
     .row()
@@ -140,7 +140,7 @@ function subscribe(f: () => void): () => void {
   };
 }
 
-/** AgentK's updates as Meko has them, kept current while any view shows them. */
+/** Kode's updates as Meko has them, kept current while any view shows them. */
 export function useMekoUpdate(): MekoUpdateState {
   return useSyncExternalStore(subscribe, () => state);
 }

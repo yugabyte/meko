@@ -3,7 +3,7 @@ import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 
 /**
- * One server per AgentK home. The home can be on a network file system that other hosts
+ * One server per Kode home. The home can be on a network file system that other hosts
  * mount (a home directory shared over NFS), and two servers on one home break each other:
  * each binds the hook socket over the other's and both write the same SQLite file. The
  * server that runs holds a lease file, `<home>/server.lock`, and rewrites it every
@@ -62,8 +62,8 @@ export const defaultDeps = (): InstanceDeps => ({
 export class InstanceBusyError extends Error {
   constructor(readonly lease: Lease, home: string) {
     super(
-      `AgentK is already running for ${home} on ${lease.host} (pid ${lease.pid}${lease.port ? `, port ${lease.port}` : ''}). ` +
-        `Only one server may use an AgentK home at a time. Stop it there first.`,
+      `Kode is already running for ${home} on ${lease.host} (pid ${lease.pid}${lease.port ? `, port ${lease.port}` : ''}). ` +
+        `Only one server may use a Kode home at a time. Stop it there first.`,
     );
   }
 }

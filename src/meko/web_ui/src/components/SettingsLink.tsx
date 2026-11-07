@@ -1,4 +1,4 @@
-// The Settings gear in the sidebar's footer, beside the theme toggle, as AgentK's rail has it: what
+// The Settings gear in the sidebar's footer, beside the theme toggle, as Kode's rail has it: what
 // Meko does with your Claude Code, usage stats, Meko Cloud and who can reach Meko.
 
 import { Settings } from "lucide-react";

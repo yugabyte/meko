@@ -633,7 +633,7 @@ func (s *Store) KeywordSearch(ctx context.Context, datapack, query string, topK 
 	return out, rows.Err()
 }
 
-// maxTerms caps the terms of one keyword query. AgentK's recall queries run to hundreds of words.
+// maxTerms caps the terms of one keyword query. Kode's recall queries run to hundreds of words.
 const maxTerms = 64
 
 // queryTerms is a query's distinct words, lowercased, at most maxTerms, sorted.

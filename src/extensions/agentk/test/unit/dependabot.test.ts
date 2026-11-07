@@ -98,7 +98,7 @@ const notes = (product = 'agentk') => spawnSync('sh', [NOTES, '--product', produ
 const checkTitle = (title: string) => spawnSync('sh', [CHECK, '--no-length', title], { encoding: 'utf8' });
 
 describe('dependabot config', () => {
-  it("covers AgentK's npm, Meko's Go modules, context engine and web UI, and GitHub Actions, assigns every PR, and sets its commit prefixes", () => {
+  it("covers Kode's npm, Meko's Go modules, context engine and web UI, and GitHub Actions, assigns every PR, and sets its commit prefixes", () => {
     expect(updates().map((u) => `${u.ecosystem} ${u.directory}`).sort()).toEqual(
       ['github-actions /', 'gomod /src/meko', `npm ${AGENTK}`, 'npm /src/meko/context_engine', `npm ${WEB_UI}`]);
     for (const u of updates()) {
@@ -121,7 +121,7 @@ describe('dependabot config', () => {
     }
   });
 
-  // Only AgentK's manifest is read here: a root file these tests read runs AgentK's CI job
+  // Only Kode's manifest is read here: a root file these tests read runs Kode's CI job
   // (test/unit/ci-scope.test.ts), and the web UI's bumps shouldn't.
   it.each([
     [AGENTK, [
@@ -169,7 +169,7 @@ describe('dependabot config', () => {
     expect(r.stdout).toContain('bump dompurify from 3.4.16 to 3.4.17');
   });
 
-  // Nothing in src/meko ships in AgentK's release, so Meko's bumps don't release AgentK.
+  // Nothing in src/meko ships in Kode's release, so Meko's bumps don't release Kode.
   it.each([
     ['/', false, 'bump actions/checkout from 4 to 5'],
     ['/src/meko', false, 'bump github.com/labstack/echo/v4 from 4.16.0 to 4.17.0'],
@@ -177,7 +177,7 @@ describe('dependabot config', () => {
     ['/src/meko/context_engine', true, 'bump tsx from 4.23.15 to 4.23.16'],
     [WEB_UI, false, 'bump lucide-react from 0.545.0 to 0.546.0'],
     [WEB_UI, true, 'bump happy-dom from 21.0.2 to 21.0.4'],
-  ])('does not release AgentK for a bump in %s (dev %s) on its own', (dir, dev, what) => {
+  ])('does not release Kode for a bump in %s (dev %s) on its own', (dir, dev, what) => {
     commit(subject(byDirectory(dir), dev, what));
     expect(notes().status).toBe(3);
   });

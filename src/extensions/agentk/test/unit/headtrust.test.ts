@@ -63,29 +63,29 @@ describe("trusting a PR head by its repo's visibility", () => {
     expect(await trust.visibility('acme/demo', Date.now() + 11 * 60 * 1000)).toBe('public');
     // Nothing to read for a session on its own branch, or a review with no repo.
     expect(await trust.untrusted(row({}))).toBeNull();
-    expect(await trust.untrusted(row({ kind: 'review-pr' }))).toBe("AgentK doesn't know which repo this PR is on");
+    expect(await trust.untrusted(row({ kind: 'review-pr' }))).toBe("Kode doesn't know which repo this PR is on");
     expect(reads).toBe(3);
   });
 });
 
 describe("Kiro config a PR brings", () => {
-  it("finds a workspace agentk agent, by file or by name, and workspace MCP servers; Kiro won't start an untrusted session over them", () => {
+  it("finds a workspace kode agent, by file or by name, and workspace MCP servers; Kiro won't start an untrusted session over them", () => {
     const wt = tempDir('akl-headtrust-');
     mkdirSync(join(wt, '.kiro', 'agents'), { recursive: true });
     writeFileSync(join(wt, '.kiro', 'agents', 'helper.json'), JSON.stringify({ name: 'helper' }));
-    expect(kiroWorkspaceConfig(wt, 'agentk')).toEqual([]);
-    writeFileSync(join(wt, '.kiro', 'agents', 'mine.json'), JSON.stringify({ name: 'agentk' }));
+    expect(kiroWorkspaceConfig(wt, 'kode')).toEqual([]);
+    writeFileSync(join(wt, '.kiro', 'agents', 'mine.json'), JSON.stringify({ name: 'kode' }));
     mkdirSync(join(wt, '.kiro', 'settings'), { recursive: true });
     writeFileSync(join(wt, '.kiro', 'settings', 'mcp.json'), '{}');
-    expect(kiroWorkspaceConfig(wt, 'agentk')).toEqual(['.kiro/agents/mine.json', '.kiro/settings/mcp.json']);
+    expect(kiroWorkspaceConfig(wt, 'kode')).toEqual(['.kiro/agents/mine.json', '.kiro/settings/mcp.json']);
 
     const kiro = kiroHarness({ log: { info() {}, warn() {}, error() {} } as never, changed: () => {} });
     const launch = (untrusted: boolean): LaunchInput => ({
       row: row({ id: 's1', worktree_path: wt }), resume: false, prompt: null, model: null, systemPrompt: '', addDirs: [], modDir: null, planMode: false, env: {}, termTheme: 'dark', unsetEnv: [], untrusted, tools: false,
     });
     expect(() => kiro.launcher({} as Paths, DEFAULT_CONFIG, launch(true))).toThrow(
-      "Kiro would run this PR's own config (the agent in .kiro/agents/mine.json in place of AgentK's, and the MCP servers in .kiro/settings/mcp.json), "
+      "Kiro would run this PR's own config (the agent in .kiro/agents/mine.json in place of Kode's, and the MCP servers in .kiro/settings/mcp.json), "
         + "and anyone can have written this PR's code. Review it on Claude Code instead, which can leave the repo's config out.");
-    expect(kiro.launcher({} as Paths, DEFAULT_CONFIG, launch(false)).args).toEqual(['chat', '--agent', 'agentk']);
+    expect(kiro.launcher({} as Paths, DEFAULT_CONFIG, launch(false)).args).toEqual(['chat', '--agent', 'kode']);
   });
 });

@@ -6,6 +6,7 @@ import { dbPath, loadConfig } from '../../src/server/config.js';
 import { openDb, run } from '../../src/server/db.js';
 import { handoff, SELF_SIGNED_CERT, SELF_SIGNED_KEY, type Legacy } from '../../src/server/handoff.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
+import { KODE_PATH } from '../../src/shared/mekourls.js';
 
 describe('the handoff to Meko', () => {
   let home: string;
@@ -42,7 +43,7 @@ describe('the handoff to Meko', () => {
     }, () => ({ ...DEFAULTS, owner: { username: 'me', pw_scrypt: 'scrypt$salt$hash', totp_secret: '' } })],
   ])('hands over the socket, and the old web settings and login only for an install that had them: %s', (_name, setup, legacy) => {
     setup(paths);
-    expect(handoff(paths, loadConfig(paths, () => undefined))).toEqual({ socket: paths.webSock, legacy: legacy(paths) });
+    expect(handoff(paths, loadConfig(paths, () => undefined))).toEqual({ socket: paths.webSock, path: KODE_PATH, legacy: legacy(paths) });
   });
 
   it("refuses while the home's server runs on another host, whose socket and database aren't this host's to use", () => {

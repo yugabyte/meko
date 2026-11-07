@@ -67,10 +67,10 @@ describe('session host (real ptys)', () => {
   });
 
   it("runs a program with a color terminal, in the directory it was given, without tmux's or this install's variables", async () => {
-    const vars = { TMUX: '/tmp/tmux-1/default,1,0', AK_APP_DIR: '/opt/ak/app/1.2.3', AK_VERSION: '1.2.3', AK_HOME: '/opt/ak' };
+    const vars = { TMUX: '/tmp/tmux-1/default,1,0', KODE_APP_DIR: '/opt/ak/app/1.2.3', KODE_VERSION: '1.2.3', KODE_HOME: '/opt/ak' };
     Object.assign(process.env, vars);
     try {
-      await host.spawn('ak-env', home, ['/bin/sh', '-c', 'printf "%s|%s|%s|%s|%s|%s|%s\\n" "$TERM" "$COLORTERM" "${TMUX:-none}" "${AK_APP_DIR:-none}" "${AK_VERSION:-none}" "${AK_HOME:-none}" "$(pwd)"; sleep 30']);
+      await host.spawn('ak-env', home, ['/bin/sh', '-c', 'printf "%s|%s|%s|%s|%s|%s|%s\\n" "$TERM" "$COLORTERM" "${TMUX:-none}" "${KODE_APP_DIR:-none}" "${KODE_VERSION:-none}" "${KODE_HOME:-none}" "$(pwd)"; sleep 30']);
     } finally {
       for (const k of Object.keys(vars)) delete process.env[k];
     }
@@ -348,7 +348,7 @@ describe('meko kode host, attach, stop and start (the commands)', () => {
   });
   afterEach(() => {
     try {
-      execFileSync(tsx, [cli, 'host', 'stop'], { env: { ...process.env, AK_HOME: home }, stdio: 'ignore' });
+      execFileSync(tsx, [cli, 'host', 'stop'], { env: { ...process.env, KODE_HOME: home }, stdio: 'ignore' });
     } catch {
       /* not running */
     }
@@ -356,7 +356,7 @@ describe('meko kode host, attach, stop and start (the commands)', () => {
   });
 
   it('runs a host that outlives its starter, refuses a second one, attaches a terminal, and stops on request', async () => {
-    const env = { ...process.env, AK_HOME: home };
+    const env = { ...process.env, KODE_HOME: home };
     const p = spawn(tsx, [cli, 'host'], { env, detached: true, stdio: 'ignore' });
     p.unref();
     const host = new SessionHost(getPaths(home), { services: () => null });
@@ -399,7 +399,7 @@ describe('meko kode host, attach, stop and start (the commands)', () => {
     } catch (e) {
       refused = String((e as { stderr: Buffer }).stderr);
     }
-    expect(refused).toContain('The AgentK server for this home is running');
+    expect(refused).toContain('The Kode server for this home is running');
     expect((await host.panes()).size).toBe(1);
 
     // `stop` can't signal a server on another host sharing this home.
@@ -415,16 +415,16 @@ describe('meko kode host, attach, stop and start (the commands)', () => {
 
     // A lease whose live pid isn't a server (left by a crash, the pid since reused: here, this test) isn't signalled.
     writeFileSync(lock, JSON.stringify({ host: hostname(), pid: process.pid, version: 'x', port: 7777, startedAt: Date.now(), beatAt: Date.now() }));
-    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('Stopped AgentK and the 1 session(s) in it. They resume at: meko kode serve');
+    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('Stopped Kode and the 1 session(s) in it. They resume at: meko kode serve');
     await waitFor(() => host.serverRunning(), (up) => !up, 10000, 'host down');
     rmSync(lock);
-    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('AgentK is not running.');
+    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('Kode is not running.');
     // Run by meko stop, one row of Meko's summary.
-    expect(execFileSync(tsx, [cli, 'stop'], { env: { ...env, MEKO_SUMMARY: '1' }, encoding: 'utf8' })).toBe("  ✓ AgentK          wasn't running\n");
-    // Run by meko status, the one headline line its AgentK row shows, and exit 3: no server runs.
+    expect(execFileSync(tsx, [cli, 'stop'], { env: { ...env, MEKO_SUMMARY: '1' }, encoding: 'utf8' })).toBe("  ✓ Kode            wasn't running\n");
+    // Run by meko status, the one headline line its Kode row shows, and exit 3: no server runs.
     const st = spawnSync(tsx, [cli, 'status'], { env: { ...env, MEKO_SUMMARY: '1' }, encoding: 'utf8' });
     expect(st.status).toBe(3);
-    expect(st.stdout).toMatch(/^✗ AgentK \S+ isn't running\n$/);
+    expect(st.stdout).toMatch(/^✗ Kode \S+ isn't running\n$/);
 
     // Without services there is nothing for `start` to start.
     refused = '';

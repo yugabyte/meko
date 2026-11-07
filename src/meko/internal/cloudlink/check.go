@@ -30,7 +30,7 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // CheckMCP connects to the MCP server at url with key: the initialize handshake is an authenticated
-// round trip, which is what AgentK's MekoClient.check made before Meko owned the link. No ping
+// round trip, which is what Kode's MekoClient.check made before Meko owned the link. No ping
 // follows, since a stateless server (Meko's own, on the MCP Go SDK) refuses a ping that carries no
 // protocol version. The error says why it failed, never with the key.
 func CheckMCP(ctx context.Context, url, key string) error {

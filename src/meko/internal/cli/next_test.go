@@ -12,15 +12,15 @@ import (
 func TestNextSteps(t *testing.T) {
 	claude, _ := agents.Lookup("claude")
 	kiro, _ := agents.Lookup("kiro")
-	fresh := nextState{running: true, agent: claude, claude: true, agentKRead: true}
+	fresh := nextState{running: true, agent: claude, claude: true, kodeRead: true}
 	done := nextState{running: true, agent: claude, connected: true, claude: true, extracting: true, linked: true,
-		agentK: true, agentKRead: true}
+		kode: true, kodeRead: true}
 	ui := [2]string{"meko ui", "open the web UI"}
 	connect := [2]string{"meko agent connect claude", "use Meko in Claude Code (or codex, kiro, opencode, cursor)"}
 	learn := [2]string{"meko memory-extractor use claude", "learn memories from your conversations, through Claude Code"}
 	share := [2]string{"meko cloud-link", "share with your team through Meko Cloud"}
-	addAgentK := [2]string{"meko extension install agentk", "add AgentK, which runs coding agents from task to merged PR"}
-	openAgentK := [2]string{"meko kode ui", "open AgentK"}
+	addAgentK := [2]string{"meko extension install kode", "add Kode, which runs coding agents from task to merged PR"}
+	openAgentK := [2]string{"meko kode ui", "open Kode"}
 	openPresent := [2]string{"meko ui", "open the web UI, then Present in its sidebar"}
 	status := [2]string{"meko status", "check on Meko at any time"}
 	statusInstall := [2]string{"meko status", "check on Meko at any time · meko uninstall removes it"}
@@ -32,9 +32,9 @@ func TestNextSteps(t *testing.T) {
 	}{
 		{"install, nothing set up", fresh, nextInstall, [][2]string{ui, connect, learn, share, addAgentK, statusInstall}},
 		{"install, everything set up", done, nextInstall, [][2]string{ui, openAgentK, statusInstall}},
-		{"install, AgentK just added in the picker: it comes first", func() nextState {
+		{"install, Kode just added in the picker: it comes first", func() nextState {
 			s := fresh
-			s.agentK, s.added = true, "agentk"
+			s.kode, s.added = true, "kode"
 			return s
 		}(), nextInstall, [][2]string{openAgentK, connect, learn, share, statusInstall}},
 		{"install, Present just added", func() nextState {
@@ -42,26 +42,26 @@ func TestNextSteps(t *testing.T) {
 			s.added = "present"
 			return s
 		}(), nextInstall, [][2]string{openPresent, openAgentK, statusInstall}},
-		{"install, Present just added, AgentK not installed", func() nextState {
+		{"install, Present just added, Kode not installed", func() nextState {
 			s := fresh
 			s.added = "present"
 			return s
 		}(), nextInstall, [][2]string{openPresent, connect, learn, share, addAgentK, statusInstall}},
-		{"install --no-ui, AgentK just added: the web UI it needs first", func() nextState {
+		{"install --no-ui, Kode just added: the web UI it needs first", func() nextState {
 			s := fresh
-			s.webOff, s.agentK, s.added = true, true, "agentk"
+			s.webOff, s.kode, s.added = true, true, "kode"
 			return s
 		}(), nextInstall, [][2]string{{"meko ui start", "turn the web UI on, when you want it"}, openAgentK, connect,
 			learn, share, statusInstall}},
 		{"start", done, nextStart, [][2]string{ui, openAgentK, status}},
 		{"help", fresh, nextUse, [][2]string{ui, connect, learn, share, addAgentK}},
 		{"web UI off", nextState{webOff: true, agent: claude, connected: true, claude: true, extracting: true,
-			linked: true, agentKRead: true}, nextInstall, [][2]string{
+			linked: true, kodeRead: true}, nextInstall, [][2]string{
 			{"meko ui start", "turn the web UI on, when you want it"}, addAgentK, statusInstall}},
 		{"no Claude Code: connect another agent, and no extraction", nextState{running: true, agent: kiro,
-			linked: true, agentK: true, agentKRead: true}, nextUse, [][2]string{ui,
+			linked: true, kode: true, kodeRead: true}, nextUse, [][2]string{ui,
 			{"meko agent connect kiro", "use Meko in Kiro CLI (or claude, codex, opencode, cursor)"}, openAgentK}},
-		{"connect, Meko stopped", nextState{agent: kiro, claude: true, extracting: true, agentKRead: true}, nextConnect,
+		{"connect, Meko stopped", nextState{agent: kiro, claude: true, extracting: true, kodeRead: true}, nextConnect,
 			[][2]string{{"meko start", "start Meko"},
 				{"kiro-cli", "start a new Kiro CLI session, with Meko's tools (ones already running need a restart)"},
 				share, addAgentK}},
@@ -69,12 +69,12 @@ func TestNextSteps(t *testing.T) {
 			{"claude", "start a new Claude Code session, with Meko's tools (ones already running need a restart)"},
 			openAgentK}},
 		{"cloud-link with Meko stopped: start it first", nextState{agent: claude, connected: true, claude: true,
-			extracting: true, linked: true, agentK: true, agentKRead: true}, nextUse, [][2]string{
+			extracting: true, linked: true, kode: true, kodeRead: true}, nextUse, [][2]string{
 			{"meko start", "start Meko"}, openAgentK}},
 		{"another data folder than meko kode's", nextState{running: true, agent: claude, connected: true, claude: true,
-			extracting: true, linked: true, agentK: true, agentKRead: true, agentKOther: "/data/meko two"}, nextUse,
-			[][2]string{ui, {"meko kode --data-dir '/data/meko two' ui", "open AgentK"}}},
-		{"the extensions' registry unread: no AgentK step", nextState{running: true, agent: claude, connected: true,
+			extracting: true, linked: true, kode: true, kodeRead: true, kodeOther: "/data/meko two"}, nextUse,
+			[][2]string{ui, {"meko kode --data-dir '/data/meko two' ui", "open Kode"}}},
+		{"the extensions' registry unread: no Kode step", nextState{running: true, agent: claude, connected: true,
 			extracting: true, linked: true}, nextUse, [][2]string{ui}},
 	} {
 		if got := nextSteps(c.s, c.kind); !reflect.DeepEqual(got, c.want) {
@@ -83,7 +83,7 @@ func TestNextSteps(t *testing.T) {
 	}
 }
 
-// An extension's status headline ("✓ AgentK 0.2 is running …") gives its row its mark and its state,
+// An extension's status headline ("✓ Kode 0.2 is running …") gives its row its mark and its state,
 // without the mark and the title; any other first line is added to running or not running, and the
 // exit code's mark stays.
 func TestExtensionState(t *testing.T) {
@@ -93,28 +93,31 @@ func TestExtensionState(t *testing.T) {
 		wantK               stepKind
 		want                string
 	}{
-		{stepOK, "running", "✓ AgentK 0.2 is running (pid 7, up 2h)", ", %s", stepOK, "0.2 is running (pid 7, up 2h)"},
-		{stepFail, "not running", "✗ AgentK 0.2 isn't running", ", %s", stepFail, "0.2 isn't running"},
+		{stepOK, "running", "✓ Kode 0.2 is running (pid 7, up 2h)", ", %s", stepOK, "0.2 is running (pid 7, up 2h)"},
+		{stepFail, "not running", "✗ Kode 0.2 isn't running", ", %s", stepFail, "0.2 isn't running"},
 		// A server that holds its lease but doesn't answer exits 0: its row is a warning, not a ✓.
-		{stepOK, "running", "! AgentK 0.2 is running (pid 7), but isn't answering", " (%s)", stepWarn,
+		{stepOK, "running", "! Kode 0.2 is running (pid 7), but isn't answering", " (%s)", stepWarn,
 			"0.2 is running (pid 7), but isn't answering"},
-		{stepOK, "running", "AgentK 0.2", ", %s", stepOK, "running, AgentK 0.2"},
-		{stepOK, "running", "AgentK 0.2", " (%s)", stepOK, "running (AgentK 0.2)"},
+		{stepOK, "running", "Kode 0.2", ", %s", stepOK, "running, Kode 0.2"},
+		{stepOK, "running", "Kode 0.2", " (%s)", stepOK, "running (Kode 0.2)"},
 		{stepFail, "not running", "", ", %s", stepFail, "not running"},
 	} {
-		if k, got := extensionState("agentk", c.k, c.state, c.line, c.format); k != c.wantK || got != c.want {
+		if k, got := extensionState("kode", c.k, c.state, c.line, c.format); k != c.wantK || got != c.want {
 			t.Errorf("%q: got %v %q, want %v %q", c.line, k, got, c.wantK, c.want)
 		}
 	}
 }
 
-// Present's row drops its title from the headline, and the old title Presenter, which a release
-// from before the rename still prints.
+// An extension's row drops its title from the headline, and its old title, which a release from
+// before the rename still prints (Present's Presenter, Kode's AgentK).
 func TestExtensionStateOldTitle(t *testing.T) {
-	for _, line := range []string{"✓ Present 0.2 is running (pid 7, up 2h)", "✓ Presenter 0.2 is running (pid 7, up 2h)"} {
-		k, got := extensionState("present", stepOK, "running", line, ", %s")
-		if k != stepOK || got != "0.2 is running (pid 7, up 2h)" {
-			t.Errorf("%q: got %v %q", line, k, got)
+	for name, title := range map[string]string{"present": "Presenter", "kode": "AgentK"} {
+		for _, line := range []string{"✓ " + extensionTitle(name) + " 0.2 is running (pid 7, up 2h)",
+			"✓ " + title + " 0.2 is running (pid 7, up 2h)"} {
+			k, got := extensionState(name, stepOK, "running", line, ", %s")
+			if k != stepOK || got != "0.2 is running (pid 7, up 2h)" {
+				t.Errorf("%q: got %v %q", line, k, got)
+			}
 		}
 	}
 }
@@ -129,7 +132,7 @@ func TestEveryText(t *testing.T) {
 	}
 }
 
-// meko kode runs the AgentK of the data folder MEKO_HOME names, else ~/.meko's.
+// meko kode runs the Kode of the data folder MEKO_HOME names, else ~/.meko's.
 func TestIsDefaultDataDir(t *testing.T) {
 	root, other := t.TempDir(), t.TempDir()
 	t.Setenv("MEKO_HOME", root)

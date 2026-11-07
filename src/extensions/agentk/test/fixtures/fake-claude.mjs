@@ -46,7 +46,7 @@ if (args[0] === 'update') {
   }
   process.exit(0);
 }
-// Like `claude -p` (Ask AgentK): writes what it got (argv, cwd, stdin) to `ask-input.json` in the
+// Like `claude -p` (Ask Kode): writes what it got (argv, cwd, stdin) to `ask-input.json` in the
 // fake's dir and prints `ask-reply.json` from there; with an `ask-hang` file it never answers.
 if (args[0] === '-p') {
   const fake = process.env.FAKE_CLAUDE_DIR ?? '';
@@ -71,7 +71,7 @@ let sessionId = opt('--session-id') ?? opt('--resume');
 const dir = process.env.FAKE_CLAUDE_DIR;
 mkdirSync(dir, { recursive: true });
 let transcript = join(dir, `${sessionId}.jsonl`);
-appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: process.env.CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF, AK_FIRST_PROMPT: process.env.AK_FIRST_PROMPT, AK_HIDDEN_PROMPT: process.env.AK_HIDDEN_PROMPT } }) + '\n');
+appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: process.env.CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF, KODE_FIRST_PROMPT: process.env.KODE_FIRST_PROMPT, KODE_HIDDEN_PROMPT: process.env.KODE_HIDDEN_PROMPT } }) + '\n');
 
 // Positional prompt: the last argument that isn't a flag value; everything after "--" is positional
 // (like Claude Code's CLI, which rejects a prompt starting with "-" before "--" as an unknown option).
@@ -113,22 +113,22 @@ function hook(event, extra = {}) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let planWaiting = false;
 
-// Like AgentK's mod (src/mod/agentk) loaded with --plugin-dir: when the fake's dir has a `mod` file,
+// Like Kode's mod (src/mod/agentk) loaded with --plugin-dir: when the fake's dir has a `mod` file,
 // it polls the hook socket for prompts, acks each and takes it as a typed prompt (mod-prompts.jsonl
 // records them, mod-acks.jsonl the server's answer to each ack), and reports a measurement after
 // each turn. A `mod-silent` file makes it take prompts without acking them; a `mod-drop` file makes
 // it ack them, then report them refused (their text put in the prompt box). A learn step's parts on
 // a poll are answered like the mod's fork and duplicate check would: the `learn-facts` file's text
 // (else no facts), then the `learn-decisions` file's (else none); each post goes to mod-learn.jsonl,
-// and each line AgentK has it show to mod-toasts.jsonl. A `learn-silent` file makes it never answer;
+// and each line Kode has it show to mod-toasts.jsonl. A `learn-silent` file makes it never answer;
 // a `learn-delay` file holds each answer that many milliseconds.
 const pluginDir = opt('--plugin-dir');
 const modOn = !!pluginDir && existsSync(join(pluginDir, 'hooks', 'register.ts')) && existsSync(join(dir, 'mod'));
 
 function modPost(path, body) {
   return new Promise((resolve, reject) => {
-    const headers = { 'Content-Type': 'application/json', 'X-AK-Token': process.env.AK_HOOK_TOKEN ?? '' };
-    const req = request({ socketPath: process.env.AK_HOOK_SOCK, path, method: 'POST', headers }, (res) => {
+    const headers = { 'Content-Type': 'application/json', 'X-AK-Token': process.env.KODE_HOOK_TOKEN ?? '' };
+    const req = request({ socketPath: process.env.KODE_HOOK_SOCK, path, method: 'POST', headers }, (res) => {
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (c) => (text += c));
@@ -140,7 +140,7 @@ function modPost(path, body) {
 }
 
 // Turns from the mod run one at a time, as the engine holds a plugin's prompt until it's idle.
-// Like the mod, it tells AgentK which prompts are still held: on each poll, and as each starts its
+// Like the mod, it tells Kode which prompts are still held: on each poll, and as each starts its
 // turn or is refused (/mod/held).
 let modTurns = Promise.resolve();
 const held = new Set();
@@ -183,7 +183,7 @@ async function modLoop() {
         for (const p of answer.prompts) {
           appendFileSync(join(dir, 'mod-prompts.jsonl'), JSON.stringify(p) + '\n');
           if (existsSync(join(dir, 'mod-silent'))) continue;
-          // Like the mod: only a 204 means AgentK still wants it run.
+          // Like the mod: only a 204 means Kode still wants it run.
           const ack = await modPost('/mod/ack', { id: p.id, state: 'accepted' });
           appendFileSync(join(dir, 'mod-acks.jsonl'), JSON.stringify({ id: p.id, status: ack.status }) + '\n');
           if (ack.status !== 204) continue;
@@ -208,7 +208,7 @@ async function modLoop() {
   }
 }
 
-// Like Claude's AskUserQuestion with the mod loaded: the mod forwards the question to AgentK and
+// Like Claude's AskUserQuestion with the mod loaded: the mod forwards the question to Kode and
 // asks again after each hold, while the terminal's dialog is open (the PermissionRequest hook fires
 // for it). An `ask-terminal` file answers in the terminal after its milliseconds instead. The
 // outcome goes to mod-asks.jsonl.
@@ -229,7 +229,7 @@ async function askUser() {
   try {
     terminalMs = Number(readFileSync(join(dir, 'ask-terminal'), 'utf8'));
   } catch {
-    /* only AgentK answers */
+    /* only Kode answers */
   }
   const terminal = terminalMs === null ? new Promise(() => undefined) : sleep(terminalMs).then(() => ({ by: 'terminal', answers: { 0: 'Red' } }));
   const won = await Promise.race([agentk, terminal]);
@@ -286,16 +286,16 @@ async function turn(text) {
     if (modOn) await modPost('/mod/turn', { turnId: `turn-${responses}`, reason: 'aborted' }).catch(() => undefined);
     return;
   }
-  if (text.includes('DESIGN_MD')) writeFileSync(process.env.AK_DESIGN_FILE, '# Design\n\nDo the thing.\n');
+  if (text.includes('DESIGN_MD')) writeFileSync(process.env.KODE_DESIGN_FILE, '# Design\n\nDo the thing.\n');
   // Asked for the PR description before a code review: `pr-description.md` in the fake's dir, when there, beside the design file.
   if (text.includes('pr-description.md') && text.includes("write the PR's title and description") && existsSync(join(dir, 'pr-description.md'))) {
-    writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'pr-description.md'), readFileSync(join(dir, 'pr-description.md')));
+    writeFileSync(join(dirname(process.env.KODE_DESIGN_FILE), 'pr-description.md'), readFileSync(join(dir, 'pr-description.md')));
   }
   // A learn session that's done: its summary, beside the design file (learnedPath).
-  if (text.includes('LEARN_DONE')) writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'learned.md'), 'Covered billing and 12 PRs.\nSaved 5 facts.\n');
+  if (text.includes('LEARN_DONE')) writeFileSync(join(dirname(process.env.KODE_DESIGN_FILE), 'learned.md'), 'Covered billing and 12 PRs.\nSaved 5 facts.\n');
   if (text.includes('DESIGN_QUESTIONS') || text.includes('RESOLVE_STORE')) {
     // A design with open questions, listed in the questions file beside it; RESOLVE_STORE (in the
-    // user's answer) revises it, resolving the first one. WITH_DECISION adds a decision AgentK made
+    // user's answer) revises it, resolving the first one. WITH_DECISION adds a decision Kode made
     // itself, resting on a Meko memory, kept as the user's once they changed it.
     const resolved = text.includes('RESOLVE_STORE');
     const changed = text.includes('The user wants: New cards');
@@ -304,8 +304,8 @@ async function turn(text) {
       status: 'resolved', decision: changed ? 'New cards' : 'Reuse the cards', ...(changed ? { decidedBy: 'user' } : {}),
       meko: [{ kind: 'memory', id: '131a7d0e-8f56', datapackId: 'dp-1', excerpt: 'The cards already keep drafts.' }],
     }] : [];
-    writeFileSync(process.env.AK_DESIGN_FILE, `# Design\n\nDo the thing${resolved ? ' in the datapack' : ''}.\n`);
-    writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'questions.json'), JSON.stringify({
+    writeFileSync(process.env.KODE_DESIGN_FILE, `# Design\n\nDo the thing${resolved ? ' in the datapack' : ''}.\n`);
+    writeFileSync(join(dirname(process.env.KODE_DESIGN_FILE), 'questions.json'), JSON.stringify({
       questions: [
         { id: 'store', question: 'Where do designs live?', options: [{ label: 'Datapack' }, { label: 'Repo' }], recommended: 0,
           status: resolved ? 'resolved' : 'open', decision: resolved ? 'Datapack.' : null },
@@ -327,7 +327,7 @@ async function turn(text) {
   // After the approval: the design gets its questions and decisions (DESIGN_QA, a markdown design),
   // the design's own Artifact is republished with them (REPUBLISH_DESIGN), or another page is
   // published (PUBLISH_REPORT).
-  if (text.includes('DESIGN_QA')) appendFileSync(process.env.AK_DESIGN_FILE, '\n## Questions and decisions\n\n- Where do designs live? The datapack.\n');
+  if (text.includes('DESIGN_QA')) appendFileSync(process.env.KODE_DESIGN_FILE, '\n## Questions and decisions\n\n- Where do designs live? The datapack.\n');
   if (text.includes('REPUBLISH_DESIGN') || text.includes('PUBLISH_REPORT')) {
     const report = text.includes('PUBLISH_REPORT');
     const page = join(dir, `${report ? 'report' : 'design'}-${sessionId}.html`);
@@ -366,7 +366,7 @@ async function turn(text) {
   }
   if (text.includes('MEKO_SEARCH')) await mekoSearch();
   if (text.includes('ASK_USER') && modOn) await askUser();
-  if (text.includes('agentk-review-')) await reviewSteps(text);
+  if (text.includes('kode-review-')) await reviewSteps(text);
   respond();
   // BACKGROUND: the turn ends with a shell and a subagent still running in the background, as
   // Claude Code's Stop reports them.
@@ -381,8 +381,8 @@ async function turn(text) {
   modMeasure();
 }
 
-// Like a code-review session running its steps in subagents (AgentK's code review): each step's
-// file names its report tool and step id, and the subagent reports through AgentK's tools route.
+// Like a code-review session running its steps in subagents (Kode's code review): each step's
+// file names its report tool and step id, and the subagent reports through Kode's tools route.
 // `review-reports.json` in the fake's dir maps a pass name to its report (default LGTM), and
 // `review-scores.json` a step id to its score (default confirmed at 90); a `review-skip` file lists
 // steps to leave unreported, and `review-skip-once` steps to leave unreported only the first time
@@ -415,7 +415,7 @@ async function reviewSteps(text) {
 }
 
 // Like Claude Code calling the Meko MCP server: a memory_search that finds one memory. With the mod,
-// AgentK hears when it starts and ends; a `meko-ms` file makes it take that many milliseconds, a
+// Kode hears when it starts and ends; a `meko-ms` file makes it take that many milliseconds, a
 // `meko-lost` file loses its end, and a `meko-then-ms` file keeps the turn going that long after it.
 async function mekoSearch() {
   const id = `msg_${sessionId.slice(0, 8)}_${process.pid}_${responses++}`;
@@ -487,10 +487,17 @@ if (prompt) await turn(prompt);
 
 let buf = '';
 let inPaste = false;
-process.stdin.on('data', async (chunk) => {
-  if (process.env.FAKE_CLAUDE_DEBUG || existsSync(join(dir, 'debug'))) appendFileSync(join(dir, 'stdin.log'), JSON.stringify({ t: Date.now(), chunk }) + '\n');
+// The start of a paste marker a read ended in, carried over to the next read.
+let partial = '';
+process.stdin.on('data', async (read) => {
+  if (process.env.FAKE_CLAUDE_DEBUG || existsSync(join(dir, 'debug'))) appendFileSync(join(dir, 'stdin.log'), JSON.stringify({ t: Date.now(), chunk: read }) + '\n');
   // Like Claude's TUI, a bracketed paste is one input: newlines inside it don't submit.
-  // The tty may split a paste across reads, so track the paste state across chunks.
+  // The tty may split a paste across reads, so track the paste state across chunks; a read can
+  // end inside a marker too (macOS reads 1,024 bytes at a time), so its start waits for the rest.
+  let chunk = partial + read;
+  // eslint-disable-next-line no-control-regex
+  partial = /\x1b(\[(2(0[01]?)?)?)?$/.exec(chunk)?.[0] ?? '';
+  chunk = chunk.slice(0, chunk.length - partial.length);
   // eslint-disable-next-line no-control-regex
   for (const part of chunk.split(/(\x1b\[20[01]~)/)) {
     if (part === '\x1b[200~') inPaste = true;

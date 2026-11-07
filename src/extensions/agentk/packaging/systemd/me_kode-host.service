@@ -1,5 +1,5 @@
 [Unit]
-Description=AgentK session host (holds every Claude session)
+Description=Kode session host (holds every Claude session)
 Documentation=https://github.com/yugabyte/meko
 # The home can be on a shared (NFS) file system that other hosts mount: run only on the
 # host this was installed on, or every host you log into starts its own server on it.
@@ -8,11 +8,11 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-Environment=AK_HOME=@AK_HOME@
+Environment=KODE_HOME=@KODE_HOME@
 # Runs the version that was current when it started, and keeps running across updates:
 # restarting it ends every Claude session (the server resumes them).
 # service/me_kode in the home execs app/current/bin/me_kode (bin/agentk in a release from before).
-ExecStart=@AK_HOME@/service/me_kode host
+ExecStart=@KODE_HOME@/service/me_kode host
 Restart=always
 RestartSec=2
 # 75: another host already runs on this home; restarting won't help.

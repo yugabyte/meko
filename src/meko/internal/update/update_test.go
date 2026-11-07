@@ -33,7 +33,7 @@ func rel(tag string, assets ...string) Release {
 func TestPickMeko(t *testing.T) {
 	tb := func(v string) string { return TarballName(v, "linux", "x64") }
 	rels := []Release{
-		rel("v0.20261030.0", "agent-k-local-0.20261030.0-linux-x64.tar.gz", Sums), // AgentK's
+		rel("v0.20261030.0", "agent-k-local-0.20261030.0-linux-x64.tar.gz", Sums), // Kode's
 		rel("agentk-v0.20261031.0", Sums),
 		rel("meko-v0.20261021.1", tb("0.20261021.1"), Sums),
 		rel("meko-v0.20261021.10", tb("0.20261021.10"), Sums),
@@ -52,7 +52,7 @@ func TestPickMeko(t *testing.T) {
 	}
 	r, v, ok := Pick(rels, []string{"agentk-v", "v"}, func(string) []string { return []string{Sums} }, nil)
 	if !ok || v != "0.20261031.0" || r.Tag != "agentk-v0.20261031.0" {
-		t.Errorf("AgentK picked %q %q", r.Tag, v)
+		t.Errorf("Kode picked %q %q", r.Tag, v)
 	}
 }
 
@@ -400,11 +400,12 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, v, ok := PickPackage(rels, []string{"present-v"}, "present", goos, arch, nil)
+	r, v, ok := PickPackage(rels, []string{"present-v"}, []string{"present"}, goos, arch, nil)
 	if !ok || v != next {
 		t.Fatalf("picked %q %v", v, ok)
 	}
-	if _, _, ok := PickPackage(rels, []string{"present-v"}, "present", goos, arch, map[string]bool{next: true}); ok {
+	bad := map[string]bool{next: true}
+	if _, _, ok := PickPackage(rels, []string{"present-v"}, []string{"present"}, goos, arch, bad); ok {
 		t.Error("a bad version was picked")
 	}
 	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_present", Package: "present"}
@@ -753,5 +754,27 @@ func TestTokenlessRefusalsSayWhy(t *testing.T) {
 				t.Errorf("ends with a period: %s", msg)
 			}
 		})
+	}
+}
+
+// A package renamed (Kode's agentk) is found by either name: the newest release by its new tarball,
+// an older one asked for by version by its old one.
+func TestPickPackageByAnOldName(t *testing.T) {
+	goos, arch := "linux", "x64"
+	rels := []Release{
+		rel("kode-v0.20261107.0", PackageTarball("kode", "0.20261107.0", goos, arch), Sums),
+		rel("agentk-v0.20261101.0", PackageTarball("agentk", "0.20261101.0", goos, arch), Sums),
+	}
+	names, prefixes := []string{"kode", "agentk"}, []string{"kode-v", "agentk-v", "v"}
+	r, v, ok := PickPackage(rels, prefixes, names, goos, arch, nil)
+	if !ok || v != "0.20261107.0" || r.Tag != "kode-v0.20261107.0" {
+		t.Errorf("newest: %q %q %v", r.Tag, v, ok)
+	}
+	if r, ok := PickPackageVersion(rels, prefixes, names, "0.20261101.0", goos, arch); !ok ||
+		r.Tag != "agentk-v0.20261101.0" {
+		t.Errorf("an older one: %q %v", r.Tag, ok)
+	}
+	if _, ok := PickPackageVersion(rels, prefixes, []string{"kode"}, "0.20261101.0", goos, arch); ok {
+		t.Error("found by a name its tarball doesn't have")
 	}
 }

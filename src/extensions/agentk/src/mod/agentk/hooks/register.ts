@@ -1,33 +1,33 @@
-// AgentK's mod: a Claude Code plugin of function hooks that links a session AgentK runs back
-// to the AgentK server. The server copies this folder to <AgentK home>/run/mod/agentk and launches
+// Kode's mod: a Claude Code plugin of function hooks that links a session Kode runs back
+// to the Kode server. The server copies this folder to <Kode home>/run/mod/kode and launches
 // each session with --plugin-dir pointing there. The mod talks to the server over the hook socket
-// (AK_HOOK_SOCK) with the session's hook token (AK_HOOK_TOKEN), like the hook scripts do:
+// (KODE_HOOK_SOCK) with the session's hook token (KODE_HOOK_TOKEN), like the hook scripts do:
 //
 //   /mod/hello    once per load: the server sends this session's prompts through the mod from now on
-//   /mod/poll     held by the server up to 20 s; answers the prompts AgentK has for the session,
+//   /mod/poll     held by the server up to 20 s; answers the prompts Kode has for the session,
 //                 and tells it which of the prompts the mod submitted Claude still holds
 //   /mod/held     the same, as soon as that changes (a prompt started its turn, or was refused)
 //   /mod/ack      each prompt taken (accepted; submitted only when the server answers 204), or
 //                 refused by another plugin (dropped)
 //   /mod/measure  the context window's fill and the plan limits, after each turn
 //   /mod/ask      Claude's AskUserQuestion questions, held by the server up to 20 s and asked again
-//                 until the user answers them in AgentK; the terminal's dialog stays open
+//                 until the user answers them in Kode; the terminal's dialog stays open
 //                 meanwhile, and whichever answers first wins
 //   /mod/ask/done the call has its answer (or ended): the server stops offering the questions
 //   /mod/questions the design's questions from the design_questions tool the mod gives Claude
 //   /mod/learn    a learn step's results, answered at once: what forking the session found (step
 //                 "facts"), then the duplicate check's answer (step "decisions"). Each part of the
-//                 step (`learn` on a poll answer) and the line saying what AgentK saved (`toast`)
+//                 step (`learn` on a poll answer) and the line saying what Kode saved (`toast`)
 //                 come on polls
-//   /mod/learn/start  /agentk_learn in the terminal: start a learn step now
+//   /mod/learn/start  /kode_learn in the terminal: start a learn step now
 //   /mod/meko     Claude's Meko tool calls: `start` before each runs, `end` once it's over (failed or
 //                 interrupted too), for the session's dot to show while one runs
-//   /mod/turn     a turn the person interrupted (Ctrl+C, Esc), which fires no Stop hook: AgentK ends
+//   /mod/turn     a turn the person interrupted (Ctrl+C, Esc), which fires no Stop hook: Kode ends
 //                 the turn and sends what waited for its end
 //
-// A reply of just "OK" in the turn of a prompt AgentK marks `hidden` (a workshop host's events) draws
+// A reply of just "OK" in the turn of a prompt Kode marks `hidden` (a workshop host's events) draws
 // as nothing; the full transcript (ctrl+o) shows it. The prompt's own row, and every other prompt of
-// AgentK's, is drawn by AgentK's view mod (src/mod/agentk-view): Claude Code never raises this
+// Kode's, is drawn by Kode's view mod (src/mod/agentk-view): Claude Code never raises this
 // plugin's `ui.render` hook for the rows of prompts it submitted itself.
 //
 // It must never get in Claude's way: every failure is swallowed (a question is then left to the
@@ -39,17 +39,17 @@
 import type { EngineInterface, ModelForkResult, Register } from 'claude-code'
 
 /**
- * The protocol the server checks, on /mod/hello and on every poll: 2 runs learn steps. AgentK loads
+ * The protocol the server checks, on /mod/hello and on every poll: 2 runs learn steps. Kode loads
  * the mod only into Claude Code that has what they use (MIN_MOD_CLAUDE in src/server/claude.ts).
  */
 const PROTOCOL = 2
 /** How long to wait after a poll failed (the server restarting, say) before the next one. */
 const RETRY_MS = 3000
-/** The tool the mod gives Claude for the design's questions; Claude calls it `mcp__agentk__design_questions` (`mcp__<plugin>__<name>`). */
+/** The tool the mod gives Claude for the design's questions; Claude calls it `mcp__kode__design_questions` (`mcp__<plugin>__<name>`). */
 const QUESTIONS_TOOL = 'design_questions'
-const QUESTIONS_FAILED = "AgentK didn't take the questions. Write them to the questions file your Design prompt names instead."
+const QUESTIONS_FAILED = "Kode didn't take the questions. Write them to the questions file your Design prompt names instead."
 /** The slash command that saves what the session learned to Meko. */
-const LEARN_COMMAND = 'agentk_learn'
+const LEARN_COMMAND = 'kode_learn'
 /** Meko's tools, under its own MCP server's name or a plugin's (`mcp__plugin_x_meko__…`), as mekousage.ts reads them. */
 const MEKO_TOOL = /^mcp__(?:[\w-]+_)?meko__/
 /** The most the duplicate check may write. */
@@ -63,7 +63,7 @@ interface Link {
 interface Prompt {
   id: string
   text: string
-  /** A workshop host's AgentK events: a bare "OK" in its turn draws as nothing (the view mod hides the prompt). */
+  /** A workshop host's Kode events: a bare "OK" in its turn draws as nothing (the view mod hides the prompt). */
   hidden?: boolean
 }
 
@@ -88,18 +88,18 @@ const quietRows = new Set<string>()
 /** What a quiet reply's row draws. */
 const NOTHING = { type: 'Box', props: { display: 'none' } } as const
 
-/** The server's socket and this session's token, or null outside an AgentK session. */
+/** The server's socket and this session's token, or null outside a Kode session. */
 function linkOf($: EngineInterface): Promise<Link | null> {
   link ??= (async () => {
-    const sock = await $.env.get('AK_HOOK_SOCK')
-    const token = await $.env.get('AK_HOOK_TOKEN')
+    const sock = (await $.env.get('KODE_HOOK_SOCK')) ?? (await $.env.get('AK_HOOK_SOCK'))
+    const token = (await $.env.get('KODE_HOOK_TOKEN')) ?? (await $.env.get('AK_HOOK_TOKEN'))
     return sock && token ? { sock, token } : null
   })()
   return link
 }
 
 function post($: EngineInterface, l: Link, path: string, body: unknown) {
-  return $.http.fetch(`http://agentk${path}`, {
+  return $.http.fetch(`http://kode${path}`, {
     method: 'POST',
     socketPath: l.sock,
     headers: { 'Content-Type': 'application/json', 'X-AK-Token': l.token },
@@ -108,9 +108,9 @@ function post($: EngineInterface, l: Link, path: string, body: unknown) {
 }
 
 /**
- * Submits AgentK's prompts as the person's own (the model reads them bare, not as a plugin's
+ * Submits Kode's prompts as the person's own (the model reads them bare, not as a plugin's
  * message). Each is acked first and submitted only when the server answers 204: any other answer,
- * or no answer, means AgentK gave up on it (and may send it again), so running it would run it
+ * or no answer, means Kode gave up on it (and may send it again), so running it would run it
  * twice. The engine holds a submitted prompt until the session is idle, so it never lands in a
  * dialog or a running turn.
  */
@@ -136,7 +136,7 @@ async function take($: EngineInterface, l: Link, prompts: Prompt[]) {
 }
 
 /**
- * Another plugin's `prompt.submit` hook refused AgentK's prompt. The prompt box gets its text when
+ * Another plugin's `prompt.submit` hook refused Kode's prompt. The prompt box gets its text when
  * it's empty, for the person to send, and the server is told, to ask them to step in.
  */
 async function refused($: EngineInterface, l: Link, p: Prompt, reason: string) {
@@ -156,7 +156,7 @@ function json(text: string | undefined): Record<string, unknown> {
 }
 
 /**
- * The user's answers in AgentK to Claude's questions, by question index: asks the server
+ * The user's answers in Kode to Claude's questions, by question index: asks the server
  * (each ask held up to 20 s) until it has them. Never resolves when the server has none to give
  * (it said so, or the call settled meanwhile): the terminal's dialog answers then.
  */
@@ -185,7 +185,7 @@ async function registerQuestionsTool($: EngineInterface): Promise<void> {
   await $.tool.register({
     name: QUESTIONS_TOOL,
     description:
-      "Gives the user the open questions and key design decisions of the design you're writing in AgentK's Design stage. AgentK " +
+      "Gives the user the open questions and key design decisions of the design you're writing in Kode's Design stage. Kode " +
       'checks them, shows them beside the design at once, and saves them to the questions file. Pass all of them each time (the list ' +
       'replaces the last one): open and resolved questions, and the decisions you made yourself (kind "decision"), keeping each id. ' +
       'Returns what was saved, or what to fix in the input before calling again.',
@@ -209,7 +209,7 @@ async function registerQuestionsTool($: EngineInterface): Promise<void> {
               recommended: { type: ['integer', 'null'], description: 'The index of the option you recommend, or for a decision, picked.' },
               status: { type: 'string', enum: ['open', 'resolved'], description: 'open until the user answers it or it is decided; a decision is always resolved.' },
               decision: { type: ['string', 'null'], description: 'What was decided, once resolved.' },
-              decidedBy: { type: ['string', 'null'], enum: ['user', 'agentk', null], description: 'Who decided it, once resolved.' },
+              decidedBy: { type: ['string', 'null'], enum: ['user', 'kode', null], description: 'Who decided it, once resolved.' },
               meko: {
                 type: 'array',
                 description: 'The Meko items it rests on, by the id Meko gave you. Never invent one.',
@@ -244,9 +244,9 @@ function modelReply(r: ModelForkResult | null): Record<string, unknown> {
 /**
  * A part of a learn step. `extract` asks the session's own context (a fork: no tools, nothing added
  * to the transcript, the prefix served from the prompt cache) what it learned; `check` runs the
- * duplicate check AgentK built from what Meko already has on a small model. Either way the reply
+ * duplicate check Kode built from what Meko already has on a small model. Either way the reply
  * goes to /mod/learn, which answers at once. Started from a timer by poll, so it outlives the
- * poll's dispatch; each call is guarded on its own, so a failure reaches AgentK as a reason at once.
+ * poll's dispatch; each call is guarded on its own, so a failure reaches Kode as a reason at once.
  */
 async function learn($: EngineInterface, l: Link, job: LearnJob): Promise<void> {
   let reply: ModelForkResult | null = null
@@ -273,7 +273,7 @@ async function learn($: EngineInterface, l: Link, job: LearnJob): Promise<void> 
   await post($, l, '/mod/learn', { id: job.id, step: 'facts', model, ...modelReply(reply) }).catch(() => undefined)
 }
 
-/** Shows a line from AgentK (what a learn step saved). */
+/** Shows a line from Kode (what a learn step saved). */
 function toast($: EngineInterface, text: string): void {
   try {
     $.ui.toast(text)
@@ -282,12 +282,12 @@ function toast($: EngineInterface, text: string): void {
   }
 }
 
-/** Gives the terminal /agentk_learn. A Claude Code without slash commands for plugins goes without it. */
+/** Gives the terminal /kode_learn. A Claude Code without slash commands for plugins goes without it. */
 async function registerLearnCommand($: EngineInterface): Promise<void> {
   try {
-    await $.command.register({ name: LEARN_COMMAND, description: "Save what this session learned to the project's Meko datapack (AgentK)" })
+    await $.command.register({ name: LEARN_COMMAND, description: "Save what this session learned to the project's Meko datapack (Kode)" })
   } catch {
-    // Save learnings in AgentK does the same
+    // Save learnings in Kode does the same
   }
 }
 
@@ -332,7 +332,7 @@ export const register: Register = (on) => {
     return next(e)
   })
 
-  // A turn the person interrupted fires no Stop hook: AgentK hears of it here, before the engine
+  // A turn the person interrupted fires no Stop hook: Kode hears of it here, before the engine
   // goes idle and runs a prompt it holds, so that prompt's turn never counts as the one that ended.
   // A subagent's turn, and every turn Stop covers, goes straight on.
   on('turn.complete', async ($, e, next) => {
@@ -344,7 +344,7 @@ export const register: Register = (on) => {
   }).catch(($, e, next) => next(e))
 
   // Claude's questions: the terminal's dialog opens as always (next), and the questions go to
-  // AgentK too. The first answer wins; returning AgentK's while the dialog is open
+  // Kode too. The first answer wins; returning Kode's while the dialog is open
   // closes it.
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const l = await linkOf($).catch(() => null)
@@ -370,7 +370,7 @@ export const register: Register = (on) => {
     }
   }).catch(($, e, next) => next(e))
 
-  // Claude's Meko calls: AgentK hears of each before it runs (awaited, so `start` always comes
+  // Claude's Meko calls: Kode hears of each before it runs (awaited, so `start` always comes
   // before `end`) and once it's over, whatever the outcome. The call itself is left alone. The
   // tool is checked here rather than with a RegExp matcher, which the oldest Claude Code the mod
   // runs in (MIN_MOD_CLAUDE) may not take; every other tool goes straight on. The `.catch` replays
@@ -388,14 +388,14 @@ export const register: Register = (on) => {
     }
   }).catch(($, e, next) => next(e))
 
-  // /agentk_learn: AgentK starts a learn step (the next poll brings it), or says why it can't.
+  // /kode_learn: Kode starts a learn step (the next poll brings it), or says why it can't.
   on('command.run', { command: LEARN_COMMAND }, async ($) => {
     const l = await linkOf($).catch(() => null)
-    if (!l) return { text: 'This session is not run by AgentK.' }
+    if (!l) return { text: 'This session is not run by Kode.' }
     const r = await post($, l, '/mod/learn/start', {}).catch(() => null)
     const text = json(r?.text).text
-    return { text: typeof text === 'string' ? text : "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }
-  }).catch(() => ({ text: "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }))
+    return { text: typeof text === 'string' ? text : "Kode didn't answer. Use Save learnings to Meko in the session's ⋯ menu in Kode instead." }
+  }).catch(() => ({ text: "Kode didn't answer. Use Save learnings to Meko in the session's ⋯ menu in Kode instead." }))
 
   // A quiet "OK" in a hidden prompt's turn draws as nothing; the full transcript (ctrl+o) shows it.
   // Registered in a try: a Claude Code without the hook still runs the rest.
@@ -409,7 +409,7 @@ export const register: Register = (on) => {
     // The rows draw as Claude Code draws them
   }
 
-  on('tool.call', { tool: 'mcp__agentk__design_questions' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__kode__design_questions' }, async ($, e) => {
     const l = await linkOf($).catch(() => null)
     if (!l) return { deny: QUESTIONS_FAILED }
     const r = await post($, l, '/mod/questions', { questions: (e as unknown as { questions?: unknown }).questions }).catch(() => null)

@@ -1,6 +1,6 @@
 name: Present release
 
-# Present (src/extensions/present) releases on its own train, beside AgentK's and Meko's.
+# Present (src/extensions/present) releases on its own train, beside Kode's and Meko's.
 # Versions are 0.<UTC date YYYYMMDD>.<n>, tagged present-v<version>. A push to main that changes
 # src/extensions/present cuts a release when it contains present feat/fix/perf/deps commits
 # (naming present, alone or in a list such as present,meko) since the last Present tag and the
@@ -35,7 +35,7 @@ permissions:
   contents: read
 
 # One release at a time, so two pushes on the same day can't claim the same number. Its own group:
-# it never waits for AgentK's or Meko's.
+# it never waits for Kode's or Meko's.
 concurrency:
   group: present-release
   cancel-in-progress: false

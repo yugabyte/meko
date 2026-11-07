@@ -26,7 +26,7 @@ function summary(output: string): string {
 
 /**
  * The Claude Code sessions launch with (`[claude] command`): its version, read with
- * `--version` at most every CLAUDE_VERSION_TTL_MS, whether it's new enough for AgentK's mod
+ * `--version` at most every CLAUDE_VERSION_TTL_MS, whether it's new enough for Kode's mod
  * (`MIN_MOD_CLAUDE`), and updating it with its own `claude update`. A running session keeps the
  * version it started with until Claude restarts in it; this is what the next launch gets.
  */
@@ -79,7 +79,7 @@ export class ClaudeCode {
   }
 
   /**
-   * Whether the Claude Code the next launch gets runs AgentK's mod (false when its version can't be
+   * Whether the Claude Code the next launch gets runs Kode's mod (false when its version can't be
    * read). Read even while Claude Code isn't offered for new sessions: its sessions keep the mod.
    */
   async supportsMod(): Promise<boolean> {

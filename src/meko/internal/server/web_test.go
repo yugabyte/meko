@@ -22,7 +22,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/tlscert"
 )
 
-// fakeExtension listens on a unix socket like AgentK: it echoes what reached it, and a WebSocket
+// fakeExtension listens on a unix socket like Kode: it echoes what reached it, and a WebSocket
 // upgrade gets 101 and an echo of what's written on it.
 func fakeExtension(t *testing.T) string {
 	t.Helper()
@@ -64,7 +64,7 @@ func shortTemp(t *testing.T) string {
 	return dir
 }
 
-// startWeb runs a server that lets browsers in with access and one extension (agentk) on sock; each
+// startWeb runs a server that lets browsers in with access and one extension (kode) on sock; each
 // of with changes its Web first. Remote access serves TLS and plain HTTP on one port (Sniff), as
 // serve does. It returns the server's URL (https:// with remote access) and the extension's proxy.
 func startWeb(t *testing.T, access, sock string, with ...func(*Web)) (string, *extproxy.Proxy) {
@@ -81,7 +81,7 @@ func startWeb(t *testing.T, access, sock string, with ...func(*Web)) (string, *e
 	if err != nil {
 		t.Fatal(err)
 	}
-	ext := extproxy.New("agentk", "AgentK", func() string { return sock }, slog.New(slog.DiscardHandler))
+	ext := extproxy.New("kode", "Kode", func() string { return sock }, slog.New(slog.DiscardHandler))
 	web := &Web{Access: access, Extensions: func() []*extproxy.Proxy { return []*extproxy.Proxy{ext} }}
 	for _, f := range with {
 		f(web)
@@ -118,7 +118,7 @@ func body(t *testing.T, req *http.Request) (int, string, http.Header) {
 	return resp.StatusCode, string(b), resp.Header
 }
 
-// With local access a request from this computer needs nothing, by AgentK's old rule; a proxy's
+// With local access a request from this computer needs nothing, by Kode's old rule; a proxy's
 // headers, another site's page or a foreign Host get nothing. A token is held to the token rules.
 func TestWebLocalAccess(t *testing.T) {
 	base, _ := startWeb(t, config.AccessLocal, fakeExtension(t))
@@ -215,16 +215,16 @@ func TestWebRemoteAccessAndProxy(t *testing.T) {
 	}
 
 	// An extension's page opens straight away, and its address without the slash gets one.
-	req, _ := http.NewRequest(http.MethodGet, base+"/ext/agentk/p/42?x=1", nil)
+	req, _ := http.NewRequest(http.MethodGet, base+"/ext/kode/p/42?x=1", nil)
 	req.Header.Set("Accept", "text/html")
 	if got, b, _ := body(t, req); got != 200 || !strings.HasPrefix(b, "path=/p/42 ") {
 		t.Errorf("page: %d %q", got, b)
 	}
-	req, _ = http.NewRequest(http.MethodGet, base+"/ext/agentk", nil)
-	if got, _, h := body(t, req); got != 308 || h.Get("Location") != "/ext/agentk/" {
+	req, _ = http.NewRequest(http.MethodGet, base+"/ext/kode", nil)
+	if got, _, h := body(t, req); got != 308 || h.Get("Location") != "/ext/kode/" {
 		t.Errorf("no trailing slash: %d %s", got, h.Get("Location"))
 	}
-	req, _ = http.NewRequest(http.MethodGet, base+"/ext/agentk/api/state", nil)
+	req, _ = http.NewRequest(http.MethodGet, base+"/ext/kode/api/state", nil)
 	req.Header.Set("Cookie", "meko_session=old; other=1")
 	req.Header.Set("X-Forwarded-For", "10.0.0.9")
 	code, b, _ := body(t, req)
@@ -236,7 +236,7 @@ func TestWebRemoteAccessAndProxy(t *testing.T) {
 	}
 
 	// A WebSocket through the proxy stays open until the proxy closes it.
-	ws := dialWebSocket(t, host, "/ext/agentk/ws/events")
+	ws := dialWebSocket(t, host, "/ext/kode/ws/events")
 	if _, err := ws.Write([]byte("ping")); err != nil {
 		t.Fatal(err)
 	}
@@ -254,14 +254,14 @@ func TestWebRemoteAccessAndProxy(t *testing.T) {
 // The proxy says so when the extension isn't there to answer.
 func TestWebExtensionDown(t *testing.T) {
 	base, _ := startWeb(t, config.AccessLocal, filepath.Join(shortTemp(t), "gone.sock"))
-	req, _ := http.NewRequest(http.MethodGet, base+"/ext/agentk/", nil)
+	req, _ := http.NewRequest(http.MethodGet, base+"/ext/kode/", nil)
 	req.Header.Set("Accept", "text/html")
-	if code, b, _ := body(t, req); code != 502 || !strings.Contains(b, "AgentK isn't running") {
+	if code, b, _ := body(t, req); code != 502 || !strings.Contains(b, "Kode isn't running") {
 		t.Errorf("page: %d %q", code, b)
 	}
 	code, env := get(t, base+"/api/v1/extensions", nil, "")
 	rows, _ := env.Data.([]any)
-	row, _ := rowNamed(rows, "agentk")
+	row, _ := rowNamed(rows, "kode")
 	if code != 200 || row == nil || row["installed"] != true || row["available"] != false {
 		t.Errorf("extensions: %d %+v", code, env)
 	}
@@ -365,14 +365,14 @@ func TestOnePortCredentials(t *testing.T) {
 		{name: "extensions, auth off and the UI off", access: "local", auth: "none", off: true, path: "/api/v1/extensions",
 			peer: here, want: 403},
 		// An extension's pages take a browser, whatever token it sends; the proxy then finds nothing.
-		{name: "an extension's page with a token", access: "local", path: "/ext/agentk/x",
+		{name: "an extension's page with a token", access: "local", path: "/ext/kode/x",
 			peer: here, header: client, want: 404},
 		// The web UI off: only tokens.
 		{name: "UI off: a browser", access: "local", off: true, path: "/api/v1/probe", peer: here, want: 401},
 		{name: "UI off: the client token", access: "local", off: true, path: "/api/v1/probe", peer: here, header: client,
 			want: 200, wantCred: CredentialClient},
 		{name: "UI off: the page", access: "local", off: true, path: "/", peer: here, want: 404},
-		{name: "UI off: an extension's page", access: "local", off: true, path: "/ext/agentk/x", peer: here, want: 404},
+		{name: "UI off: an extension's page", access: "local", off: true, path: "/ext/kode/x", peer: here, want: 404},
 		{name: "UI off: auth off", access: "local", auth: "none", off: true, path: "/api/v1/probe", peer: here, want: 200,
 			wantCred: CredentialNone},
 		{name: "UI off: auth off takes no browser", access: "local", auth: "none", off: true, path: "/api/v1/probe",

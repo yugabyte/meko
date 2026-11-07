@@ -75,7 +75,7 @@ describe('designs in PRs', () => {
     expect(parseDesignLine(`meko_design:design-widget.md;${hash.slice(1)}`)).toBeNull();
     expect(parseDesignLine('Adds it.')).toBeNull();
     expect(isDesignLine(line)).toBe(true);
-    // A mention of the format isn't AgentK's line.
+    // A mention of the format isn't Kode's line.
     expect(isDesignLine("      meko_design:<first version's name>;<latest version's hash>, and")).toBe(false);
     expect(isDesignLine('meko_design:anything')).toBe(false);
   });

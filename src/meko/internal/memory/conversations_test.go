@@ -21,7 +21,7 @@ func TestIDs(t *testing.T) {
 	if got := hexID("01234567-89ab-cdef-0123-456789abcdef"); got != "0123456789abcdef0123456789abcdef" {
 		t.Errorf("a UUID session id: %s", got)
 	}
-	// Any other session id is the first 32 hex of its SHA-256, as AgentK's own fallback computes.
+	// Any other session id is the first 32 hex of its SHA-256, as Kode's own fallback computes.
 	sum := sha256.Sum256([]byte("agentk-service"))
 	if got := hexID("agentk-service"); got != hex.EncodeToString(sum[:])[:32] {
 		t.Errorf("a hashed session id: %s", got)

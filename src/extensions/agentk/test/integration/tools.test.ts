@@ -32,7 +32,7 @@ type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-describe("AgentK's session tools through me_kode mcp (real session host + git, fake claude, GitHub mocked)", () => {
+describe("Kode's session tools through me_kode mcp (real session host + git, fake claude, GitHub mocked)", () => {
   let env: TestEnv;
   let projectId: string;
   let lead: string;
@@ -131,7 +131,7 @@ describe("AgentK's session tools through me_kode mcp (real session host + git, f
     await waitFor(() => events(lead), (e) => e.includes('Moved to Code by its agent, at the turn\'s end'), 10000, 'the move at the turn\'s end');
     expect(env.core.sessions.get(lead).stage).toBe('code');
     expect(await t.call('open_pr', { sessionId: lead })).toEqual({
-      isError: true, text: "Couldn't open the PR for \"Lead\": a session doesn't open its own PR: the user does, with Open PR in AgentK",
+      isError: true, text: "Couldn't open the PR for \"Lead\": a session doesn't open its own PR: the user does, with Open PR in Kode",
     });
     expect(events(lead)).toEqual([
       'Started a task on acme/demo#1, "#1 Fix login", in Demo.',
@@ -185,12 +185,12 @@ describe("AgentK's session tools through me_kode mcp (real session host + git, f
     await idle((await env.core.sessions.create(projectId, { name: 'Off', prompt: 'no tools', start: 'explore' })).id);
     expect(launches().at(-1)).not.toContain('--mcp-config');
     expect(launches().at(-1)).not.toContain(toolsPluginDir(env.core.paths));
-    expect(await t.call('list')).toEqual({ isError: true, text: "AgentK's session tools are turned off (Settings → General in AgentK)." });
+    expect(await t.call('list')).toEqual({ isError: true, text: "Kode's session tools are turned off (Settings → General in Kode)." });
     env.core.config.tools.enabled = true;
     // A PR head from a public repo, and one not checked yet (a PR linked since the launch), can't use them.
     for (const untrusted of [1, null]) {
       run(env.core.db, "UPDATE sessions SET untrusted = ?, branch_reused = 1, pr_number = 7, pr_url = 'https://github.com/acme/demo/pull/7' WHERE id = ?", untrusted, abc);
-      expect((await t.call('move_session', { sessionId: lead, stage: 'code' })).text).toMatch(/^This session works on a PR from a public repo, or one AgentK hasn't checked yet/);
+      expect((await t.call('move_session', { sessionId: lead, stage: 'code' })).text).toMatch(/^This session works on a PR from a public repo, or one Kode hasn't checked yet/);
     }
     expect(env.core.sessions.get(lead).stage).toBe('explore');
     run(env.core.db, 'UPDATE sessions SET untrusted = NULL, branch_reused = 0, pr_number = NULL, pr_url = NULL WHERE id = ?', abc);
@@ -200,9 +200,9 @@ describe("AgentK's session tools through me_kode mcp (real session host + git, f
     const slow = t.call('start_sessions', { sessions: [{ ref: 'acme/demo#2' }] });
     await new Promise((r) => setTimeout(r, 300));
     env.core.tools.pause();
-    expect((await slow).text).toMatch(/^AgentK is restarting, so it couldn't wait for this/);
-    expect((await (await connect(null)).call('list')).text).toBe("This isn't an AgentK session, so AgentK's session tools can't be used here.");
-    expect((await (await connect(null, 'not-a-token')).call('list')).text).toBe('AgentK no longer runs this session, so its session tools are off.');
+    expect((await slow).text).toMatch(/^Kode is restarting, so it couldn't wait for this/);
+    expect((await (await connect(null)).call('list')).text).toBe("This isn't a Kode session, so Kode's session tools can't be used here.");
+    expect((await (await connect(null, 'not-a-token')).call('list')).text).toBe('Kode no longer runs this session, so its session tools are off.');
   });
 
   it('opens projects on a scanned repo or a GitHub repo, never another folder, and runs Do all through the route', async () => {

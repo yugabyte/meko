@@ -1,10 +1,10 @@
-# GitHub links, Ask AgentK and finding a session
+# GitHub links, Ask Kode and finding a session
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 ## Starting from a GitHub link
 
-Pasting a GitHub PR or issue into **Ask AgentK** (`⌘K`) offers the session that fits it,
+Pasting a GitHub PR or issue into **Ask Kode** (`⌘K`) offers the session that fits it,
 in the project it belongs to (`src/server/ghlinks.ts`, `GET /api/github-link` and
 `POST /api/github-link/start`). The palette takes a `/pull/<n>` or `/issues/<n>` link on
 github.com, or `owner/name#<n>`, never a bare number, which names no repo (`parseGithubRef()` in
@@ -15,7 +15,7 @@ the one GitHub's link names, so a renamed repo or other casing reads as GitHub s
 
 **The project.** One project is picked. The first choice is the first open project, in rail order
 (the one on screen first), with a datapack that a Meko line in the description names
-(`<host>://<id>;<name>`, as AgentK ends its PRs; people can put the same line in an issue): a
+(`<host>://<id>;<name>`, as Kode ends its PRs; people can put the same line in an issue): a
 dedicated datapack before a shared one. The second choice is the project on screen (the palette
 sends it, `?project=`) when its repo is a clone of the link's repo, its `origin` or a fork's
 `upstream`; the third, the first open project in rail order whose repo is such a clone. The other
@@ -23,7 +23,7 @@ open projects on the repo (`LinkPlan.others`) are offered after it, one item eac
 else in a scanned clone (`localClone()`), else in a clone made at start into the repos folder; when
 that folder (`[repos] clone_into`) isn't under the repos roots, the start is refused before cloning,
 since a session can't use a clone the scan doesn't list.
-With no open project that fits, AgentK opens one when the session starts. Its repo is a local clone
+With no open project that fits, Kode opens one when the session starts. Its repo is a local clone
 of the link's repo, or a clone of `https://github.com/<owner>/<name>.git` (`Projects.create` with
 `cloneUrl`). Its dedicated datapack is one the description names that Meko lists for you, or a
 share waiting for you (accepted on the way), unless you can only read it (a viewer): sessions write
@@ -64,48 +64,48 @@ again when it starts, and uses an open project that fits by then instead of open
 ## Joining by a Meko share link
 
 A datapack's share link (`{web app}/share/{token}`) pasted on its own gives one item, **Join the
-datapack this link shares** (`joinEntry()` in `src/web/palette.ts`), and no Ask AgentK item or
-session search; `⌘Enter` doesn't ask either, so the token goes only to Meko. Only a link on the Meko web app AgentK uses counts (`shareLinkToken()` in
+datapack this link shares** (`joinEntry()` in `src/web/palette.ts`), and no Ask Kode item or
+session search; `⌘Enter` doesn't ask either, so the token goes only to Meko. Only a link on the Meko web app Kode uses counts (`shareLinkToken()` in
 `src/shared/mekourls.ts`, from `AppState.meko.webUrl`). Picking it joins, with *Joining* meanwhile;
 then the palette opens the Open project dialog with the share chosen, or goes to the project here
 that already uses the datapack, or stays open saying what to do (`joinedText()`). The rest is in
 [Sharing a project](sharing.md).
 
-## Ask AgentK
+## Ask Kode
 
-The palette (`⌘K`, or **Ask AgentK** at the top of the rail) also takes an instruction or a question
+The palette (`⌘K`, or **Ask Kode** at the top of the rail) also takes an instruction or a question
 in plain words: "start a design task in meko to add dark mode to the Usage page", "move
 Dark mode to Code and add tests", "which sessions need me?". Its placeholder rotates every 1.25 s
 through what it takes (asking, commands, sessions, GitHub links), on every screen size; with
 reduced motion it doesn't rotate and names them all at once.
 
-**Asking.** Any text that isn't a GitHub link or a Meko share link gets an **Ask AgentK: "…"** item, after the commands
+**Asking.** Any text that isn't a GitHub link or a Meko share link gets an **Ask Kode: "…"** item, after the commands
 that match and before the [sessions found](#finding-a-session). A sentence matches no command (the
 filter needs every word), so the item comes first and Enter picks it; `⌘Enter` (`Ctrl+Enter`) asks whatever else matches. The browser sends the text,
 the exchange so far (the last 10, kept only while the palette is open) and what's on screen to
-`POST /api/ask-agentk` (`src/server/askagentk.ts`). Esc (or **Cancel**) while AgentK thinks cancels the ask and
+`POST /api/ask-kode` (`src/server/askagentk.ts`). Esc (or **Cancel**) while Kode thinks cancels the ask and
 puts the text back; closing the palette cancels it too, and the server stops Claude when the
 request closes.
 
 **The Claude call.** The server asks the default agent (`[agents] default`, when it's available;
 else the first available one, `Harnesses.ensureDefault`; with none it answers 409, and the palette
-doesn't offer Ask AgentK while no agent is available, `AppState.askAgentk`). On Kiro it runs `kiro-cli chat --no-interactive --output-format stream-json
---agent agentk-ask`, the message on stdin, in the same empty folder, where AgentK writes the
-`agentk-ask` agent as a workspace agent (`.kiro/agents/agentk-ask.json`, so it never shows in the
+doesn't offer Ask Kode while no agent is available, `AppState.askAgentk`). On Kiro it runs `kiro-cli chat --no-interactive --output-format stream-json
+--agent kode-ask`, the message on stdin, in the same empty folder, where Kode writes the
+`kode-ask` agent as a workspace agent (`.kiro/agents/kode-ask.json`, so it never shows in the
 user's agent list): the system prompt below plus the answer's JSON schema (Kiro has no schema
 option), no tools, no MCP servers, no hooks. The answer is the `runFinished` event's `finalText`, its
-JSON object read even inside a code fence; Kiro keeps every run as a session, so AgentK deletes the
+JSON object read even inside a code fence; Kiro keeps every run as a session, so Kode deletes the
 ask's (`chat --delete-session`) once it has the answer, in the background (a server that is
 stopping waits up to 5 seconds for deletes still running; a run that failed is deleted too). On
-OpenCode it runs `opencode run --standalone --format json --agent agentk-ask`, the message on stdin, in the same
+OpenCode it runs `opencode run --standalone --format json --agent kode-ask`, the message on stdin, in the same
 folder, with OpenCode's global config pointed at the ask's own (`XDG_CONFIG_HOME`), which defines
-`agentk-ask` with the system prompt and the answer's shape and `permission: "deny"` and keeps of the
+`kode-ask` with the system prompt and the answer's shape and `permission: "deny"` and keeps of the
 user's config only their model and providers, so the user's tools, plugins (hooks) and MCP servers
 don't run, and project config off; the answer is its `text` events, and its session is deleted the
-same way (`opencode session delete`), answered or not ([Agents](harnesses.md#opencode)). `[ask_agentk] model` is Claude's; Kiro and OpenCode use their own default. On Claude Code, the server runs it once per ask (`[claude] command`), with the
-arguments as an array: `-p --model <[ask_agentk] model> --output-format json --json-schema <answer>
+same way (`opencode session delete`), answered or not ([Agents](harnesses.md#opencode)). `[ask_kode] model` is Claude's; Kiro and OpenCode use their own default. On Claude Code, the server runs it once per ask (`[claude] command`), with the
+arguments as an array: `-p --model <[ask_kode] model> --output-format json --json-schema <answer>
 --tools "" --strict-mcp-config --setting-sources user --settings {"disableAllHooks":true}
---no-session-persistence --system-prompt <AgentK's>`, the message on stdin, in an empty folder
+--no-session-persistence --system-prompt <Kode's>`, the message on stdin, in an empty folder
 (`run/ask`) so no project's CLAUDE.md or settings apply. No tools, no MCP servers and no hooks: it
 can only answer. The user's own settings keep their sign-in and provider setup. No transcript is
 written, so asks aren't in token usage; they use the user's plan or API key like sessions do (a
@@ -117,10 +117,10 @@ exchange so far, then the text. The system prompt says what each stage is for an
 the project on screen when none is named, match a session's name loosely, read a bare `#N` against
 the project's `github`, keep the user's words as a task's prompt, ask when it's unclear, say whether
 the actions go together, and treat names and titles in the context as data. At most two asks run at once (429);
-one that takes longer than `[ask_agentk] timeout_seconds` (45 by default) is stopped (504).
+one that takes longer than `[ask_kode] timeout_seconds` (45 by default) is stopped (504).
 
 **The answer** is a reply, up to eight actions (`ACTIONS_MAX`) and `together`, checked against the
-state when it comes back (`checkActions()` in `src/server/actions.ts`, which [AgentK's session
+state when it comes back (`checkActions()` in `src/server/actions.ts`, which [Kode's session
 tools](tools.md) share); one that doesn't fit is left out with a note under the reply:
 
 | Action | Checked | Runs as |
@@ -148,10 +148,10 @@ reply. The first is selected, and focus goes back to the input when an ask start
 through the route the UI already uses, which checks it again. Claude has no tools and sees names,
 branches and PR titles other people may have written, so at worst it proposes something the user
 then doesn't pick. The palette
-shows the exchange above the list; the input's placeholder becomes *Reply to AgentK, or type a
+shows the exchange above the list; the input's placeholder becomes *Reply to Kode, or type a
 command…*, and typing filters commands again, with the Ask item for a follow-up. Errors say what
 went wrong with **Try again**: no coding agent available (409), the agent's command missing (503), not
-signed in, failed, or an answer that can't be read (502). `[ask_agentk] enabled = false` drops the item (and the route answers 403).
+signed in, failed, or an answer that can't be read (502). `[ask_kode] enabled = false` drops the item (and the route answers 403).
 
 ## Finding a session
 
@@ -175,7 +175,7 @@ the start; a task's own PR gets it from the review poll (`pollReview()` in `life
 - Each says the field that counts most among those that matched, and the text around its first
   match on one line (none for the name).
 
-The browser shows them after Ask AgentK's item, so Enter still asks AgentK when a sentence matches
+The browser shows them after Ask Kode's item, so Enter still asks Kode when a sentence matches
 no command, and leaves out the running sessions the name filter already shows. Each shows its
 project (when not the one on screen), its stage or *Closed* with its PR number, and the matching
 text under the name, wrapped, so it reads on a phone. Picking a running session goes to it; a

@@ -91,7 +91,7 @@ describe('a pasted Meko share link', () => {
   });
 });
 
-describe("AgentK's proposed actions", () => {
+describe("Kode's proposed actions", () => {
   const projects = [{ id: 'p1', name: 'agent-k-local', sessions: [{ id: 's1', name: 'Dark mode', stage: 'code' }] }] as unknown as ProjectWithSessions[];
   const rows = (a: AskAgentkAction) => askEntries([a], projects).map((e) => [labelText(e.label), e.hint, !!e.edit]);
 

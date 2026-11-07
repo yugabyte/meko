@@ -25,23 +25,26 @@ const WRITE_TOOLS = ['edit', 'write'];
 /** Its patch tool, whose files are named in the patch text. */
 const PATCH_TOOLS = ['patch'];
 
-/** The plugin's events (src/server/opencode.ts) as AgentK's (Claude Code's hook names). */
+/** The plugin's events (src/server/opencode.ts) as Kode's (Claude Code's hook names). */
 const EVENTS: Record<string, string> = {
-  'agentk.start': 'SessionStart',
+  'kode.start': 'SessionStart',
   'chat.message': 'UserPromptSubmit',
   'tool.execute.before': 'PreToolUse',
   'tool.execute.after': 'PostToolUse',
   'permission.asked': 'PermissionRequest',
   'permission.replied': 'PostToolUse',
   'session.idle': 'Stop',
-  // AgentK's own: the session's background work changed between turns (Session.background).
+  // Kode's own: the session's background work changed between turns (Session.background).
+  'kode.background': 'BackgroundTasks',
+  // Their names in the plugin a session loaded before Kode was called Kode, until it's relaunched.
+  'agentk.start': 'SessionStart',
   'agentk.background': 'BackgroundTasks',
 };
 
 /**
  * The command line of an OpenCode session: a server of its own (`--standalone`: OpenCode 2's shared
  * background service has the environment of whichever CLI started it, so it would never see the
- * session's variables, and would hand them to the user's own runs if AgentK started it), its own
+ * session's variables, and would hand them to the user's own runs if Kode started it), its own
  * session resumed by id (never `--continue`, OpenCode's newest in the folder, which can be an
  * earlier session's in a reused worktree), and the prompt to submit. `--opt=value`, so a prompt that
  * starts with "-" is never read as an option.
@@ -53,7 +56,7 @@ export function openCodeArgs(o: { conversation: string | null; prompt: string | 
   return args;
 }
 
-/** A plugin event as AgentK's: OpenCode's session id moves to `agent_session_id`, since `session_id` is Claude Code's. */
+/** A plugin event as Kode's: OpenCode's session id moves to `agent_session_id`, since `session_id` is Claude Code's. */
 export function normalizeOpenCode(raw: HookPayload): HookPayload | null {
   const ev = EVENTS[String(raw.hook_event_name ?? '')];
   if (!ev) return null;
@@ -90,7 +93,7 @@ function conversation(paths: Paths, row: SessionRow): string | null {
   return id && openCodeCanResume(openCodeMessagesFile(paths, row.id), id) ? id : null;
 }
 
-/** OpenCode (`opencode`), its hooks from AgentK's plugin. */
+/** OpenCode (`opencode`), its hooks from Kode's plugin. */
 export function openCodeHarness(deps: {
   paths: Paths; log: Logger; changed: () => void; readVersion?: (cmd: string) => Promise<string | null>;
   /** OpenCode has a `meko` MCP server of its own (`Harnesses.openCodeOwnMeko`); by default, one in its own config. */
@@ -103,11 +106,11 @@ export function openCodeHarness(deps: {
     try {
       writeOpenCodePlugin(paths);
     } catch (e) {
-      deps.log.warn("couldn't write AgentK's plugin for OpenCode; OpenCode sessions start without AgentK's hooks", errMsg(e));
+      deps.log.warn("couldn't write Kode's plugin for OpenCode; OpenCode sessions start without Kode's hooks", errMsg(e));
     }
   };
   /**
-   * AgentK's Meko for a launch: the config file with its MCP server, while Meko is on and OpenCode
+   * Kode's Meko for a launch: the config file with its MCP server, while Meko is on and OpenCode
    * has no `meko` server of its own (`ownMeko`); else null (and the file removed).
    */
   const mekoConfig = (paths: Paths): string | null => {
@@ -118,7 +121,7 @@ export function openCodeHarness(deps: {
       }
       removeOpenCodeMeko(paths);
     } catch (e) {
-      deps.log.warn("couldn't write AgentK's Meko server for OpenCode; OpenCode sessions start without it", errMsg(e));
+      deps.log.warn("couldn't write Kode's Meko server for OpenCode; OpenCode sessions start without it", errMsg(e));
     }
     return null;
   };
@@ -143,9 +146,9 @@ export function openCodeHarness(deps: {
         args: openCodeArgs({ conversation: conv, prompt: l.prompt }),
         env: {
           ...l.env,
-          AK_OPENCODE_DIR: claudePath(openCodeSessionDir(paths, l.row.id)),
-          AK_OPENCODE_SOURCE: conv ? 'resume' : 'startup',
-          ...(conv ? { AK_OPENCODE_SESSION: conv } : {}),
+          KODE_OPENCODE_DIR: claudePath(openCodeSessionDir(paths, l.row.id)),
+          KODE_OPENCODE_SOURCE: conv ? 'resume' : 'startup',
+          ...(conv ? { KODE_OPENCODE_SESSION: conv } : {}),
           OPENCODE_CONFIG_CONTENT: openCodeSessionConfig({
             plugin: claudePath(openCodePluginPath(paths)), instructions: claudePath(instructions), dirs: l.addDirs.map((d) => claudePath(d)),
             model: l.model,

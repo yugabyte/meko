@@ -123,12 +123,12 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(first.args.at(-1)).toContain('do it');
     const agentId = sessionAgentId(env.core.sessions.row(s.id));
     expect(agentId).toMatch(/^claude_code:fix-the-thing-[0-9a-f]{8}$/);
-    // CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: AgentK's mod is on (the fake reports a Claude Code new enough).
+    // CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: Kode's mod is on (the fake reports a Claude Code new enough).
     // CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: Claude Code keeps the conversation when it exits, not its background sessions.
-    // AK_FIRST_PROMPT, AK_HIDDEN_PROMPT: for AgentK's view mod, which draws the first prompt folded (no workshop events here).
+    // KODE_FIRST_PROMPT, KODE_HIDDEN_PROMPT: for Kode's view mod, which draws the first prompt folded (no workshop events here).
     expect(first.env).toEqual({
       MEKO_AGENT_ID: agentId, MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1',
-      AK_FIRST_PROMPT: 'Task: Fix the thing', AK_HIDDEN_PROMPT: '',
+      KODE_FIRST_PROMPT: 'Task: Fix the thing', KODE_HIDDEN_PROMPT: '',
     });
 
     // A terminal read line by line caps a line (1,024 bytes on macOS, 4,096 on Linux); Claude's TUI,
@@ -247,7 +247,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await env.core.sessions.create(p.id, { name: 'Reader', prompt: 'hi', kind: 'quick' });
     await waitFor(() => argvLog(env).length, (k) => k >= 1, 10000, 'launch');
     expect(system(0)).toContain('Meko conversation_id for this session: "conv-project".');
-    // Meko failing: the line names the project's conversation, the one AgentK would have used.
+    // Meko failing: the line names the project's conversation, the one Kode would have used.
     run(env.core.db, 'UPDATE projects SET meko_conversation_id = NULL WHERE id = ?', p.id);
     env.meko.ensureConversation = async () => {
       throw new Error('Meko is down');
@@ -496,7 +496,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     writeFileSync(join(s.worktreePath, 'draft.txt'), 'wip\n');
     await expect(env.core.sessions.action(s.id, 'archive')).rejects.toMatchObject({
-      status: 409, message: "This session's worktree has 1 uncommitted file. Ask AgentK to commit, or Discard the session to throw the changes away.",
+      status: 409, message: "This session's worktree has 1 uncommitted file. Ask Kode to commit, or Discard the session to throw the changes away.",
     });
     expect(env.core.sessions.get(s.id).desired).toBe('running');
     expect((await env.core.host.panes()).has(s.paneName)).toBe(true);
@@ -671,7 +671,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(system).toContain('Stages: Explore → Design → Code → Pull Request → Merge & Close;');
     expect(system).toContain("It's in Explore now");
     // The name heads the task, so the first prompt needn't repeat it.
-    expect(args.at(-1)).toMatch(/Explore stage of an AgentK task[\s\S]*Task: Look around\n\nwhy is it slow/);
+    expect(args.at(-1)).toMatch(/Explore stage of a Kode task[\s\S]*Task: Look around\n\nwhy is it slow/);
 
     await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 409 });
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 409 });
@@ -699,7 +699,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(s).toMatchObject({ kind: 'plan', stage: 'explore', purpose: 'learn' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     const first = argvLog(env)[0].args.at(-1);
-    expect(first).toMatch(/learn session of an AgentK project[^]*Task: Learn the project\n\nWhat this project is about:\nThe billing service\.\n\nWhere its files are:\nservices\/billing\//);
+    expect(first).toMatch(/learn session of a Kode project[^]*Task: Learn the project\n\nWhat this project is about:\nThe billing service\.\n\nWhere its files are:\nservices\/billing\//);
     expect(first).toContain(`Read the PRs merged since ${String(new Date().getUTCFullYear() - 2)}-`);
     expect(first).toContain(join(env.core.paths.designs, s.id, 'learned.md'));
     // The seeding rule, not the usual one, which leaves out what a PR already says.
@@ -875,7 +875,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(half).toContain(join(pastes, h.id, d));
     expect(half).not.toContain(gone);
     expect(get<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'images'", h.id)?.text)
-      .toBe("An image you added wasn't on the host any more when the session started, so AgentK doesn't have it. Paste it into the terminal.");
+      .toBe("An image you added wasn't on the host any more when the session started, so Kode doesn't have it. Paste it into the terminal.");
 
     // Closing the project removes what's still staged.
     env.core.sessions.stageImage(p.id, png);
@@ -929,7 +929,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     const host = await env.core.sessions.begin(p.id, { name: 'Host', prompt: 'the script', start: 'explore' }, { purpose: 'guide' });
     await expect(host.done).rejects.toMatchObject({ status: 400 });
     expect(env.core.state().failedStarts).toEqual([]);
-    expect(notes.at(-1)).toMatchObject({ title: "Host: Couldn't start", body: expect.stringMatching(/Start the AgentK tour again to retry\.$/) });
+    expect(notes.at(-1)).toMatchObject({ title: "Host: Couldn't start", body: expect.stringMatching(/Start the Kode tour again to retry\.$/) });
     // Its fake Claude writes its transcript into the test home until the turn ends: removing the home before then fails.
     await waitFor(() => env.core.sessions.get(again.id).status, (st) => st === 'idle', 10000, 'the started session\'s first turn');
   });
@@ -1290,7 +1290,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     execFileSync('git', ['branch', '-D', s.branch], { cwd: env.repo });
     env.core.sessions.wakeSoon(s.id, 'for a test');
     const failed = await waitFor(() => env.core.sessions.get(s.id), (x) => x.idleStoppedAt === null, 10000, 'failed start');
-    expect(failed).toMatchObject({ status: 'exited', statusDetail: expect.stringMatching(/^Couldn't start Claude again: .*AgentK tries again in 5 minutes, or Resume it now\.$/) });
+    expect(failed).toMatchObject({ status: 'exited', statusDetail: expect.stringMatching(/^Couldn't start Claude again: .*Kode tries again in 5 minutes, or Resume it now\.$/) });
   });
 
   it('follows /clear to the new conversation, so Resume continues that one', async () => {

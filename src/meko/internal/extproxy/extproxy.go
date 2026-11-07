@@ -1,6 +1,8 @@
 // Package extproxy serves an extension's web UI at /ext/<name>/ on Meko's port: it passes each
 // request to the unix socket the extension listens on, with the prefix stripped, and keeps the
-// WebSockets it upgrades, so Meko closes them when it stops or the web UI is turned off (CloseAll).
+// WebSockets it upgrades, so Meko closes them when it stops or the web UI is turned off (CloseAll). An
+// extension renamed in Meko is served at one of its paths, the one its page is built for (Prefix), and
+// the others redirect there.
 //
 // The extension trusts every request on its socket (only the user who runs Meko can connect to it),
 // so what reaches it is only what Meko let in. The browser's Host and Origin are passed
@@ -20,6 +22,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -28,9 +31,13 @@ import (
 
 // Proxy serves one extension.
 type Proxy struct {
-	Name   string // its catalog name, as in /ext/<name>/
-	Title  string // what people call it
-	prefix string // "/ext/<name>"
+	Name  string // its catalog name, as in /ext/<name>/
+	Title string // what people call it
+	// Old are its names before (Kode's agentk), whose paths it answers too.
+	Old []string
+	// Prefix, if set, is the path it's served at ("/ext/<name>/" or "/ext/<old name>/"); others of its
+	// paths redirect there. Unset, it's /ext/<name>/.
+	Prefix func() string
 	socket func() string
 	// OnGone, if set, hears that the socket it was given is gone or refuses connections (the
 	// extension stopped, or its home moved), so the next request asks where it listens again.
@@ -45,8 +52,7 @@ type Proxy struct {
 
 // New returns the proxy for an extension whose socket's path socket reports ("" while unknown).
 func New(name, title string, socket func() string, log *slog.Logger) *Proxy {
-	p := &Proxy{Name: name, Title: title, prefix: "/ext/" + name, socket: socket, log: log,
-		conns: map[net.Conn]struct{}{}}
+	p := &Proxy{Name: name, Title: title, socket: socket, log: log, conns: map[net.Conn]struct{}{}}
 	p.tr = &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			path := p.socket()
@@ -70,8 +76,18 @@ func New(name, title string, socket func() string, log *slog.Logger) *Proxy {
 
 var errNoSocket = errors.New("the extension hasn't said where it listens")
 
-// Path is where browsers find it: /ext/<name>/.
-func (p *Proxy) Path() string { return p.prefix + "/" }
+// Path is where browsers find it: /ext/<name>/, or its Prefix.
+func (p *Proxy) Path() string {
+	if p.Prefix != nil {
+		if s := p.Prefix(); s != "" {
+			return s
+		}
+	}
+	return "/ext/" + p.Name + "/"
+}
+
+// Serves reports whether name is its name or one of its old ones, as in /ext/<name>/.
+func (p *Proxy) Serves(name string) bool { return name == p.Name || slices.Contains(p.Old, name) }
 
 // Available reports whether the extension answers on its socket: a socket file an extension left
 // when it died refuses the connection, and is forgotten as a gone one is.
@@ -138,13 +154,18 @@ func (p *Proxy) gone() {
 	}
 }
 
+// PrefixHeader names the path Meko served a request under (/ext/kode/), so the extension's page can
+// be built for it: its <base href>. An older Meko sends none.
+const PrefixHeader = "X-Meko-Prefix"
+
 // rewrite strips the prefix and keeps the browser's Host and Origin. ReverseProxy has already
 // removed hop-by-hop headers and any X-Forwarded-* the browser sent, and adds none in this mode.
 func (p *Proxy) rewrite(r *httputil.ProxyRequest) {
+	prefix := strings.TrimSuffix(p.Path(), "/")
 	r.Out.URL.Scheme, r.Out.URL.Host = "http", p.Name
-	r.Out.URL.Path = strip(r.In.URL.Path, p.prefix)
+	r.Out.URL.Path = strip(r.In.URL.Path, prefix)
 	if r.In.URL.RawPath != "" {
-		r.Out.URL.RawPath = strip(r.In.URL.RawPath, p.prefix)
+		r.Out.URL.RawPath = strip(r.In.URL.RawPath, prefix)
 	}
 	r.Out.Host = r.In.Host
 	for _, h := range []string{"Cookie", "Authorization", "Forwarded", "X-Real-Ip"} {
@@ -182,8 +203,23 @@ func (p *Proxy) unavailable(w http.ResponseWriter, r *http.Request, err error) {
 	_, _ = fmt.Fprintf(w, `{"error":{"code":"EXTENSION_UNAVAILABLE","message":%q}}`, msg)
 }
 
-// ServeHTTP passes a request on. The caller has checked who sent it.
+// ServeHTTP passes a request on. The caller has checked who sent it. A request on another of its
+// paths is sent to the one it's served at, with the rest of the path and the query: a temporary
+// redirect, never cached, since which path that is follows the release that runs (an update, or a
+// rollback, turns it around). The request goes on with PrefixHeader naming the path it came in on.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	at := p.Path()
+	if !strings.HasPrefix(r.URL.Path, at) {
+		for _, n := range append([]string{p.Name}, p.Old...) {
+			if rest, ok := strings.CutPrefix(r.URL.Path, "/ext/"+n+"/"); ok {
+				u := url.URL{Path: at + rest, RawQuery: r.URL.RawQuery}
+				w.Header().Set("Cache-Control", "no-store")
+				http.Redirect(w, r, u.String(), http.StatusTemporaryRedirect)
+				return
+			}
+		}
+	}
+	r.Header.Set(PrefixHeader, at)
 	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		w = &tracking{ResponseWriter: w, track: p.track}
 	}

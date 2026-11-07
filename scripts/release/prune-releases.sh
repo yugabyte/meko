@@ -5,7 +5,7 @@
 # A lane is the tag's prefix plus the version's first prerelease identifier (v0.1.2-beta.3 → beta),
 # "prerelease" for a numeric one or a prerelease without one, else "stable". Drafts are left alone.
 # Tags are kept, so release-notes.sh and next-version.sh still see every release. The newest stable
-# release under a prefix the product no longer tags with (AgentK's v…) is never deleted: AgentKs
+# release under a prefix the product no longer tags with (Kode's v…) is never deleted: AgentKs
 # installed before the switch update through it to the new tags.
 #
 #   scripts/release/prune-releases.sh [--product agentk|meko|present] [--dry-run]

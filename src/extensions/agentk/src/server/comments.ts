@@ -136,7 +136,7 @@ export class CommentService {
 
   private draft(sessionId: string, id: string): CommentRow {
     const r = this.one(sessionId, id);
-    if (r.state !== 'draft') throw new HttpError(409, 'This comment was already sent to AgentK, so it can no longer be changed.');
+    if (r.state !== 'draft') throw new HttpError(409, 'This comment was already sent to Kode, so it can no longer be changed.');
     return r;
   }
 
@@ -149,7 +149,7 @@ export class CommentService {
     this.running(sessionId);
     const c = checkNewComment(body);
     if (commentCounts(this.db, sessionId).drafts >= BATCH_MAX) {
-      throw new HttpError(409, `You already have ${BATCH_MAX} draft comments, the most that can go to AgentK at once. Send them first.`);
+      throw new HttpError(409, `You already have ${BATCH_MAX} draft comments, the most that can go to Kode at once. Send them first.`);
     }
     const id = randomUUID();
     const now = Date.now();
@@ -220,7 +220,7 @@ export class CommentService {
       tx(this.db, () => {
         for (const c of queued) run(this.db, `UPDATE review_comments SET state = 'sent', sent_at = ?, updated_at = ? WHERE id = ?`, now, now, c.id);
       });
-      this.core.sessions.event(sessionId, 'comments', `Sent ${count} to AgentK`);
+      this.core.sessions.event(sessionId, 'comments', `Sent ${count} to Kode`);
       this.core.changed();
       return queued.length;
     } finally {
