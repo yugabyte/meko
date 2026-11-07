@@ -167,6 +167,56 @@ stateDiagram-v2
   `ak_{login}/` (migration 29) and any other prefix stays; an `ak/` typed in by hand can't be told
   from the old default, so it moved too.
 
+## gh on demand
+
+AgentK does everything on GitHub through gh, GitHub's command-line tool, but doesn't need it to
+install or run: setup only offers it (`scripts/deps.sh`: a question of its own, default yes, once
+git, curl and an agent are there; `--install-deps` installs it with the rest; `--non-interactive`
+and `--no-install-deps` skip it with a warning). Updates don't need it: Meko downloads releases
+without a token. What does need it asks for it then:
+
+- **The gate.** Every action that starts work on GitHub calls `core.gh.require(<what>)` in the core
+  method the routes, Do all and the session tools share: Open PR, turning Run to merge on (also at
+  a session's start), a move to Pull Request, Merge, Update to latest, starting a Review a PR or a
+  task on a PR (and looking a PR up by number or link for either), the task-PR picker, starting from
+  a GitHub link (`ghlinks.ts`), and turning the work queue's GitHub source on. While gh isn't
+  usable it refuses with a 409 whose `code` is `GH_NEEDED` and whose words say what to do, before
+  anything starts. Do all (`runActions`) carries that `code` in the step's `ActionResult`, and the
+  palette opens the dialog for it. A workshop's project opens no PR (`checkOpensPr`, checked
+  first), so the tour never meets it. Reads the page makes on its own, before the user asks for
+  anything, give the reason without the code, so they never bring the dialog up: the plain Review a
+  PR list, which New session also reads for a project just opened, answers no PRs and why; a GitHub
+  link's plan, which the palette reads as typing pauses on anything like a link, answers 409 with
+  the reason only. The work queue's sync isn't refused either: its GitHub source fails with the
+  reason as that source's result (`reviewRequests` in `core.ts`), and Slack still syncs. The pollers
+  (PR status, reviews) aren't gated: a session gets there only through a gate.
+- **Whether gh is usable** (`GhService` in `src/server/ghstatus.ts`, `AppState.gh`): `gh --version`,
+  then `gh auth token --hostname github.com`, both local, or, from a gh older than 2.17 (no
+  `auth token`; Ubuntu 22.04's is 2.4), `gh auth status --hostname github.com`. Only a gh that isn't
+  there is `missing`; one that doesn't answer within 10 s is `unknown` ("didn't answer in time: try
+  again"). When the login shell gave the server no PATH at its start, a missing gh's words say so
+  and point to `me_koder restart` (as `ghMissing` in `github.ts` does), since gh may be installed
+  where the server doesn't look. It's read at start, and again by a gate whenever the last read
+  wasn't good or is over 5 minutes old, so gh installed or signed in outside AgentK counts at once
+  (the server's PATH has `~/.local/bin` and Homebrew's folders: `adoptLoginPath`). gh going from
+  signed in to signed out or missing, and every sign-in from the dialog, drop the login
+  `Core.ghLogin` kept, so the `{login}` prefix and whose reviews count as yours follow the account
+  gh is on now.
+- **The GitHub dialog** (`GhDialog.tsx`): `api.ts` opens it for a `GH_NEEDED` answer to any call
+  (`src/web/ghdialog.ts`), with the refusal's words. **Install gh** runs
+  `deps.sh --only gh --install-deps --non-interactive` (`POST /api/gh/install`): gh's release,
+  checksum-checked, into `~/.local/bin` on Linux, `brew install gh` on macOS; no root either way.
+  **Sign in to GitHub** runs `gh auth login --hostname github.com --git-protocol https --web` with no
+  terminal (`POST /api/gh/login`, `GH_BROWSER=true` so nothing opens on the server's screen) and
+  shows the one-time code gh prints with a link to `https://github.com/login/device`, so it works
+  from a phone; when gh exits 0, `gh auth setup-git` has git use it for github.com, as gh's own
+  interactive sign-in does by default. One install or sign-in runs at a time (a second is a 409). A
+  code that doesn't come within 30 s, or a failed sign-in, ends with "Run gh auth login on this
+  computer, then check again" (**Check again**, `POST /api/gh/check`); one not finished in 15
+  minutes (the code's life) ends with "The sign-in code expired. Sign in again." The one-time code
+  is never logged, nor kept in a failure's words. Closing the dialog stops a sign-in under way and
+  forgets a failure (`DELETE /api/gh/job`). The user then tries the action again.
+
 ## Queued gates
 
 **Open PR** and **Merge & Close** can be pressed before they could go; the server keeps the press

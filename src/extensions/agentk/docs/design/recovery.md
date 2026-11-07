@@ -85,8 +85,11 @@ reads `~/Downloads`, `~/Documents` or `~/Desktop` on macOS: macOS asks whether M
 folder, and the shell waits for the answer. macOS asks again after each Meko update, because the
 `meko` program is a new one. When the shell gives no PATH, the service keeps the thin PATH with
 those three folders, and `server.log` (or `host.log`) says why. If AgentK still can't find `gh`, its
-error says so in words (`ghMissing` in `github.ts`), not as `spawn gh ENOENT`. It says to install
-`gh`, or, when the shell gave no PATH, to allow macOS's prompt, and then to run `me_koder restart`.
+error says so in words (`ghMissing` in `github.ts`), not as `spawn gh ENOENT`. It says AgentK offers
+to install gh the next time a PR is opened (the GitHub dialog, lifecycle.md's "gh on demand"), or to
+get it from cli.github.com, with no restart needed; or, when the shell gave no PATH, to allow macOS's
+prompt and then run `me_koder restart`. The gates' own refusal for a missing gh says the same in that
+case (`ghNeededMessage` in `ghstatus.ts`).
 Sessions don't depend on this: their launcher runs the login shell itself.
 
 **Versions before the session host** ran every Claude in tmux, in a tmux service. The server

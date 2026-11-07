@@ -18,6 +18,7 @@ export const MAX_TASK_PRS = 30;
  */
 export async function taskPrs(core: Core, projectId: string, q: { pr?: unknown; repoPath?: unknown }): Promise<TaskPrs> {
   const p = core.projects.row(projectId);
+  await core.gh.require('A task on a PR');
   const repo = core.projects.sessionRepo(p, q.repoPath);
   // The repos a session's PR can be in: the clone's origin, or its upstream for a fork's clone.
   const { origin, upstream } = await readRemotes(repo);

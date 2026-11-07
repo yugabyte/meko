@@ -453,8 +453,9 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   `<command> install --meko-url <url> --meko-key <client token>` on the terminal, with
   `--non-interactive` without one, and whatever followed `--` on the command line (AgentK's
   `--agent claude|opencode|kiro`, `--install-deps`, `--no-install-deps`). AgentK's install checks
-  its prerequisites (git, curl, gh, a coding agent, Meko's setup for the agents) with the
-  `deps.sh` its release carries, asking before it installs any, and sets up its services. An AgentK
+  its prerequisites (git, curl, a coding agent, Meko's setup for the agents; gh is offered, not
+  required) with the `deps.sh` its release carries, asking before it installs any, and sets up
+  its services. An AgentK
   from before `--meko-url` is refused with a message, rather than failing on the flag. Then it
   registers the extension. One `~/.local/bin/<command>` serves all of a user's data folders, but a
   release belongs to one: a link that runs another data folder's release isn't this one's

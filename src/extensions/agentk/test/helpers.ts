@@ -14,6 +14,7 @@ import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoAgentsRead } from '../src/server/mekoagents.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
 import type { LocalMekoProbe } from '../src/server/mekolocal.js';
+import type { GhState } from '../src/shared/types.js';
 import { getPaths } from '../src/server/paths.js';
 import { startHost, type HostHandle } from '../src/server/host/host.js';
 import { SessionHost } from '../src/server/hostclient.js';
@@ -176,6 +177,8 @@ export interface TestEnv {
   local: LocalMekoProbe;
   /** What Meko's list of agents (GET /api/v1/agents) answers when Core reads it: no answer at first, so nothing is gated. */
   mekoAgents: { value: MekoAgentsRead };
+  /** gh as the gates find it (core.gh): `ok` unless a test sets another state, then calls core.gh.check(). */
+  gh: { state: GhState };
   fakeDir: string;
   /** Stops the session host, ending every Claude in it, as a host crash would. The next ensureServer starts it again. */
   killHost(): Promise<void>;
@@ -252,6 +255,8 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   const mekoTools = stubMekoTools();
   const local: LocalMekoProbe = { state: 'running', meko: { url: TEST_MEKO_URL, token: 'test-key' }, cloud: { account: TEST_ACCOUNT, webUrl: 'https://cloud.mekodata.ai' } };
   const mekoAgents: { value: MekoAgentsRead } = { value: { kind: 'failed', error: "Meko isn't running on this computer" } };
+  // gh as the gates find it: installed and signed in, unless a test says otherwise (then core.gh.check()).
+  const gh: { state: GhState } = { state: 'ok' };
   let hostHandle: HostHandle | null = null;
   const host = new SessionHost(paths, {
     services: () => null,
@@ -269,12 +274,13 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
     host, services: () => null, log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
     localMeko: async () => ({ ...local }),
     mekoAgents: async () => mekoAgents.value,
+    ghProbe: async () => gh.state,
   });
   // Core reads the Meko on this computer at its start; one not started reads it here.
   if (opts.start !== false) await core.start();
   else await core.refreshMeko();
   return {
-    home, repo, core, meko, mekoApi, mekoTools, local, mekoAgents, fakeDir, killHost,
+    home, repo, core, meko, mekoApi, mekoTools, local, mekoAgents, gh, fakeDir, killHost,
     async cleanup() {
       await core.stop().catch(() => undefined);
       await killHost();

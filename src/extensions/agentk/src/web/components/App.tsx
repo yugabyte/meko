@@ -53,6 +53,8 @@ import { WhatsNewDialog, whatsNewBack, type WhatsNewOpener } from './WhatsNewDia
 import { LinkWorkItemDialog } from './LinkWorkItemDialog';
 import { WorkItemDialog } from './WorkItemDialog';
 import { WorkQueueView } from './WorkQueueView';
+import { GhDialog } from './GhDialog';
+import { closeGhDialog, useGhDialog } from '../ghdialog';
 import { itemProject, itemStartRequest, queueSummary } from '../workqueue';
 
 type Modal =
@@ -194,6 +196,8 @@ export function App() {
   );
 
   const { state, conn } = useEvents(onNotify, onInvite);
+  // An action refused because gh isn't installed or signed in (GH_NEEDED), from any call: the GitHub dialog.
+  const ghReason = useGhDialog();
   const stale = useReload(state?.version);
   const stateRef = useRef<AppState | null>(null);
   stateRef.current = state;
@@ -849,6 +853,7 @@ export function App() {
           }}
         />
       )}
+      {ghReason && <GhDialog reason={ghReason} gh={state.gh ?? { state: 'unknown', login: null, job: null }} onClose={closeGhDialog} />}
       {toastBox}
     </div>
   );
