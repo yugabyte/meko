@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -319,6 +320,114 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 		c.Log.Level = o.LogLevel
 	}
 	return c, c.validate()
+}
+
+// pickedPortMark is the comment meko install writes above a port it picked (SetPickedPort), which
+// tells that port from one the user chose (PortChosen).
+const pickedPortMark = "# Picked by meko install: the port before it was in use by another program"
+
+// ErrPortChosen is SetPickedPort's refusal to move a port the user chose.
+var ErrPortChosen = errors.New("config.toml sets [server] port")
+
+// PortChosen reports whether the user chose Meko's port: MEKO_PORT, or a [server] port in
+// config.toml at path that meko install didn't pick. Install moves only a port nobody chose.
+func PortChosen(path string, env func(string) string) (bool, error) {
+	if env("MEKO_PORT") != "" {
+		return true, nil
+	}
+	var c Config
+	md, err := toml.DecodeFile(path, &c)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", path, err)
+	}
+	if !md.IsDefined("server", "port") {
+		return false, nil
+	}
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the data folder's config.toml
+	if err != nil {
+		return false, err
+	}
+	return pickedPortLine(strings.Split(string(b), "\n")) < 0, nil
+}
+
+// pickedPortLine is the index of the port line under pickedPortMark in [server], or -1.
+func pickedPortLine(lines []string) int {
+	section := ""
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "[") {
+			section = tableName(t)
+			continue
+		}
+		if section == "server" && t == pickedPortMark && i+1 < len(lines) && isPortLine(lines[i+1]) {
+			return i + 1
+		}
+	}
+	return -1
+}
+
+// tableName is the name of the table a [header] line opens: "server" for "[server]  # comment".
+func tableName(header string) string {
+	h, _, _ := strings.Cut(header, "#")
+	return strings.TrimSpace(strings.Trim(strings.TrimSpace(h), "[]"))
+}
+
+func isPortLine(l string) bool {
+	k, _, ok := strings.Cut(l, "=")
+	return ok && strings.TrimSpace(k) == "port"
+}
+
+// SetPickedPort sets [server] port in config.toml at path to the port meko install picked, under
+// pickedPortMark, and keeps the rest of the file as it is: it replaces an earlier pick, adds the
+// line at the top of a [server] table, or adds the table. A port the user chose is refused
+// (ErrPortChosen). [server] port is a setting every release reads, so a rollback keeps it.
+func SetPickedPort(path string, port int) error {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the data folder's config.toml
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if chosen, err := PortChosen(path, func(string) string { return "" }); err != nil {
+		return err
+	} else if chosen {
+		return ErrPortChosen
+	}
+	text := string(b)
+	lines := strings.Split(text, "\n")
+	line := fmt.Sprintf("port = %d", port)
+	switch i, header := pickedPortLine(lines), serverHeader(lines); {
+	case i >= 0:
+		lines[i] = line
+		text = strings.Join(lines, "\n")
+	case header >= 0:
+		lines = append(lines[:header+1], append([]string{pickedPortMark, line}, lines[header+1:]...)...)
+		text = strings.Join(lines, "\n")
+	default:
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		if text != "" {
+			text += "\n"
+		}
+		text += "[server]\n" + pickedPortMark + "\n" + line + "\n"
+	}
+	var c Config
+	if _, err := toml.Decode(text, &c); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return paths.WriteFile(path, []byte(text))
+}
+
+// serverHeader is the index of the [server] header line, or -1.
+func serverHeader(lines []string) int {
+	for i, l := range lines {
+		if t := strings.TrimSpace(l); strings.HasPrefix(t, "[") && !strings.HasPrefix(t, "[[") && tableName(t) == "server" {
+			return i
+		}
+	}
+	return -1
 }
 
 // ErrWebPort refuses the browsers' old port setting ([web] port, MEKO_WEB_PORT): Meko has one

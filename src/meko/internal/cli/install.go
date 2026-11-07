@@ -17,12 +17,15 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/yugabyte/meko/src/meko/internal/agents"
+	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/service"
 	"github.com/yugabyte/meko/src/meko/internal/spin"
+	"github.com/yugabyte/meko/src/meko/internal/store"
 	"github.com/yugabyte/meko/src/meko/internal/update"
+	"github.com/yugabyte/meko/src/meko/internal/version"
 )
 
 // newReleaseClient reads a repo's GitHub releases; tests replace it.
@@ -67,52 +70,86 @@ var runningRelease = update.Running
 
 // runInstall sets this meko up: as a release install, app/current and the meko command point at
 // it (and, asked, the shell's profile puts the command on the PATH); then the client token, the web
-// listener's access, and the login service, which it starts once the API port is known to be free.
-// It installs Meko alone: extensions are meko extension install's, which the picker at the end of a
-// first install runs (pickExtension). Run by install.sh, it reads the MEKO_INSTALL_* variables the
-// installer sets (installRun).
+// listener's access, and the login service, which it starts once the port is known to be free (or
+// moved to a free one: pickPort). It installs Meko alone: extensions are meko extension install's,
+// which the picker at the end of a first install runs (pickExtension). Run by install.sh, it reads
+// the MEKO_INSTALL_* variables the installer sets (installRun).
+//
+// A failure ends one way (installing.fail), and leaves either nothing written, or a setup that
+// running the installer again finishes: app/setup-pending says which version's setup didn't finish
+// until its server answers. An upgrade with a service goes on probation as an automatic update does
+// (update.App.Switch), so a new version that can't start is rolled back, data and all.
 func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout, stderr io.Writer) int {
 	r := newReport(stdout)
 	if access != "" && access != config.AccessLocal && access != config.AccessRemote {
 		return fail(stderr, fmt.Errorf("--access takes local or remote, not %q", access))
 	}
+	run := installRun(os.Getenv)
+	app, ver, release := runningRelease()
+	in := &installing{l: l, r: r, run: run, release: release, version: version.Version, service: "none"}
+	if release {
+		in.version = ver
+	}
+	failed := func(label, step string, err error) int {
+		return in.fail(installFailure{label: label, step: step, kind: callhome.KindError, err: err})
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return fail(stderr, err)
+		return failed("Install", callhome.StepChecks, err)
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return fail(stderr, err)
+		return failed("Install", callhome.StepChecks, err)
 	}
-	run := installRun(os.Getenv)
-	// The service's checks come before anything is written, so a failure leaves nothing half-done:
-	// install.sh, run again, finds app/current at the version it would install and stops there.
+	// The checks come before anything is written, so a failure leaves nothing half-done.
 	var m service.Manager
 	if !noService {
 		if m, err = newManager(); err != nil {
-			return fail(stderr, err)
+			return in.fail(installFailure{label: "Service", step: callhome.StepChecks,
+				kind: callhome.KindServiceManager, err: err})
 		}
+		in.service = m.Kind()
 		if err = m.Preflight(); err != nil {
-			return fail(stderr, err)
-		}
-		if code := checkPort(l, m, home, r, stderr); code != exitOK {
-			return code
+			return in.fail(installFailure{label: "Service", step: callhome.StepChecks,
+				kind: callhome.KindServiceManager, err: err})
 		}
 	}
-	if app, ver, ok := runningRelease(); ok {
-		if err = app.Repoint(ver); err != nil {
-			return fail(stderr, err)
+	if f := pickPort(l, m, home, r); f != nil {
+		return in.fail(*f)
+	}
+	probation := false
+	if release {
+		// An upgrade with a service is on probation until it has run a while: a new version that
+		// keeps failing to start is rolled back, its database with it (serve, update.App.Started).
+		if cur := app.Current(); !noService && cur != "" && cur != ver {
+			if _, serr := os.Stat(app.Exe(cur)); serr == nil {
+				in.from = cur
+			}
 		}
-		// Installing by hand supersedes an update on probation.
-		if err = app.ClearPending(); err != nil {
-			return fail(stderr, err)
+		if err = app.MarkSetup(ver, run.first); err != nil {
+			return failed("Install", callhome.StepInstall, err)
+		}
+		in.written = true
+		if in.from != "" {
+			schema, _, perr := store.Peek(context.Background(), l.DB)
+			if perr != nil {
+				schema = 0 // unreadable: a rollback can't put a copy back, but still runs the old version
+			}
+			err = app.Switch(in.from, ver, schema)
+			probation = err == nil
+		} else if err = app.Repoint(ver); err == nil {
+			// Installing by hand supersedes an update on probation.
+			err = app.ClearPending()
+		}
+		if err != nil {
+			return failed("Install", callhome.StepInstall, err)
 		}
 		var link string
 		if link, err = app.LinkCommand(home); err != nil {
-			return fail(stderr, err)
+			return failed("Install", callhome.StepInstall, err)
 		}
 		if _, err = app.LinkCommandAs(home, progMekoCLI); err != nil {
-			return fail(stderr, err)
+			return failed("Install", callhome.StepInstall, err)
 		}
 		exe = app.CurrentExe()
 		installRow(r, filepath.Dir(link), home, run.ask)
@@ -121,19 +158,20 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			"so it doesn't update itself\n", exe)
 	}
 	kept := paths.LooksLikeDataDir(l.Root)
+	in.written = true
 	if err = l.Ensure(); err != nil {
-		return fail(stderr, err)
+		return failed("Data", callhome.StepData, err)
 	}
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil {
-		return fail(stderr, err)
+		return failed("Data", callhome.StepData, err)
 	}
 	ct, err := clientTokens(l, cfg)
 	if err != nil {
-		return fail(stderr, err)
+		return failed("Data", callhome.StepData, err)
 	}
 	if _, err = ct.Ensure(); err != nil {
-		return fail(stderr, err)
+		return failed("Data", callhome.StepData, err)
 	}
 	dataNote := "kept"
 	if !kept {
@@ -142,9 +180,14 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	}
 	r.step(stepOK, "Data", spin.Note(homeRel(l.Root, home), dataNote, r.color))
 	if err = setWebAccess(l, access, noUI, home); err != nil {
-		return fail(stderr, err)
+		return failed("Web UI", callhome.StepData, err)
 	}
 	if noService {
+		if release {
+			if err = app.ClearSetup(); err != nil {
+				return failed("Install", callhome.StepInstall, err)
+			}
+		}
 		if noUI {
 			r.step(stepOK, "Web UI", fmt.Sprintf("%s, in %s", webOffNote, homeRel(config.WebFile(l.Config), home)))
 		}
@@ -166,9 +209,10 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	}
 	host, _ := os.Hostname()
 	pid := currentPID(l)
+	logFrom := fileSize(l.ServiceLog)
 	began := time.Now()
-	if err := m.Install(service.Spec{Exe: exe, DataDir: l.Root, ServiceLog: l.ServiceLog, Host: host}); err != nil {
-		return fail(stderr, err)
+	if err = m.Install(service.Spec{Exe: exe, DataDir: l.Root, ServiceLog: l.ServiceLog, Host: host}); err != nil {
+		return failed("Service", callhome.StepService, err)
 	}
 	r.step(stepOK, "Service", "starts at login, restarts on failure"+spin.Dim(" · stop it with ", r.color)+
 		spin.Blue("meko stop", r.color))
@@ -180,10 +224,36 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 		}
 	}
 	starting := spin.Quiet(stdout, "Server", "starting")
-	if _, ok := waitAnswering(l, serviceStartTimeout, pid); !ok {
-		starting.End(stepFail, "didn't answer")
-		return fail(stderr, fmt.Errorf("the service didn't answer within %s. Check: %s, and meko logs",
-			serviceStartTimeout, m.StatusHint()))
+	w := waitStarted(l, serviceStartTimeout, pid, logFrom, !probation)
+	switch {
+	case w.ok && in.from != "" && w.st.Version == in.from:
+		// The new version failed its starts, and serve put the old one back.
+		reason := "it kept failing to start"
+		if w.errLine != "" {
+			reason = w.errLine
+		}
+		starting.End(stepFail, fmt.Sprintf("meko %s didn't start: %s", ver, reason))
+		r.step(stepWarn, "Rolled back", spin.Note(fmt.Sprintf("meko %s is running again", in.from),
+			"with its data as it was", r.color))
+		_ = app.ClearSetup()
+		fmt.Fprintf(stdout, "\n    %s%s\n", spin.Dim("More                 ", r.color),
+			spin.Blue("meko logs --service", r.color))
+		return in.fail(installFailure{step: callhome.StepServer, kind: callhome.KindRolledBack, printed: true,
+			closing: fmt.Sprintf("Meko %s is installed and running", in.from)})
+	case !w.ok:
+		reason, kind := startReason(w, serviceStartTimeout)
+		starting.End(stepFail, reason)
+		// The service would start it again every few seconds, to fail the same way. An upgrade on
+		// probation is left to serve, which rolls it back at its next start.
+		stopped := !probation && m.Stop() == nil
+		startFailed(r, w, m, stopped)
+		return in.fail(installFailure{step: callhome.StepServer, kind: kind, printed: true})
+	}
+	if release {
+		if err = app.ClearSetup(); err != nil {
+			starting.Clear()
+			return failed("Install", callhome.StepInstall, err)
+		}
 	}
 	verb := "started"
 	if pid != 0 || run.from != "" {

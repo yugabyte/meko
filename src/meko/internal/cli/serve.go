@@ -394,6 +394,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		defer close(followDone)
 		moveBackOnce(followCtx, st, cloud, log)
 		moveToOnePortOnce(followCtx, st, agentsMgr, local, log)
+		followPort(followCtx, st, agentsMgr, local, cfg.Server.Port, log)
 	}()
 	go cloud.CloudTools(followCtx)
 	// The extensions still running from before this start read Meko again: an update or a rollback may
@@ -766,6 +767,39 @@ func moveToOnePortOnce(ctx context.Context, st *store.Store, m *agents.Manager, 
 	}
 	if err := st.SetSetting(ctx, keyAgentsOnOnePort, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		log.Warn("can't record that the agents moved to Meko's one port", "error", err)
+	}
+}
+
+// keyAgentsPort is the port Meko's agents were last connected to (followPort).
+const keyAgentsPort = "agents_port"
+
+// followPort moves the agents to this start's port when it isn't the one they were connected to:
+// meko install moves Meko to a free port when another program holds its own (pickPort), and
+// someone may change [server] port by hand. Only agents whose meko server is at exactly the old
+// port's URL move (an Exact move), so one pointed at another Meko on this computer stays. The new
+// port is recorded once no agent failed, so a failed one is tried again at the next start; the
+// first start records its port with nothing to move.
+func followPort(ctx context.Context, st *store.Store, m *agents.Manager, to agents.Target, port int,
+	log *slog.Logger) {
+	last, ok, err := st.Setting(ctx, keyAgentsPort)
+	if err != nil {
+		return
+	}
+	now := strconv.Itoa(port)
+	if ok && last == now {
+		return
+	}
+	if ok {
+		from := agents.Target{Kind: agents.KindLocal, URL: "http://127.0.0.1:" + last + "/mcp", Token: to.Token,
+			Exact: true}
+		moves := m.Move(ctx, from, to)
+		logMoves(log, moves)
+		if ctx.Err() != nil || len(moves.Failed) > 0 {
+			return
+		}
+	}
+	if err := st.SetSetting(ctx, keyAgentsPort, now); err != nil {
+		log.Warn("can't record the port Meko's agents use", "error", err)
 	}
 }
 

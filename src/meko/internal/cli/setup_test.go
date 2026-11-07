@@ -335,9 +335,9 @@ func TestInstallWithoutTheWebUI(t *testing.T) {
 	if err = os.WriteFile(paths.New(dir2).Config, []byte("[web]\nenabled = true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs = run("install", "--data-dir", dir2, "--no-ui", "--no-service")
-	want(t, "install --no-ui with config.toml's enabled", code, exitError, errs,
-		"config.toml sets [web] enabled, which --no-ui would change: change it there instead")
+	code, out, _ = run("install", "--data-dir", dir2, "--no-ui", "--no-service")
+	want(t, "install --no-ui with config.toml's enabled", code, exitError, out,
+		"  ✗ Web UI          config.toml sets [web] enabled, which --no-ui would change: change it there instead")
 }
 
 func TestInstallWithoutAServiceLeavesStartToTheUser(t *testing.T) {

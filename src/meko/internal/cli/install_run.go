@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/service"
@@ -229,33 +228,13 @@ func removePathLines(home string) ([]string, error) {
 	return changed, nil
 }
 
-// checkPort fails install, before anything is written, when another program holds Meko's port (an
-// AgentK from before Meko served it, on 7777, is one): the service would be written and then fail to
-// start. A port a Meko server holds is fine: this data folder's (install restarts it), or the
-// installed service's other data folder's (installing the service moves it to this one).
-func checkPort(l paths.Layout, m service.Manager, home string, r report, stderr io.Writer) int {
-	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
-	if err != nil {
-		return fail(stderr, err)
-	}
-	port := cfg.Server.Port
-	if mekoHolds(l, m, port) {
-		return exitOK
-	}
-	if err := portFree(port); err != nil {
-		portInUse(r, port, homeRel(l.Config, home))
-		return fail(stderr, fmt.Errorf("port %d is in use: %w", port, err))
-	}
-	return exitOK
-}
-
 // mekoHolds reports whether a Meko server that install replaces listens on port: this data
 // folder's, or the one the installed service runs. Its port file names the port agents use; a Meko
 // from before one port listened on its web UI's too (7777, beside 7778 in the port file), which
 // its status reports.
 func mekoHolds(l paths.Layout, m service.Manager, port int) bool {
 	dirs := []string{l.Root}
-	if m.Installed() && m.DataDir() != "" {
+	if m != nil && m.Installed() && m.DataDir() != "" {
 		dirs = append(dirs, m.DataDir())
 	}
 	for _, d := range dirs {
@@ -302,18 +281,16 @@ var portFree = func(port int) error {
 	return ln.Close()
 }
 
-// portInUse prints install's failed Server row for a port another program holds, how to find it
-// or move Meko, and that running the installer again is safe.
-func portInUse(r report, port int, config string) {
-	r.step(stepFail, "Server", fmt.Sprintf("port %d is in use by another program (an AgentK from before Meko "+
-		"served it, or another)", port))
+// portInUse prints install's failed Server row for a port other programs hold, with how to find
+// the one on port, or to move Meko.
+func portInUse(r report, msg string, port int, config string) {
+	r.step(stepFail, "Server", msg)
 	find := fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port)
 	if runtime.GOOS == "linux" {
 		find = fmt.Sprintf("ss -ltnp 'sport = :%d'", port)
 	}
 	fmt.Fprintf(r.w, "\n    %s%s\n", spin.Dim("See what holds it    ", r.color), spin.Blue(find, r.color))
 	fmt.Fprintf(r.w, "    %sset [server] port in %s\n", spin.Dim("Or move Meko         ", r.color), config)
-	fmt.Fprintf(r.w, "  %s\n", spin.Dim("Nothing was left half-done: running the installer again is safe", r.color))
 }
 
 // addLater is what a first install says in place of the picker, where it can't ask.

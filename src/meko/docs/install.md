@@ -32,18 +32,29 @@ from a `main` function called on the script's last line, so a download cut short
 
 1. Checks the platform: Linux x64 or arm64, or an Apple Silicon Mac on macOS 14 or newer.
 2. Finds the newest `meko-v*` release (or `--version`). If that version is the one installed
-   (`app/current`), it prints `✓ Meko <version> is up to date` and exits 0, unless `--reinstall`.
+   (`app/current`), it prints `✓ Meko <version> is up to date` and exits 0, unless `--reinstall`,
+   or unless `app/setup-pending` names that version: `meko install`'s setup of it didn't finish
+   (below), so the installer runs it again, as a first install if the file's second line says
+   `first`.
 3. Prints its header, `◆ meko  <version> · macOS · Apple Silicon` (on an upgrade, `<installed> →
-   <version>`; on a first install, a second line: "Installs into your home folder, no sudo").
-4. Downloads `meko-<version>-<linux|darwin>-<x64|arm64>.tar.gz` and `SHA256SUMS`, and checks the
+   <version>`; on a first install, a second line: "Installs into your home folder, no sudo"; when
+   it finishes a setup, "Finishing the setup of meko <version>").
+4. Checks the disk space (`df -Pk`), unless the version is already unpacked: 600 MB free where the
+   releases go and 200 MB in `$TMPDIR`, or 800 MB when they're on one file system (a release is
+   about 150 MB downloaded and 400 MB unpacked). Short of it, a `✗ Disk` row says how much it needs
+   and has, before anything is downloaded.
+5. Downloads `meko-<version>-<linux|darwin>-<x64|arm64>.tar.gz` and `SHA256SUMS`, and checks the
    checksum: one `Download` row, with the size and the time it took. On a terminal the row shows the
    dots and the megabytes so far while curl runs in the background.
-5. Unpacks it to `~/.local/share/meko/app/<version>` (`$XDG_DATA_HOME/meko/app`), outside the data
+   A version already unpacked at `app/<version>` (by a run whose `meko install` then stopped) isn't
+   downloaded again unless `--reinstall`: its row says `already downloaded`. It's moved into place
+   whole, so a folder that's there is complete.
+6. Unpacks it to `~/.local/share/meko/app/<version>` (`$XDG_DATA_HOME/meko/app`), outside the data
    folder, clearing macOS's quarantine flag in
    case the tarball came through a browser. That takes seconds (some 400 MB unpacked), so on a
    terminal an `Install` row shows the dots meanwhile (`unpacking meko <version>`), which `meko
    install`'s own `Install` row then replaces.
-6. Runs that version's `meko install`, which prints the rest of the run on the same grid, with
+7. Runs that version's `meko install`, which prints the rest of the run on the same grid, with
    `MEKO_INSTALL_STARTED` (when the run began, for "installed in 14s"), `MEKO_INSTALL_FROM` (the
    version it replaces, on an upgrade), `MEKO_INSTALL_FIRST=1` (nothing was installed before, so the
    run ends with the extension picker) and `MEKO_INSTALL_ASK=0` with `--non-interactive` (no PATH
@@ -75,15 +86,49 @@ safe.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service. Before
   it writes anything (`app/current`, the commands, the data folder, the service), it runs the
-  service manager's checks and checks that no other program holds Meko's port (`[server] port`,
-  7777 by default; an AgentK from before Meko served it holds it): if one does, its `Server` row is
-  `✗` with how to find the program or move Meko,
-  and nothing is written, so running the installer again is safe (it would otherwise find
-  `app/current` at the new version and stop as up to date). A Meko server on that port doesn't
-  count: this data folder's, or the one the installed service runs, which installing the service
-  moves to this folder, by its port file or by its status's web UI port (a Meko from before one
-  port held 7777 for its web UI, beside 7778 in its port file). The `Server` row shows the dots until the service's server
-  answers (`started in 0.9s`, or `restarted` over a running one or an upgrade).
+  service manager's checks (a `✗ Service` row when there's no systemd user manager, or no login
+  session for launchd) and makes sure Meko's port (`[server] port`, 7777 by default) is free
+  (`pickPort`). A Meko server on that port doesn't count: this data folder's, or the one the
+  installed service runs, which installing the service moves to this folder, by its port file or by
+  its status's web UI port (a Meko from before one port held 7777 for its web UI, beside 7778 in
+  its port file). When another program holds it (an AgentK from before Meko served it is one):
+  - If nobody chose the port, install takes the first free one of the 20 after it and writes it to
+    `config.toml`'s `[server]` under the comment `# Picked by meko install: …`
+    (`config.SetPickedPort`, which keeps the rest of the file): a `! Port  7777 is in use by another
+    program · Meko uses 7778, set in ~/.meko/config.toml` row. `[server] port` is a setting every
+    release reads, so a rollback keeps it. A port install picked is nobody's choice either, so it
+    moves again if it's taken later. The agents Meko connected follow at the server's start
+    (`followPort`, [below](#the-port-the-agents-use)).
+  - If someone chose it (`MEKO_PORT`, or a `[server] port` in `config.toml` without install's
+    comment above it), or the 20 after it are taken too, the `Server` row is `✗` with how to find
+    the program or move Meko, and nothing is written.
+- It writes `app/setup-pending` (the version, and `first` on a first install) once its checks
+  pass, and removes it once the server answers (with `--no-service`, at the end). Until then,
+  running the installer again finishes the setup instead of stopping as up to date.
+- On an upgrade with a service (`app/current` is another version that's still there), it puts the
+  new version on probation as an automatic update does (`update.App.Switch`, with the database's
+  schema read without writing to it, `store.Peek`), in place of pointing `app/current` at it. A new
+  version that fails to start three times is rolled back by `serve`, its database with it
+  ([below](#updates-and-rollback)). Otherwise (a first install, or the same version again) it points
+  `app/current` at its version and clears an update on probation.
+- The `Server` row shows the dots until the service's server answers (`started in 0.9s`, or
+  `restarted` over a running one or an upgrade). It stops waiting when the server can't start
+  (`waitStarted`): once `logs/service.log`, the service's stderr, has two of `serve`'s `meko: …`
+  error lines from after the service was written (two failed starts; the service restarts it
+  every 2 s, launchd every 5 s), or after a minute. Its `✗` row gives that error, then the log's
+  last lines, `meko logs --service` and the service manager's own status command. A first install
+  stops the service, so it doesn't restart every few seconds forever, and keeps it installed:
+  `meko start` runs it once the cause is fixed. An upgrade on probation waits the full minute,
+  since `serve` rolls it back at its fourth start: when the old version answers, the rows are
+  `✗ Server  meko <new> didn't start: …` and `! Rolled back  meko <old> is running again · with its
+  data as it was`.
+- Every failure ends the same way (`installing.fail`): a `✗` row for the step, then "Nothing was
+  left half-done: running the installer again is safe" when nothing was written yet, or "Fix it,
+  then run the installer again to finish the setup" (`meko install`, run by hand), and a link to
+  the bug form unless it's a cause install explains (a taken port, the service manager). The error
+  is on the row, not again on stderr; the exit code is 1.
+- A failure is reported to call home, where the usage stats would go
+  ([below](#install-failures-to-call-home)).
 - It writes how browsers reach Meko (its access) to `web.toml` when neither it nor `config.toml` sets one:
   `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no display,
   else local), unless AgentK is on this computer, whose access the handoff takes over instead
@@ -117,6 +162,30 @@ manager doesn't start the server again mid-removal; removes the data folder and 
 (also when it's in the Keychain, outside the folder); and says the service is still installed,
 which `uninstall --purge`, removing it next, doesn't. The releases are outside the data folder, so
 the service can still start Meko on a fresh one.
+
+### The port the agents use
+
+`serve` records the port its agents were connected to (the setting `agents_port`). At a start on
+another port, because install picked a free one or someone changed `[server] port`, it moves the
+agents whose `meko` server is at exactly `http://127.0.0.1:<old port>/mcp` to this one
+(`followPort`, an exact `agents.Manager.Move`, as the move to one port does), so one pointed by hand
+at another Meko on this computer stays. It records the new port once no agent failed, so a failed
+one is tried again at the next start. The first start records its port with nothing to move.
+AgentK and Presenter read Meko's URL again when it starts. An agent session that was running keeps
+the old URL until it's restarted, and so does an MCP setup Meko didn't write.
+
+### Install failures to call home
+
+A failed `meko install` sends one report, `install_failure`, in the heartbeat's envelope
+(`internal/callhome/failure.go`): the step (`checks`, `install`, `data`, `service`, `server`), an
+error class (`service_manager`, `port_in_use`, `no_free_port`, `start_failed`, `start_timeout`,
+`rolled_back`, `error`), the version, the one an upgrade replaced, whether it's a first install,
+the platform, architecture and service manager. Never an error's text, a path or a host name. The
+install id is the database's, read without writing to it, or a random one for this report when
+there's no database yet. It goes where the usage stats go: from a release install, or to `[call_home]
+url` (`MEKO_CALL_HOME_URL`), unless `config.toml`, `MEKO_CALL_HOME`, `YB_DISABLE_CALLHOME` or the web
+UI's setting (read from the database) turned them off. It waits at most 3 s and prints nothing.
+`install.sh`'s own failures (the platform, the download, the disk) aren't sent.
 
 ## Release builds
 
@@ -593,6 +662,7 @@ A release install's app folder:
   current -> <version>       what the service runs
   service/meko               what the launchd service runs: execs current/bin/meko
   update-pending.json        an update on probation
+  setup-pending              meko install's setup of this version, until its server answers
   bad-versions               versions rolled back; never offered again
 ```
 
@@ -679,12 +749,18 @@ Changing the store doesn't move secrets: the client token is made again.
 - `scripts/install_test.go`: the installer with a fake curl: unpacking and running `meko install`
   with the `MEKO_INSTALL_*` variables, the header, "up to date", `--reinstall`, an upgrade, curl
   alone (a signed-in `gh` never run, `GITHUB_TOKEN` never sent), failed downloads, plain output off
-  a terminal, a bad checksum, AgentK's flags refused, and Intel Macs and macOS 13 refused.
+  a terminal, a bad checksum, AgentK's flags refused, Intel Macs and macOS 13 refused, too little
+  disk space, an unpacked release reused, and a pending setup finished.
 - `internal/cli/install_run_test.go` and `pick_linux_test.go`: the PATH line added once and
-  removed, a held API port failing before the service is written, the headline's elapsed time and
+  removed, a port the user chose failing before the service is written, the headline's elapsed time and
   the picker's line off a terminal, an upgrade's rows, the context engine's wait and its timeout, and
   the extension picker on a pseudo-terminal (skip, Ctrl+C, a failed install, an installed AgentK
   left out).
+- `internal/cli/install_fail_test.go`: a taken port moved to the next free one in `config.toml`, a
+  server that can't start (its error and log, the service stopped, the setup left to finish, call
+  home's report without the error's text), an upgrade on probation rolled back, a finished setup,
+  and the service manager's check; `agent_test.go`: agents following a change of port.
+  `config_test.go`: `SetPickedPort` on each shape of `config.toml`, and a chosen port refused.
 - The context engine: offline loading never downloads, for the embedder and the reranker.
 - Each release build runs `scripts/smoke-release.sh` on its own platform.
 
