@@ -94,7 +94,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       server still works with hosts back to `MIN_PROTOCOL` (a running host keeps its code across
       updates). Nothing restarts the host by itself (the home's one-time move aside), and the program
       never waits on a viewer. `serve` and `host` keep going through Meko's launcher
-      (`packaging/me_koder`: `meko _launch`), which runs an update's probation and locks the host's
+      (`packaging/me_kode`: `meko _launch`), which runs an update's probation and locks the host's
       version folder against Meko's pruning; nothing in AgentK writes Meko's update records
       (`app/update-pending.json`, `bad-versions`).
 - [ ] The prerequisites check (`scripts/deps.sh`) never installs a tool (or runs Meko's setup) without first showing what it
@@ -130,7 +130,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       description (`withoutCredentials`).
 - [ ] Nothing sent to a browser can queue in memory without limit (terminal output pauses the pty;
       state snapshots are skipped). A socket that closes abnormally (1006: Meko refused it, or closed
-      it as its web listener stopped) asks Meko about the sign-in alongside its retry, throttled.
+      it as the web UI was turned off) asks Meko about the sign-in alongside its retry, throttled.
 - [ ] The web socket and the hook socket stay owner-only (directory 0700, socket 0600; bound under a
       temporary name and renamed, `listenPrivate`), and hook events are matched by per-session token.
 - [ ] Nothing internal (hostnames, mount paths, tokens) is committed; the repo will be public.
@@ -193,7 +193,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       and the tools turned off, never opens the caller's own PR, holds the caller's own move for its
       turn's end, answers calls still running when the hook socket closes (`SessionTools.pause`), and
       leaves a `tools` event on both sessions. Only read-only tools (`readOnly` in `tooldefs.ts`) are
-      pre-allowed, and never in the user's Kiro agent; `me_koder mcp` checks nothing itself and loads
+      pre-allowed, and never in the user's Kiro agent; `me_kode mcp` checks nothing itself and loads
       nothing of the server's.
 - [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
       file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make

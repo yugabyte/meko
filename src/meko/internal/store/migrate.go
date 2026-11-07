@@ -73,7 +73,7 @@ func (s *Store) BackupPath(v int) string { return fmt.Sprintf("%s.bak-%d", s.pat
 // version. An existing database is first copied with VACUUM INTO, so a failed upgrade can be
 // rolled back; a database newer than this binary is refused. Then, once the embedding model is
 // recorded, it makes any vector table a newer migration needs (vectors.go), so they're all there
-// before the memory engine's next hello.
+// before the context engine's next hello.
 func (s *Store) Migrate(ctx context.Context) error {
 	ms, err := loadMigrations()
 	if err != nil {

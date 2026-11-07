@@ -13,7 +13,7 @@ flowchart LR
     B["Browser or installed web app"]
   end
   subgraph Host["Devserver (headless) or your Mac"]
-    MW["Meko web listener<br/>:7777, local or remote access"]
+    MW["Meko's port<br/>:7777, local or remote access"]
     S["AgentK server<br/>web.sock (unix socket)"]
     H["hook.sock<br/>unix socket"]
     T["session host<br/>own service (systemd or launchd)"]
@@ -54,7 +54,7 @@ foreground, 11 background, which the headless xterm doesn't answer) with the col
 started it with (`spawn`'s `colors`: the terminal colors a browser last reported, `Core.termTheme`;
 a host from before them ignores the field and answers none), so Claude gets one
 answer whether or not anyone is watching; the viewers' own answers are dropped (a browser's, and a
-real terminal's with `me_koder attach`). Sessions don't inherit this install's `AK_HOME`,
+real terminal's with `meko kode attach`). Sessions don't inherit this install's `AK_HOME`,
 `AK_APP_DIR` or `AK_VERSION`, so a checkout run inside one never takes them as its own. A pane counts
 as live only once its program has started. It listens only on
 `host.sock` (beside `hook.sock`, owner-only, bound under a temporary name and renamed into place),
@@ -121,12 +121,12 @@ that lost the session doesn't ask again until it shows it again, so two idle scr
 it. Screens are told apart by a page id the browser makes per page load (a reconnect keeps the
 session), and another tab of the same browser by a browser id in `localStorage`; the other screen
 is named by its browser and system from the user agent. The board lives in the server's memory:
-after a restart, the first screen to reconnect and ask gets the session. `me_koder attach`
+after a restart, the first screen to reconnect and ask gets the session. `meko kode attach`
 talks to the host directly and is not part of this: it still takes the size when used. The server
 log has each terminal socket's attach (its address and browser) and close, numbered, and one line
 per move with its reason.
 
-**From a terminal.** `me_koder attach <name>` shows a session's terminal in the one you run it
+**From a terminal.** `meko kode attach <name>` shows a session's terminal in the one you run it
 in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or just the slug; with no
 name it lists them). `Ctrl+\` detaches, and Claude keeps running.
 

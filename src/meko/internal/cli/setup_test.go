@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -108,8 +107,8 @@ func readLog(t *testing.T, path string) string {
 	return string(b)
 }
 
-// configurePort makes the data folder's servers use port: a server the fake service starts gets no
-// flags, and the test binary drops MEKO_PORT when it runs as serve.
+// configurePort makes the data folder's servers use port in config.toml, as a user would: a server
+// the fake service starts gets no flags.
 func configurePort(t *testing.T, dir, port string) {
 	t.Helper()
 	if err := os.WriteFile(paths.New(dir).Config, []byte("[server]\nport = "+port+"\n"), 0o600); err != nil {
@@ -139,7 +138,7 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 		t.Errorf("spec %+v", f.spec)
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Service:       fake, running")
+	want(t, "status", code, 0, out, "Service:        fake, running")
 
 	// An extension registered with this data folder starts and stops with Meko.
 	ext := filepath.Join(t.TempDir(), "ext")
@@ -297,7 +296,7 @@ func TestAFailingExtensionGetsAFailRow(t *testing.T) {
 	}
 	reg, _ := extensions.Load(dir)
 	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
-	reg.Entries["presenter"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "me_presenter")}
+	reg.Entries["present"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "me_present")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -328,10 +327,8 @@ func TestInstallWithoutTheWebUI(t *testing.T) {
 	}
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status", code, 0, out, "Web UI          off (meko ui start turns it on)")
-	//nolint:gosec // G704: the test's own server
-	if c, derr := net.DialTimeout("tcp", "127.0.0.1:"+os.Getenv("MEKO_WEB_PORT"), time.Second); derr == nil {
-		_ = c.Close()
-		t.Error("the web port answers after install --no-ui")
+	if got := httpCode(t, "http://127.0.0.1:"+os.Getenv("MEKO_PORT")+"/", ""); got != 404 {
+		t.Errorf("the web UI after install --no-ui: %d, want 404", got)
 	}
 
 	dir2, _ := setup(t)
@@ -385,7 +382,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 		t.Errorf("registry %+v", reg.Entries)
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Extension:     agentk, running (ext status)")
+	want(t, "status", code, 0, out, "Extension:      agentk, running (ext status)")
 	// It isn't Meko's release, so delete runs its uninstall and forgets it, and Meko leaves the
 	// command (the fake's uninstall leaves it too; AgentK's own removes its ~/.local/bin links).
 	code, out, _ = run("extension", "delete", "agentk", "--force", "--data-dir", dir)
@@ -401,7 +398,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 		t.Errorf("a command Meko didn't install was removed: %v", err)
 	}
 	code, _, errs = run("extension", "install", "frob", "--data-dir", dir)
-	want(t, "an unknown extension", code, 1, errs, "meko knows agentk, presenter")
+	want(t, "an unknown extension", code, 1, errs, "meko knows agentk, present")
 }
 
 // meko update on a Meko built from source updates no Meko, and goes on to the extensions.
@@ -435,21 +432,21 @@ func TestLogsMergesAndFormats(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(l.Log, `{"time":"2026-10-21T10:00:00Z","level":"INFO","msg":"Meko started","port":7778}
+	write(l.Log, `{"time":"2026-10-21T10:00:00Z","level":"INFO","msg":"Meko started","port":7777}
 {"time":"2026-10-21T10:00:02Z","level":"WARN","msg":"slow","path":"/mcp"}
 `)
-	write(l.MemoryEngineLog, `{"time":"2026-10-21T10:00:01Z","msg":"engine listening","embedder":{"dims":384}}
+	write(l.ContextEngineLog, `{"time":"2026-10-21T10:00:01Z","msg":"engine listening","embedder":{"dims":384}}
 a plain line
 `)
 	code, out, _ := run("logs", "--data-dir", dir, "-n", "3")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if code != 0 || len(lines) != 3 || !strings.HasPrefix(lines[0], "memory | ") ||
+	if code != 0 || len(lines) != 3 || !strings.HasPrefix(lines[0], "context | ") ||
 		!strings.Contains(lines[0], `INFO  engine listening embedder={"dims":384}`) ||
-		lines[1] != "memory | a plain line" || !strings.Contains(lines[2], "WARN  slow path=/mcp") {
+		lines[1] != "context | a plain line" || !strings.Contains(lines[2], "WARN  slow path=/mcp") {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	code, out, _ = run("logs", "--data-dir", dir, "--server", "--json")
-	if code != 0 || !strings.HasPrefix(out, `{"time":"2026-10-21T10:00:00Z"`) || strings.Contains(out, "memory |") {
+	if code != 0 || !strings.HasPrefix(out, `{"time":"2026-10-21T10:00:00Z"`) || strings.Contains(out, "context |") {
 		t.Fatalf("--server --json:\n%s", out)
 	}
 }

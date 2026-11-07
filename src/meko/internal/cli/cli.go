@@ -1,5 +1,5 @@
 // Package cli is the meko and meko-cli commands, one binary run by either name. meko runs Meko:
-// install, start, stop, restart, status, logs, update, version, token, ui, ui start|stop, cloud_link,
+// install, start, stop, restart, status, logs, update, version, token, ui, ui start|stop, cloud-link,
 // destroy, uninstall, extension list|install|update|delete, agent list|connect|disconnect (agent.go)
 // and serve. meko-cli
 // works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
@@ -35,20 +35,20 @@ const (
 	exitLocked = 75
 )
 
-// stdin is what add_memory, delete_datapack, cloud_link, destroy, uninstall --purge and extension
+// stdin is what add_memory, delete_datapack, cloud-link, destroy, uninstall --purge and extension
 // delete read; tests replace it.
 var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
 type cmdFlags struct {
-	keepExtensions, noService, noUI, purge, check, follow, force, noOpen, withExtensions bool
-	verbose                                                                              bool
-	lines                                                                                int
-	server, memoryEngine, service                                                        bool
-	access                                                                               string
-	all                                                                                  bool
-	auto, version                                                                        string
-	extra                                                                                []string // after --
+	keepExtensions, noService, noUI, purge, check, follow, force, withExtensions bool
+	verbose                                                                      bool
+	lines                                                                        int
+	server, contextEngine, service                                               bool
+	access                                                                       string
+	all                                                                          bool
+	auto, version                                                                string
+	extra                                                                        []string // after --
 }
 
 // Main runs the program argv0 names (meko-cli, or else meko) with args and returns the exit code.
@@ -132,6 +132,10 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	if cmd == "_launch" && prog == progMeko {
 		return runLaunch(rest, stderr)
 	}
+	// meko kode and meko present run an extension's own commands: all that follows is its.
+	if name, ok := extensionOfVerb(cmd); ok && prog == progMeko {
+		return runExtensionCommand(name, rest, stdout, stderr)
+	}
 	// meko extension <sub> is the command "extension <sub>", and meko agent <sub> "agent <sub>";
 	// alone, each lists its subcommands.
 	if isGroup(cmd) && prog == progMeko {
@@ -147,7 +151,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		}
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
-	// meko ui start and meko ui stop are commands of their own; meko ui alone, or with a path, opens it.
+	// meko ui start and meko ui stop are commands of their own; meko ui alone opens it.
 	if cmd == "ui" && prog == progMeko && len(rest) > 0 && (rest[0] == "start" || rest[0] == "stop") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
@@ -212,7 +216,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		if i := slices.Index(rest, "--"); i >= 0 {
 			rest, c.extra = rest[:i], rest[i+1:]
 		}
-	case "cloud_link":
+	case "cloud-link":
 		fs.StringVar(&cl.url, "url", "", "the MCP server's URL (default Meko Cloud's)")
 		fs.StringVar(&cl.webURL, "web-url", "", "its web app's URL (default: worked out from --url)")
 		fs.StringVar(&cl.apiURL, "api-url", "", "its REST API's URL (default: the web app's plus /api/v1)")
@@ -224,7 +228,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.follow, "follow", false, "follow the logs")
 		fs.IntVar(&c.lines, "n", 50, "how many lines to show")
 		fs.BoolVar(&c.server, "server", false, "only the server's log (meko.log)")
-		fs.BoolVar(&c.memoryEngine, "memory-engine", false, "only the memory engine's log (memory_engine.log)")
+		fs.BoolVar(&c.contextEngine, "context-engine", false, "only the context engine's log (context-engine.log)")
 		fs.BoolVar(&c.service, "service", false, "only the service's stderr (service.log)")
 	}
 	if cmd == "search" || cmd == "add_memory" || cmd == "upload" || cmd == "upload_status" {
@@ -244,11 +248,8 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&t.out, "o", "", "the file to write (default meko-<name>-<date>.json here)")
 		fs.BoolVar(&t.force, "force", false, "replace the file if it exists")
 	}
-	if cmd == "ui" {
-		fs.BoolVar(&c.noOpen, "no-open", false, "print the link without opening the browser")
-	}
 	if cmd == "start" || cmd == "restart" || cmd == "serve" {
-		fs.IntVar(&o.Port, "port", 0, "the agents' listener's port (MCP and API) on 127.0.0.1 (default 7778)")
+		fs.IntVar(&o.Port, "port", 0, "Meko's port, for agents, the CLI and the web UI (default 7777)")
 		fs.StringVar(&o.LogLevel, "log-level", "", "debug, info, warn or error (default info)")
 	}
 	if cmd == "serve" {
@@ -275,7 +276,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
 	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "extension install",
-		"extension update", "extension delete", "export", "ui", "agent connect", "agent disconnect":
+		"extension update", "extension delete", "export", "agent connect", "agent disconnect":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
 			if code, ok := parse(fs.Args()[1:]); !ok {
@@ -297,11 +298,11 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	cl.set = map[string]bool{}
 	fs.Visit(func(fl *flag.Flag) { cl.set[fl.Name] = true })
 	if cl.off && (cl.set["url"] || cl.set["web-url"] || cl.set["api-url"]) {
-		fmt.Fprintln(stderr, "meko cloud_link: --off takes no URLs")
+		fmt.Fprintln(stderr, "meko cloud-link: --off takes no URLs")
 		return exitUsage
 	}
 	if cl.off && cl.noBrowser {
-		fmt.Fprintln(stderr, "meko cloud_link: --off and --no-browser don't go together")
+		fmt.Fprintln(stderr, "meko cloud-link: --off and --no-browser don't go together")
 		return exitUsage
 	}
 	if cmd == "extension update" && c.all && (t.text != "" || c.auto != "") {
@@ -335,15 +336,15 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	case "agent disconnect":
 		return runAgentDisconnect(l, t.text, stdout, stderr)
 	case "logs":
-		return runLogs(l, logsOptions{follow: c.follow, lines: c.lines, server: c.server, memoryEngine: c.memoryEngine,
+		return runLogs(l, logsOptions{follow: c.follow, lines: c.lines, server: c.server, contextEngine: c.contextEngine,
 			service: c.service, json: t.json}, stdout)
 	case "ui":
-		return runUI(l, t.text, !c.noOpen, stdout, stderr)
+		return runUI(l, stdout, stderr)
 	case "ui start":
 		return runUISwitch(l, true, stdout, stderr)
 	case "ui stop":
 		return runUISwitch(l, false, stdout, stderr)
-	case "cloud_link":
+	case "cloud-link":
 		return runCloudLink(l, cl, stdin, stdout, stderr)
 	case "destroy":
 		return runDestroy(l, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdin, stdout, stderr)

@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yugabyte/meko/src/meko/internal/auth"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 )
@@ -108,7 +111,8 @@ func TestInstallRefusesAPortInUse(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+" is in use by another program\n")
+	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+
+		" is in use by another program (an AgentK from before Meko served it, or another)\n")
 	// Nothing was written before the check: no rows of the steps before it, no web.toml, no token.
 	if strings.Contains(out, "✓ Data") {
 		t.Errorf("install wrote the data folder before the port check:\n%s", out)
@@ -152,7 +156,7 @@ func TestInstallFromTheInstaller(t *testing.T) {
 	}
 }
 
-// The memory engine's row waits while the engine loads: it says how long it took once it's ready,
+// The context engine's row waits while the engine loads: it says how long it took once it's ready,
 // and that it's still loading after engineWait.
 func TestWaitEngine(t *testing.T) {
 	var calls atomic.Int32
@@ -162,7 +166,7 @@ func TestWaitEngine(t *testing.T) {
 		if calls.Add(1) > atomic.LoadInt32(&readyAfter) {
 			state = "ready"
 		}
-		_, _ = w.Write([]byte(`{"data":{"version":"1.0","port":1,"memory_engine":{"state":"` + state + `"}}}`))
+		_, _ = w.Write([]byte(`{"data":{"version":"1.0","port":1,"context_engine":{"state":"` + state + `"}}}`))
 	}))
 	defer srv.Close()
 	c := &client{base: srv.URL, http: srv.Client()}
@@ -174,7 +178,7 @@ func TestWaitEngine(t *testing.T) {
 	if err := waitEngine(c, &b); err != nil {
 		t.Fatal(err)
 	}
-	if want := "  ! Memory engine   still loading · meko status says when it's ready\n"; b.String() != want {
+	if want := "  ! Context engine  still loading · meko status says when it's ready\n"; b.String() != want {
 		t.Errorf("never ready: %q, want %q", b.String(), want)
 	}
 
@@ -185,7 +189,7 @@ func TestWaitEngine(t *testing.T) {
 	if err := waitEngine(c, &b); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(b.String(), "  ✓ Memory engine   ready in 0.") {
+	if !strings.HasPrefix(b.String(), "  ✓ Context engine  ready in 0.") {
 		t.Errorf("ready on the second ask: %q", b.String())
 	}
 }
@@ -214,5 +218,47 @@ func TestMekoHoldsItsOwnPort(t *testing.T) {
 	other := &fakeService{file: filepath.Join(t.TempDir(), "none")}
 	if mekoHolds(paths.New(dirB), other, p) {
 		t.Error("a port counted as Meko's with no service and no server for this folder")
+	}
+}
+
+// A Meko from before one port wrote its agents' port (7778) to its port file, while its web UI held
+// 7777: installing over it counts 7777 as its own, from its status, and restarts it rather than
+// refusing the port.
+func TestMekoHoldsItsOldWebPort(t *testing.T) {
+	dir, _ := setup(t)
+	l := paths.New(dir)
+	if err := l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireServeLock(l.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { releaseLock(lock) })
+	const webPortNow = 47777
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/status" || r.Header.Get("Authorization") != "Bearer admin-test-token" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"data":{"version":"old","web":{"url":"http://127.0.0.1:%d","listening":true}}}`, webPortNow)
+	}))
+	t.Cleanup(old.Close)
+	u, _ := url.Parse(old.URL)
+	if err = paths.WriteFile(l.Port, []byte(u.Port()+"\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err = auth.WriteToken(l.Token, "admin-test-token"); err != nil {
+		t.Fatal(err)
+	}
+	none := &fakeService{file: filepath.Join(t.TempDir(), "none")}
+	if !mekoHolds(l, none, webPortNow) {
+		t.Error("the old server's web port isn't counted as Meko's")
+	}
+	if p, _ := strconv.Atoi(u.Port()); !mekoHolds(l, none, p) {
+		t.Error("the old server's port file isn't counted as Meko's")
+	}
+	if mekoHolds(l, none, webPortNow+1) {
+		t.Error("another port counted as Meko's")
 	}
 }

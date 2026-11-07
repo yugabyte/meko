@@ -350,7 +350,7 @@ func TestMigrationGivesEarlierPromotionsTheirChunks(t *testing.T) {
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// The memory engine said hello on this database from before 0006, so its model is recorded;
+	// The context engine said hello on this database from before 0006, so its model is recorded;
 	// there's no kb_chunks_vec, which the store makes for 0006's chunks.
 	for k, v := range map[string]string{keyEmbedderProvider: testModel.Provider, keyEmbedderModel: testModel.Model,
 		keyEmbeddingDims: fmt.Sprint(testModel.Dims)} {
@@ -371,7 +371,7 @@ func TestMigrationGivesEarlierPromotionsTheirChunks(t *testing.T) {
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// The upgrade made kb_chunks_vec at once, with no hello: a promotion before the memory engine is
+	// The upgrade made kb_chunks_vec at once, with no hello: a promotion before the context engine is
 	// back copies its vector instead of failing on a missing table.
 	var n int
 	err := s.r.QueryRow("SELECT count(*) FROM sqlite_master WHERE name = 'kb_chunks_vec'").Scan(&n)

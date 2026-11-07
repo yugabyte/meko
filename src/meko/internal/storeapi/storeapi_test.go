@@ -87,7 +87,7 @@ func (a *api) doWith(tok, method, path string, body any, out any) (int, *envelop
 
 func (a *api) hello() {
 	a.t.Helper()
-	if code, e := a.do(http.MethodPost, "/v1/memory_engine/hello", model, nil); code != http.StatusOK {
+	if code, e := a.do(http.MethodPost, "/v1/context_engine/hello", model, nil); code != http.StatusOK {
 		a.t.Fatalf("hello: %d %v", code, e)
 	}
 }
@@ -95,7 +95,7 @@ func (a *api) hello() {
 func TestNeedsTheToken(t *testing.T) {
 	a := newAPI(t)
 	for _, tok := range []string{"", "wrong"} {
-		code, e := a.doWith(tok, http.MethodPost, "/v1/memory_engine/hello", model, nil)
+		code, e := a.doWith(tok, http.MethodPost, "/v1/context_engine/hello", model, nil)
 		if code != http.StatusUnauthorized || e.Code != "UNAUTHORIZED" {
 			t.Errorf("token %q: %d %v", tok, code, e)
 		}
@@ -115,11 +115,11 @@ func TestHello(t *testing.T) {
 		t.Errorf("hellos heard: %v", a.hellos)
 	}
 	other := store.Embedder{Provider: "test", Model: "other", Dims: 2}
-	code, e = a.do(http.MethodPost, "/v1/memory_engine/hello", other, nil)
+	code, e = a.do(http.MethodPost, "/v1/context_engine/hello", other, nil)
 	if code != http.StatusConflict || e.Code != "MODEL_CHANGED" {
 		t.Errorf("another model: %d %v", code, e)
 	}
-	code, _ = a.do(http.MethodPost, "/v1/memory_engine/hello", store.Embedder{Model: "x"}, nil)
+	code, _ = a.do(http.MethodPost, "/v1/context_engine/hello", store.Embedder{Model: "x"}, nil)
 	if code != http.StatusBadRequest {
 		t.Errorf("a hello with no dimension: %d", code)
 	}

@@ -65,7 +65,7 @@ meko agent connect             # the MCP URL and token, for any other MCP client
 The REST API takes the same token:
 
 ```sh
-curl -s http://127.0.0.1:7778/api/v1/datapacks -H "Authorization: Bearer $(meko token)"
+curl -s http://127.0.0.1:7777/api/v1/datapacks -H "Authorization: Bearer $(meko token)"
 ```
 
 ## Link to Meko Cloud
@@ -74,7 +74,7 @@ Link Meko to [Meko Cloud](https://cloud.mekodata.ai/) by signing in with your br
 API key you make there:
 
 ```sh
-meko cloud_link          # sign in with your browser, or enter a key; reads a piped key; --off unlinks
+meko cloud-link          # sign in with your browser, or enter a key; reads a piped key; --off unlinks
 ```
 
 Or use the web UI's Settings › Meko Cloud.
@@ -113,7 +113,7 @@ merged PR, and keeps each project's designs and learnings in a Meko datapack.
 Install it with:
 ```sh
 meko extension install agentk     # -- --agent claude picks its coding agent
-me_koder ui                       # opens AgentK in your browser
+meko kode ui                      # opens AgentK in your browser
 ```
 
 ## How it works
@@ -133,16 +133,16 @@ me_koder ui                       # opens AgentK in your browser
 ## Build from source
 
 You need Go 1.26 (an older `go` downloads it on first use), a C compiler, and Node 22.13 or newer
-for the memory engine and the web UI.
+for the context engine and the web UI.
 
 ```sh
 cd src/meko
-make build memory_engine web_ui  # bin/meko (and bin/meko-cli, a link to it), the memory engine and the web UI
-./bin/meko start                 # runs in the background: 127.0.0.1:7778, and the web UI on :7777
+make build context_engine web_ui  # bin/meko (and bin/meko-cli, a link to it), the context engine and the web UI
+./bin/meko start                  # runs in the background on 127.0.0.1:7777: MCP, the API and the web UI
 ```
 
 The first start downloads the embedding model (23 MB), and `meko-cli` calls fail with
-`MEMORY_ENGINE_NOT_READY` until `meko status` shows the memory engine ready. On RHEL 8, set
+`CONTEXT_ENGINE_NOT_READY` until `meko status` shows the context engine ready. On RHEL 8, set
 `CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc` before building.
 
 ## Docs and contributing

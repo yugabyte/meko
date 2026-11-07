@@ -20,7 +20,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { actionsOn, sessionActions, sessionMenuKeys, type SessionActionId } from '../sessionactions';
 import { disposeTerminal, getTerminal } from '../terminals';
-import { closingText, cx, demoReviewGate, dotState, findingsAutoOpen, idleStopped, isMac, isReviewChild, joinedPartSelected, reviewBadge, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, demoReviewGate, designPending, dotState, findingsAutoOpen, idleStopped, isMac, isReviewChild, joinedPartSelected, reviewBadge, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ContextRing, DatapackName, Dialog, Elapsed, HarnessLogo, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -248,6 +248,11 @@ export function ProjectView({
   useEffect(() => {
     if (designAt) setPanel('design');
   }, [session?.id, designAt]);
+  // And before it's written, to show AgentK at work on it: as the session comes on screen or enters Design.
+  const pendingDesign = designPending(session);
+  useEffect(() => {
+    if (pendingDesign) setPanel('design');
+  }, [pendingDesign]);
   // While a task's code review runs or its findings wait on you, show them beside its terminal as
   // the task comes on screen, and again as they come to wait on you or a new review starts.
   const findingsAt = findingsAutoOpen(session);

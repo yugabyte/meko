@@ -95,7 +95,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 		if err = m.Preflight(); err != nil {
 			return fail(stderr, err)
 		}
-		if code := checkAPIPort(l, m, home, r, stderr); code != exitOK {
+		if code := checkPort(l, m, home, r, stderr); code != exitOK {
 			return code
 		}
 	}
@@ -201,7 +201,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	return exitOK
 }
 
-// setWebAccess writes the web listener's access to web.toml (config.AddWeb) when neither it nor
+// setWebAccess writes how browsers reach Meko (its access) to web.toml (config.AddWeb) when neither it nor
 // config.toml sets one: with access, or, unless an AgentK is on this computer (whose own access Meko
 // takes over when it hands over its port), with the default AgentK had: remote over SSH or on Linux
 // with no display, local otherwise. The summary's Web UI link row says which. With noUI it turns
@@ -506,11 +506,11 @@ func installExtension(ctx context.Context, l paths.Layout, name string, o extIns
 	fmt.Fprintf(stdout, "  %s %s is installed\n", spin.Mark(spin.OK, spin.Color(stdout)), cat.Title)
 	env := extensions.CommandEnv(l.Root, cmd)
 	if err = runAttached(ctx, cmd, append([]string{"install"}, args...), env, stdin, stdout, stderr); err != nil {
-		return fmt.Errorf("%s install failed: %w", cat.Command, err)
+		return fmt.Errorf("%s failed: %w", cat.UserCommand("install"), err)
 	}
 	cmd = cat.Find(name, home, l.Root)
 	if cmd == "" {
-		return fmt.Errorf("%s was installed, but %s isn't on PATH or in ~/.local/bin", cat.Title, cat.Command)
+		return fmt.Errorf("%s was installed, but its program %s isn't there", cat.Title, cat.Command)
 	}
 	reg, err := extensions.Load(l.Root)
 	if err != nil {
@@ -542,9 +542,8 @@ func readClientToken(l paths.Layout, cfg config.Config) (string, error) {
 // installRelease installs a Managed extension from its newest release (its bad versions skipped),
 // or from the release of version, into its app folder, as Meko's own installs go: the tarball for
 // this platform checked against SHA256SUMS and its signature, unpacked, its binary checked to run
-// here, app/current pointed at it, and ~/.local/bin/<command> at app/current unless that's another
-// data folder's (its old names' links into this app folder removed). It returns the link, or
-// app/current's command when there's none.
+// here, and app/current pointed at it (the ~/.local/bin links an older Meko made into this app
+// folder removed). It returns app/current's program.
 func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name, version, home string,
 	stdout io.Writer) (string, error) {
 	cat := extensions.Known[name]
@@ -594,17 +593,8 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 	if err := app.ClearPending(); err != nil {
 		return "", err
 	}
-	if !app.MayLink(home) {
-		fmt.Fprintf(stdout, "~/.local/bin/%s runs another Meko data folder's %s, so it stays; this one is %s\n",
-			cat.Command, cat.Title, app.CurrentExe())
-		return app.CurrentExe(), nil
-	}
-	link, lerr := app.LinkCommand(home)
-	if lerr != nil {
-		return "", lerr
-	}
-	// Its command's old names (agentk before me_koder) go once the new one is there.
-	return link, cat.UnlinkOldCommands(app, home)
+	// People run it as meko <verb>: the ~/.local/bin links an older Meko made into this app folder go.
+	return app.CurrentExe(), cat.UnlinkCommands(app, home)
 }
 
 // tooOld reports whether an installed AgentK is a release from before --meko-url: its
@@ -625,7 +615,7 @@ func tooOld(cmd string) bool {
 
 // runAttached runs a command with env and stdin (the terminal, where an installer asks its
 // questions, or nil for none), until it ends or ctx does. Without a terminal it runs in a process
-// group of its own, so ending ctx stops what it started too (an installer's me_koder install).
+// group of its own, so ending ctx stops what it started too (an installer's me_kode install).
 func runAttached(ctx context.Context, name string, args, env []string, stdin io.Reader,
 	stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: an extension's own command or installer

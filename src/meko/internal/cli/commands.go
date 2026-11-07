@@ -236,21 +236,23 @@ func runStatus(l paths.Layout, o statusOptions, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// printStatusShort is status's checklist: the memory engine, the service, updates and the
+// printStatusShort is status's checklist: the context engine, the service, updates and the
 // extensions, each a row (and the Meko Cloud link, when it can't be read; otherwise it's the Cloud
 // link row), then a ● headline with the version, pid and uptime, the links, as install's summary
 // has them, and the commands to run next.
 func printStatusShort(l paths.Layout, c *client, st server.StatusReply, exts func() extensionResults,
 	stdout io.Writer) {
 	r := newReport(stdout)
-	k, text := memoryEngineStep(st.MemoryEngine)
-	r.step(k, "Memory engine", text)
+	k, text := contextEngineStep(st.ContextEngine)
+	r.step(k, "Context engine", text)
 	switch {
 	case st.Web == nil:
 	case !st.Web.Enabled:
 		r.step(stepWarn, "Web UI", webOffNote)
 	case !st.Web.Listening && st.Web.Error != "":
 		r.step(stepFail, "Web UI", "not listening: "+st.Web.Error)
+	case st.Web.Error != "":
+		r.step(stepFail, "Web UI", st.Web.Error)
 	}
 	if st.Auth == config.AuthNone {
 		r.step(stepWarn, "Auth", "none: every user and program on this machine can read and write your memories")
@@ -310,9 +312,9 @@ func printStatusShort(l paths.Layout, c *client, st server.StatusReply, exts fun
 	r.next(nextSteps(s, nextUse))
 }
 
-// memoryEngineStep is the memory engine's row: done when ready, failed when it failed, else a warning
+// contextEngineStep is the context engine's row: done when ready, failed when it failed, else a warning
 // (it's starting, or restarting).
-func memoryEngineStep(e memory.EngineStatus) (stepKind, string) {
+func contextEngineStep(e memory.EngineStatus) (stepKind, string) {
 	text := e.State
 	if e.Reason != "" {
 		text += " (" + e.Reason + ")"
@@ -365,22 +367,22 @@ func extensionState(title string, k stepKind, state, line, format string) (stepK
 // printStatusVerbose is status --verbose: everything the server and this install say.
 func printStatusVerbose(l paths.Layout, st server.StatusReply, exts func() extensionResults, stdout io.Writer) {
 	fmt.Fprintf(stdout, "Meko is running\n")
-	fmt.Fprintf(stdout, "  Agents:        http://127.0.0.1:%d/mcp (MCP and API; the CLI uses it too)\n", st.Port)
+	fmt.Fprintf(stdout, "  Agents:         http://127.0.0.1:%d/mcp (MCP and API; the CLI uses it too)\n", st.Port)
 	printWeb(stdout, st.Web)
-	fmt.Fprintf(stdout, "  Version:       %s\n", st.Version)
-	fmt.Fprintf(stdout, "  PID:           %d\n", st.PID)
-	fmt.Fprintf(stdout, "  Uptime:        %s\n", (time.Duration(st.UptimeSeconds) * time.Second).String())
-	fmt.Fprintf(stdout, "  Data:          %s\n", st.DataDir)
-	memoryEngineLine := "  Memory engine: " + st.MemoryEngine.State
-	if e := st.MemoryEngine.Embedder; e != nil && e.Model != "" {
-		memoryEngineLine += fmt.Sprintf(", %s %s (%d dims)", e.Provider, e.Model, e.Dims)
+	fmt.Fprintf(stdout, "  Version:        %s\n", st.Version)
+	fmt.Fprintf(stdout, "  PID:            %d\n", st.PID)
+	fmt.Fprintf(stdout, "  Uptime:         %s\n", (time.Duration(st.UptimeSeconds) * time.Second).String())
+	fmt.Fprintf(stdout, "  Data:           %s\n", st.DataDir)
+	contextEngineLine := "  Context engine: " + st.ContextEngine.State
+	if e := st.ContextEngine.Embedder; e != nil && e.Model != "" {
+		contextEngineLine += fmt.Sprintf(", %s %s (%d dims)", e.Provider, e.Model, e.Dims)
 	}
-	if st.MemoryEngine.Reason != "" {
-		memoryEngineLine += " (" + st.MemoryEngine.Reason + ")"
+	if st.ContextEngine.Reason != "" {
+		contextEngineLine += " (" + st.ContextEngine.Reason + ")"
 	}
-	fmt.Fprintln(stdout, memoryEngineLine)
-	if r := st.MemoryEngine.Reranker; r != nil && r.Model != "" {
-		line := fmt.Sprintf("  Reranker:      %s, %s %s", r.State, r.Provider, r.Model)
+	fmt.Fprintln(stdout, contextEngineLine)
+	if r := st.ContextEngine.Reranker; r != nil && r.Model != "" {
+		line := fmt.Sprintf("  Reranker:       %s, %s %s", r.State, r.Provider, r.Model)
 		if r.Error != "" {
 			line += " (" + r.Error + ")"
 		}
@@ -388,20 +390,20 @@ func printStatusVerbose(l paths.Layout, st server.StatusReply, exts func() exten
 	}
 	if st.Auth == config.AuthNone {
 		fmt.Fprintln(stdout,
-			"  Auth:          none (every user and program on this machine can read and write your memories)")
+			"  Auth:           none (every user and program on this machine can read and write your memories)")
 	} else {
-		fmt.Fprintln(stdout, "  Auth:          token (`meko token` prints it)")
+		fmt.Fprintln(stdout, "  Auth:           token (`meko token` prints it)")
 	}
 	if s := st.Storage; s != nil {
-		fmt.Fprintf(stdout, "  Storage:       %s of %s used (memories %s, conversations %s, knowledge %s, artifacts %s)\n",
+		fmt.Fprintf(stdout, "  Storage:        %s of %s used (memories %s, conversations %s, knowledge %s, artifacts %s)\n",
 			humanSize(s.UsedBytes), limitSize(s.LimitBytes), humanSize(s.Memories), humanSize(s.Conversations),
 			humanSize(s.Knowledge), humanSize(s.Artifacts))
 	}
 	if len(st.Children) == 0 {
-		fmt.Fprintf(stdout, "  Children:      none\n")
+		fmt.Fprintf(stdout, "  Children:       none\n")
 	}
 	for _, ch := range st.Children {
-		line := fmt.Sprintf("  Child:         %s %s, %d restarts", ch.Name, ch.State, ch.Restarts)
+		line := fmt.Sprintf("  Child:          %s %s, %d restarts", ch.Name, ch.State, ch.Restarts)
 		if ch.LastError != "" {
 			line += " (" + ch.LastError + ")"
 		}
@@ -424,7 +426,7 @@ func storageStep(s *memory.StorageStatus, linked bool) (stepKind, string, bool) 
 	case s.UsedBytes >= s.LimitBytes && linked:
 		return stepFail, "full, " + used + ": delete what you don't need, or keep larger datasets in Meko Cloud", true
 	case s.UsedBytes >= s.LimitBytes:
-		return stepFail, "full, " + used + ": delete what you don't need, or run meko cloud_link for larger datasets",
+		return stepFail, "full, " + used + ": delete what you don't need, or run meko cloud-link for larger datasets",
 			true
 	case float64(s.UsedBytes) >= storageWarnAt*float64(s.LimitBytes):
 		return stepWarn, used + " used", true
@@ -448,12 +450,12 @@ func printSetup(l paths.Layout, exts func() extensionResults, stdout io.Writer) 
 		if m.Running() {
 			state = "running"
 		}
-		fmt.Fprintf(stdout, "  Service:       %s, %s (%s)\n", m.Kind(), state, m.File())
+		fmt.Fprintf(stdout, "  Service:        %s, %s (%s)\n", m.Kind(), state, m.File())
 	} else {
-		fmt.Fprintln(stdout, "  Service:       none (meko install sets one up)")
+		fmt.Fprintln(stdout, "  Service:        none (meko install sets one up)")
 	}
 	if app, ver, ok := runningRelease(); ok {
-		line := "  Updates:       release " + ver
+		line := "  Updates:        release " + ver
 		if st, ok := update.ReadState(l.Root); ok {
 			switch {
 			case st.Error != "":
@@ -469,12 +471,12 @@ func printSetup(l paths.Layout, exts func() extensionResults, stdout io.Writer) 
 		}
 		fmt.Fprintln(stdout, line)
 	} else {
-		fmt.Fprintln(stdout, "  Updates:       none (a build from source)")
+		fmt.Fprintln(stdout, "  Updates:        none (a build from source)")
 	}
-	fmt.Fprintln(stdout, "  Meko Cloud:    "+cloudStatusLine(l))
+	fmt.Fprintln(stdout, "  Meko Cloud:     "+cloudStatusLine(l))
 	res := exts()
 	if res.err != nil {
-		fmt.Fprintf(stdout, "  Extensions:    can't read them: %v\n", res.err)
+		fmt.Fprintf(stdout, "  Extensions:     can't read them: %v\n", res.err)
 		return
 	}
 	for _, n := range res.names {
@@ -489,7 +491,7 @@ func printSetup(l paths.Layout, exts func() extensionResults, stdout io.Writer) 
 		if !s.TimedOut {
 			_, state = extensionState(extensionTitle(n), stepOK, state, s.Line, " (%s)")
 		}
-		fmt.Fprintf(stdout, "  Extension:     %s, %s\n", n, state)
+		fmt.Fprintf(stdout, "  Extension:      %s, %s\n", n, state)
 	}
 }
 
@@ -522,13 +524,13 @@ func extensionStatuses(root string) (wait func() extensionResults, stop func()) 
 }
 
 // timedOut is an extension's state when its status didn't answer in time, naming the command to
-// run by hand.
+// run by hand: meko kode status, or the registered program's for an extension Meko doesn't know.
 func (r extensionResults) timedOut(name string) string {
-	cmd := extensions.Known[name].Command
-	if cmd == "" {
-		cmd = filepath.Base(r.reg.Entries[name].Command)
+	cat, ok := extensions.Known[name]
+	if !ok {
+		cat.Command = filepath.Base(r.reg.Entries[name].Command)
 	}
-	return fmt.Sprintf("didn't answer in %s (%s status)", extensions.StatusTimeout, cmd)
+	return fmt.Sprintf("didn't answer in %s (%s)", extensions.StatusTimeout, cat.UserCommand("status"))
 }
 
 // mcpAccess is how an MCP client reaches this Meko: the MCP URL, on the running server's port or the
@@ -594,7 +596,7 @@ func runToken(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 	}
 	// web_url is where browsers find Meko's web UI and its extensions' (AgentK's at /ext/agentk/):
 	// "" while it's off ([web] enabled), when web_off says so.
-	web, off := webURL(cfg.Web), !cfg.Web.Enabled
+	web, off := webURL(cfg.Web, cfg.Server.Port), !cfg.Web.Enabled
 	if a.running {
 		if c, cerr := newClient(l); cerr == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

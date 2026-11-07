@@ -1,6 +1,6 @@
 // The app shell, once the gate (Gate.tsx) let this browser in: loads the datapacks, and shows the
-// open datapack's tab, or the Status, Extensions, Settings or Meko Cloud page, beside the sidebar (on
-// a phone, a drawer opened from the top bar).
+// open datapack's tab, or the Status, Agents, Extensions, Settings or Meko Cloud page, beside the
+// sidebar (on a phone, a drawer opened from the top bar).
 
 import { useCallback, useEffect, useState } from "react";
 import { Database, Menu } from "lucide-react";
@@ -15,7 +15,6 @@ import { DatapackHeader } from "./components/DatapackHeader";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Logo, Sidebar } from "./components/Sidebar";
 import { Button, Empty, ErrorNote, Loading } from "./components/ui";
-import { ConnectPage } from "./pages/ConnectPage";
 import { CloudContextGapsPage, ContextGapsPage } from "./pages/ContextGapsPage";
 import { ConversationsPage } from "./pages/ConversationsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
@@ -23,6 +22,7 @@ import { KnowledgePage } from "./pages/KnowledgePage";
 import { MekoCloudPage } from "./pages/MekoCloudPage";
 import { MemoriesPage } from "./pages/MemoriesPage";
 import { MetricsPage } from "./pages/MetricsPage";
+import { AgentsPage } from "./pages/AgentsPage";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { CallsPage } from "./pages/CallsPage";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -98,6 +98,10 @@ export default function App({ auth }: { auth: AuthStatus }) {
           ) : route.view === "status" ? (
             <div className={PAGE}>
               <StatusPage />
+            </div>
+          ) : route.view === "agents" ? (
+            <div className={PAGE}>
+              <AgentsPage />
             </div>
           ) : route.view === "extensions" ? (
             <div className={PAGE}>
@@ -176,7 +180,6 @@ export default function App({ auth }: { auth: AuthStatus }) {
                   <ConversationsPage datapack={current.data} conversationId={route.itemId} />
                 )}
                 {route.tab === "artifacts" && <ArtifactsPage datapack={current.data} />}
-                {route.tab === "connect" && <ConnectPage datapack={current.data} />}
               </div>
             </>
           )}

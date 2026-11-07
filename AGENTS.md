@@ -5,8 +5,8 @@ Guide for coding agents (Claude Code, OpenCode, Kiro, Codex, Cursor, and others)
 This repo is becoming **meko**: Meko, with extensions that plug into it. All of its source is
 under `src/`. Meko itself is in `src/meko`; read [src/meko/AGENTS.md](src/meko/AGENTS.md) before
 changing it. Today the repo holds two extensions: **AgentK**, in `src/extensions/agentk`, and
-**Presenter**, in `src/extensions/presenter`. Before changing anything in one, read its AGENTS.md
-([AgentK's](src/extensions/agentk/AGENTS.md), [Presenter's](src/extensions/presenter/AGENTS.md)):
+**Presenter**, in `src/extensions/present`. Before changing anything in one, read its AGENTS.md
+([AgentK's](src/extensions/agentk/AGENTS.md), [Presenter's](src/extensions/present/AGENTS.md)):
 it has the map, the invariants, the commands (run from the extension's folder) and which docs to
 keep current.
 
@@ -14,14 +14,14 @@ keep current.
 
 | Path | What it is |
 |---|---|
-| `src/meko/` | Meko: the `meko` CLI and server, a Go module of its own (`github.com/yugabyte/meko/src/meko`) with its `Makefile`, docs and CI job (`meko` in `.github/workflows/ci.yml`), its Node memory engine in `src/meko/memory_engine`, and its web UI in `src/meko/web_ui`. |
+| `src/meko/` | Meko: the `meko` CLI and server, a Go module of its own (`github.com/yugabyte/meko/src/meko`) with its `Makefile`, docs and CI job (`meko` in `.github/workflows/ci.yml`), its Node context engine in `src/meko/context_engine`, and its web UI in `src/meko/web_ui`. |
 | `src/extensions/agentk/` | AgentK: its code, tests, scripts, packaging and docs, with its own `package.json`. |
-| `src/extensions/presenter/` | Presenter: interactive, branching presentations built from datapacks. Its server, its pages (served by Meko at `/ext/presenter/`), tests and docs, with its own `package.json`. Releases on its own train, whose tarballs Meko installs and updates. |
+| `src/extensions/present/` | Presenter: interactive, branching presentations built from datapacks. Its server, its pages (served by Meko at `/ext/present/`), tests and docs, with its own `package.json`. Releases on its own train, whose tarballs Meko installs and updates. |
 | `assets/badges/` | The "meko context" badge, light and dark, that other projects' READMEs load from `main` by URL (the root README's Badges section), so the two files stay at this path, outside `src/`, and keep their names. Each is the first path of Meko's logo (`src/meko/assets/meko-logo.svg`) (the letters "meko", without "By yugabyteDB"), 13.5 px tall, then "context" outlined to paths from Inter Medium 12 px, on one baseline at y = 19.75, 10 px padding and a 6 px gap; 112×30, corners 3.5 px. Light: `#F1F3F5` fill, `#DCE0E5` border, `#121017` wordmark, `#4B5563` text. Dark: `#1C1B20`, `#34323A`, white, `#A1A1AA`. Remake them this way if the logo changes. |
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
 | `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes (Markdown only people read runs none). |
-| `scripts/release/` | The release scripts the three products share, with `--product agentk\|meko\|presenter`: the next version, the release notes (and whether to release), and pruning old releases; and `fetch-node.sh`, which downloads, checks and unpacks the Node a release bundles, with retries. |
-| `.github/` | CI (`ci.yml`: a job per component, in `src/extensions/agentk`, `src/extensions/presenter` or `src/meko`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the three release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release; `presenter-release.yml` for Presenter, tags `presenter-v…`; each signs its `SHA256SUMS` with the key in the `release` environment, which only `main` can use, and Meko refuses a release whose signature doesn't verify: `src/meko/docs/install.md`), Dependabot, and the issue forms (`ISSUE_TEMPLATE/`: bug, feature and task; blank issues are off, and `config.yml` links "Report a vulnerability" to `SECURITY.md`). |
+| `scripts/release/` | The release scripts the three products share, with `--product agentk\|meko\|present`: the next version, the release notes (and whether to release), and pruning old releases; and `fetch-node.sh`, which downloads, checks and unpacks the Node a release bundles, with retries. |
+| `.github/` | CI (`ci.yml`: a job per component, in `src/extensions/agentk`, `src/extensions/present` or `src/meko`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the three release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release; `present-release.yml` for Presenter, tags `present-v…`; each signs its `SHA256SUMS` with the key in the `release` environment, which only `main` can use, and Meko refuses a release whose signature doesn't verify: `src/meko/docs/install.md`), Dependabot, and the issue forms (`ISSUE_TEMPLATE/`: bug, feature and task; blank issues are off, and `config.yml` links "Report a vulnerability" to `SECURITY.md`). |
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
 | `.claude/skills/issue/` | The issue skill: how to write, file and edit GitHub issues here, with the forms' sections, types and labels. |
 | `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` | The repo's README (Meko: what it is, installing and building it, its main commands, and AgentK), how to contribute (with AgentK, or any coding agent starting from this file, and the rules), how to report a vulnerability (privately, never in an issue), and the license for everything in it. Every command is in `src/meko/docs/cli.md`. AgentK's README is `src/extensions/agentk/README.md`. |
@@ -31,7 +31,7 @@ keep current.
 
 - **Commits and PR titles** are `<type>(<component>[/<area>])[!]: <summary>` with one of nine
   types and one of the repo's components: `agentk` (`src/extensions/agentk`), `meko` (Meko, in
-  `src/meko`), `presenter` (`src/extensions/presenter`) or `repo` (the shared root), e.g.
+  `src/meko`), `present` (`src/extensions/present`) or `repo` (the shared root), e.g.
   `fix(agentk/web): …`. A change that ships in more than one names each, comma-separated, and
   releases each product it names: `feat(agentk,meko): …`. They're
   checked by `sh scripts/check-title.sh "<title>"` and the `PR title` workflow. Follow the commit
@@ -56,10 +56,10 @@ keep current.
   wrong and what to run next. Nothing should be readable two ways.
 - **Issues** follow the issue skill (`.claude/skills/issue/SKILL.md`): the issue forms'
   sections, a type (`Bug`, `Feature` or `Task`), the `bug` or `enhancement` label, and a product
-  label (`meko`, `agentk`, `presenter`) for each product the issue is about.
+  label (`meko`, `agentk`, `present`) for each product the issue is about.
 - **Keep the docs current** in the same commit as the code, and check the change against the
   REVIEW.md of the part you changed (`src/extensions/agentk/REVIEW.md` for AgentK,
-  `src/meko/REVIEW.md` for Meko, `src/extensions/presenter/REVIEW.md` for Presenter).
+  `src/meko/REVIEW.md` for Meko, `src/extensions/present/REVIEW.md` for Presenter).
 - **The repo is public**: no internal hostnames, mount paths, tokens or keys in code, docs,
   tests or commit messages.
 - **No secrets or personal data (PII)** in anything the repo or its pages on GitHub keep: code,

@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
 	"github.com/yugabyte/meko/src/meko/internal/store"
 )
 
@@ -158,7 +158,7 @@ func memoryID(a args) (string, error) {
 // serviceError turns the service's errors into the tool errors Meko Cloud returns for them; any
 // other error is left for the caller to report as a failure.
 func serviceError(err error) error {
-	var notReady *memoryengine.NotReadyError
+	var notReady *contextengine.NotReadyError
 	switch {
 	case err == nil:
 		return nil
@@ -168,8 +168,8 @@ func serviceError(err error) error {
 		return fail("agent_id_mismatch", "The conversation belongs to another agent. Use the agent_id that created it.")
 	case errors.Is(err, memory.ErrNoConversation):
 		return fail("not_found", "Conversation not found")
-	case errors.Is(err, memoryengine.ErrUnavailable), errors.As(err, &notReady):
-		return fail("memory_engine_unavailable", err.Error())
+	case errors.Is(err, contextengine.ErrUnavailable), errors.As(err, &notReady):
+		return fail("context_engine_unavailable", err.Error())
 	case errors.Is(err, memory.ErrBadRequest):
 		return fail("bad_request", strings.TrimPrefix(err.Error(), memory.ErrBadRequest.Error()+": "))
 	case errors.Is(err, memory.ErrStorageFull):

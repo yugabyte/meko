@@ -13,7 +13,7 @@ import { cx } from "./ui";
 const page = { tab: "overview" as const, view: "extensions" as const };
 
 // The extensions whose logo is in public/ as <name>-logo.png.
-const LOGOS = new Set(["agentk", "presenter"]);
+const LOGOS = new Set(["agentk", "present"]);
 
 export function ExtensionIcon({ name, className }: { name: string; className?: string }) {
   // The known extensions' logos ship with this UI, so they show while an extension is stopped or

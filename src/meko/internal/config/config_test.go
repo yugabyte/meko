@@ -21,7 +21,7 @@ func TestLoadPrecedence(t *testing.T) {
 		wantPort  int
 		wantLevel string
 	}{
-		{name: "defaults", wantPort: 7778, wantLevel: "info"},
+		{name: "defaults", wantPort: 7777, wantLevel: "info"},
 		{name: "file", file: "[server]\nport = 9001\n[log]\nlevel = \"debug\"\n", wantPort: 9001, wantLevel: "debug"},
 		{
 			name: "env over file", file: "[server]\nport = 9001\n",
@@ -71,8 +71,11 @@ func TestLoadErrors(t *testing.T) {
 		{name: "unknown auth mode", file: "[server]\nauth = \"nnone\"\n", want: []string{`server.auth "nnone"`}},
 		{name: "unknown auth mode in env", env: map[string]string{"MEKO_AUTH": "off"}, want: []string{`"off"`}},
 		{name: "unknown web access", file: "[web]\naccess = \"public\"\n", want: []string{`web.access "public"`}},
-		{name: "web port out of range", env: map[string]string{"MEKO_WEB_PORT": "0"}, want: []string{"web.port 0"}},
-		{name: "both listeners on one port", file: "[web]\nport = 7778\n", want: []string{"both 7778"}},
+		// Meko has one port: the web listener's old setting is refused, saying where it went.
+		{name: "web port in the file", file: "[web]\nport = 8443\n",
+			want: []string{"config.toml", "[web] port is gone", "[server] port"}},
+		{name: "web port in env", env: map[string]string{"MEKO_WEB_PORT": "9443"},
+			want: []string{"MEKO_WEB_PORT", "[server] port"}},
 		{name: "a cert without its key", file: "[tls]\ncert = \"/c.pem\"\n", want: []string{"tls.cert and tls.key"}},
 	}
 	for _, tc := range cases {
@@ -96,20 +99,28 @@ func TestLoadErrors(t *testing.T) {
 	}
 }
 
-func TestMemoryEngineSettings(t *testing.T) {
+func TestContextEngineSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	toml := "[memory_engine]\nnode = \"/file/node\"\ndir = \"/file/memory_engine\"\n"
+	toml := "[context_engine]\nnode = \"/file/node\"\ndir = \"/file/context_engine\"\n"
 	if err := os.WriteFile(path, []byte(toml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.MemoryEngine.Node != "/file/node" || c.MemoryEngine.Dir != "/file/memory_engine" {
-		t.Fatalf("from the file: %+v %v", c.MemoryEngine, err)
+	if err != nil || c.ContextEngine.Node != "/file/node" || c.ContextEngine.Dir != "/file/context_engine" {
+		t.Fatalf("from the file: %+v %v", c.ContextEngine, err)
 	}
-	env := map[string]string{"MEKO_NODE": "/env/node", "MEKO_MEMORY_ENGINE_DIR": "/env/memory_engine"}
+	env := map[string]string{"MEKO_NODE": "/env/node", "MEKO_CONTEXT_ENGINE_DIR": "/env/context_engine"}
 	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
-	if err != nil || c.MemoryEngine.Node != "/env/node" || c.MemoryEngine.Dir != "/env/memory_engine" {
-		t.Fatalf("env over the file: %+v %v", c.MemoryEngine, err)
+	if err != nil || c.ContextEngine.Node != "/env/node" || c.ContextEngine.Dir != "/env/context_engine" {
+		t.Fatalf("env over the file: %+v %v", c.ContextEngine, err)
+	}
+	// The table's name from before the rename is an unknown setting like any other.
+	if err = os.WriteFile(path, []byte("[memory_engine]\nnode = \"/file/node\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Load(path, func(string) string { return "" }, Overrides{}); err == nil ||
+		!strings.Contains(err.Error(), "unknown setting memory_engine") {
+		t.Fatalf("[memory_engine]: %v", err)
 	}
 }
 
@@ -284,21 +295,41 @@ func TestCallHomeSettings(t *testing.T) {
 func TestWebSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	c, err := Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.Web != (Web{Port: 7777, Access: AccessLocal, Enabled: true}) {
-		t.Fatalf("defaults: %+v %v", c.Web, err)
+	if err != nil || c.Web != (Web{Access: AccessLocal, Enabled: true}) || c.Server.Port != 7777 {
+		t.Fatalf("defaults: %+v %d %v", c.Web, c.Server.Port, err)
 	}
-	file := "[web]\nport = 8443\naccess = \"remote\"\nname = \"dev.example.com\"\n"
+	file := "[web]\naccess = \"remote\"\nname = \"dev.example.com\"\n"
 	if err = os.WriteFile(path, []byte(file), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, err = Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.Web != (Web{Port: 8443, Access: AccessRemote, Name: "dev.example.com", Enabled: true}) {
+	if err != nil || c.Web != (Web{Access: AccessRemote, Name: "dev.example.com", Enabled: true}) {
 		t.Fatalf("from the file: %+v %v", c.Web, err)
 	}
-	env := map[string]string{"MEKO_WEB_PORT": "9443", "MEKO_WEB_ACCESS": "local"}
+	env := map[string]string{"MEKO_WEB_ACCESS": "local"}
 	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
-	if err != nil || c.Web.Port != 9443 || c.Web.Access != AccessLocal {
+	if err != nil || c.Web.Access != AccessLocal {
 		t.Fatalf("env over the file: %+v %v", c.Web, err)
+	}
+}
+
+// A port an older Meko wrote to web.toml (from install or the handoff) is ignored, not refused:
+// the user never chose it there, and Meko's port is [server] port. The next write drops it.
+func TestWebFileOldPort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(WebFile(path), []byte("[web]\nport = 8443\naccess = \"remote\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Server.Port != 7777 || c.Web.Access != AccessRemote {
+		t.Fatalf("with web.toml's old port: %d %+v %v", c.Server.Port, c.Web, err)
+	}
+	if err = SetWebEnabled(path, false); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(WebFile(path))
+	if strings.Contains(string(b), "port") || !strings.Contains(string(b), `access = "remote"`) {
+		t.Fatalf("web.toml after a write: %q", b)
 	}
 }
 
@@ -309,7 +340,7 @@ func TestAddWeb(t *testing.T) {
 	if err := os.WriteFile(path, []byte(mine), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wrote, err := AddWeb(path, Web{Port: 7777, Access: AccessRemote}, TLS{Cert: "/a/c.pem", Key: "/a/k.pem"})
+	wrote, err := AddWeb(path, Web{Access: AccessRemote}, TLS{Cert: "/a/c.pem", Key: "/a/k.pem"})
 	if err != nil || !wrote {
 		t.Fatalf("first add: %v %v", wrote, err)
 	}
@@ -333,12 +364,11 @@ func TestAddWeb(t *testing.T) {
 	if err = os.WriteFile(path, []byte(mine+"[web]\naccess = \"local\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if c, err = Load(path, func(string) string { return "" }, Overrides{}); err != nil || c.Web.Access != AccessLocal ||
-		c.Web.Port != 7777 {
+	if c, err = Load(path, func(string) string { return "" }, Overrides{}); err != nil || c.Web.Access != AccessLocal {
 		t.Fatalf("config.toml over web.toml: %+v %v", c.Web, err)
 	}
 	fresh := filepath.Join(t.TempDir(), "config.toml")
-	if err = os.WriteFile(fresh, []byte("[web]\nport = 8000\n"), 0o600); err != nil {
+	if err = os.WriteFile(fresh, []byte("[web]\nname = \"dev.example.com\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if wrote, err = AddWeb(fresh, Web{Access: AccessRemote}, TLS{}); err != nil || wrote {

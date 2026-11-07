@@ -80,11 +80,11 @@ type Install struct {
 	Auth     string `json:"auth"`    // token or none
 	Secrets  string `json:"secrets"` // keychain or file
 	Update   Update `json:"update"`
-	// MemoryEngine is the memory engine's own state when it answers (loading, ready or error), else
+	// ContextEngine is the context engine's own state when it answers (loading, ready or error), else
 	// the server's view of it (starting, restarting, failed, or unavailable when it can't start).
-	MemoryEngine string          `json:"memoryEngine"`
-	Extensions   map[string]bool `json:"extensions"` // the known extensions, installed or not
-	FirstDay     string          `json:"firstDay"`   // the UTC day of the first report
+	ContextEngine string          `json:"contextEngine"`
+	Extensions    map[string]bool `json:"extensions"` // the known extensions, installed or not
+	FirstDay      string          `json:"firstDay"`   // the UTC day of the first report
 }
 
 // Update is the install's update settings.

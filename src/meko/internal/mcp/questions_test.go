@@ -7,8 +7,8 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
 	"github.com/yugabyte/meko/src/meko/internal/testenv"
 )
 
@@ -86,10 +86,10 @@ func TestAnswerQuality(t *testing.T) {
 	}
 }
 
-func mems(scores ...*float64) []memoryengine.Memory {
-	out := make([]memoryengine.Memory, len(scores))
+func mems(scores ...*float64) []contextengine.Memory {
+	out := make([]contextengine.Memory, len(scores))
 	for i, sc := range scores {
-		out[i] = memoryengine.Memory{ID: "m", Score: sc}
+		out[i] = contextengine.Memory{ID: "m", Score: sc}
 	}
 	return out
 }

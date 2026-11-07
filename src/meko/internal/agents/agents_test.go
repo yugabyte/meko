@@ -33,7 +33,7 @@ func TestMain(m *testing.M) {
 const (
 	token    = "test-token-0123456789"
 	cloudKey = "mko_tkn_cloud_0123456789wxyz"
-	localURL = "http://127.0.0.1:7778/mcp"
+	localURL = "http://127.0.0.1:7777/mcp"
 	cloudURL = "https://cloud.example.com/mcp"
 	otherURL = "https://meko.example.com/mcp"
 )
@@ -772,7 +772,7 @@ model = "o3"
 command = "git-mcp"
 
 [mcp_servers.meko]
-url = "http://127.0.0.1:7778/mcp"
+url = "http://127.0.0.1:7777/mcp"
 http_headers = { Authorization = "Bearer ` + token + `" }
 `
 	if got := read(t, path); got != w {
@@ -959,6 +959,29 @@ func TestMove(t *testing.T) {
 	}
 	if strings.Contains(read(t, kiro), "mko_tkn") || !strings.Contains(read(t, kiro), "Bearer "+token) {
 		t.Errorf("kiro after unlinking: %s", read(t, kiro))
+	}
+}
+
+// A move from an exact target takes only the agents at its URL: Meko's old agents' listener, when
+// Meko moved to one port. One at another Meko on this computer is left as it is.
+func TestMoveFromExactURL(t *testing.T) {
+	home, _ := fakeAgents(t, false)
+	kiro := filepath.Join(home, ".kiro", "settings", "mcp.json")
+	codex := filepath.Join(home, ".codex", "config.toml")
+	const old, another = "http://127.0.0.1:7778/mcp", "http://127.0.0.1:7790/mcp"
+	write(t, kiro, `{"mcpServers": {"meko": `+entry(old, token)+`}}`)
+	write(t, codex, "[mcp_servers.meko]\nurl = \""+another+"\"\n")
+	m := &Manager{Lock: filepath.Join(t.TempDir(), "agents.lock")}
+	mv := m.Move(context.Background(), Target{Kind: KindLocal, URL: old, Token: token, Exact: true}, local)
+	if len(mv.Moved) != 1 || mv.Moved[0].Name != "kiro" || len(mv.Left) != 1 || mv.Left[0].Name != "codex" ||
+		len(mv.Failed) != 0 {
+		t.Fatalf("move: %+v", mv)
+	}
+	if s := readKiroDoc(t, kiro).MCPServers["meko"]; s.URL != localURL {
+		t.Errorf("kiro: %+v", s)
+	}
+	if !strings.Contains(read(t, codex), another) {
+		t.Errorf("codex was moved: %s", read(t, codex))
 	}
 }
 

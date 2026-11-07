@@ -63,7 +63,7 @@ func agentsServer(t *testing.T, web bool, target agents.Target) string {
 // token: a client token gets 403 OWNER_ONLY. No reply holds the token.
 func TestAgentsOnTheAPIListener(t *testing.T) {
 	home := agentsHome(t)
-	local := agents.Target{Kind: agents.KindLocal, URL: "http://127.0.0.1:7778/mcp", Token: "agents-token-0123456789"}
+	local := agents.Target{Kind: agents.KindLocal, URL: "http://127.0.0.1:7777/mcp", Token: "agents-token-0123456789"}
 	base := agentsServer(t, false, local)
 	client := map[string]string{"Authorization": "Bearer " + clientToken}
 	admin := map[string]string{"Authorization": "Bearer " + token}

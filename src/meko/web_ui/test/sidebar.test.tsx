@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
-// The sidebar's datapacks against a faked /api/v1: one list, each row opened where its web_url says
-// (this UI's pages, Meko Cloud's web app in a new tab, or nowhere), with no location in any request.
+// The sidebar against a faked /api/v1: its top links, and its datapacks, one list, each row opened
+// where its web_url says (this UI's pages, Meko Cloud's web app in a new tab, or nowhere), with no
+// location in any request.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 import { Sidebar } from "../src/components/Sidebar";
 import { ApiError } from "../src/lib/api";
+import type { Route } from "../src/lib/route";
 import type { Datapack } from "../src/lib/types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -28,6 +30,8 @@ const ROWS = [
 
 let root: Root;
 let urls: string[];
+// What /api/v1/server answers, when a test sets it; otherwise it's a 404 like anything else.
+let serverReply: object | null = null;
 
 // Meko's replies: the link's state, a create's (made where createdURL says), and a 404 for anything
 // else the sidebar asks.
@@ -38,6 +42,7 @@ function serve(linked: boolean, createdURL: string | null = null) {
     vi.fn(async (url: string, init?: RequestInit) => {
       urls.push(url);
       if (url === "/api/v1/settings/meko-cloud") return Response.json({ data: { linked }, error: null });
+      if (url === "/api/v1/server" && serverReply) return Response.json({ data: serverReply, error: null });
       if (url === "/api/v1/datapacks" && init?.method === "POST") {
         return Response.json({ data: { datapack_id: CLOUD, name: "research", web_url: createdURL }, error: null },
           { status: 201 });
@@ -54,6 +59,7 @@ async function render(
     linked?: boolean;
     createdURL?: string | null;
     onCreated?: (id: string, open: boolean) => void;
+    view?: Route["view"];
   } = {},
 ) {
   serve(props.linked ?? true, props.createdURL ?? null);
@@ -69,7 +75,7 @@ async function render(
         loading={false}
         error={props.error}
         onRefresh={() => {}}
-        view={undefined}
+        view={props.view}
         theme="light"
         onToggleTheme={() => {}}
         onCreated={props.onCreated ?? (() => {})}
@@ -85,10 +91,29 @@ function link(name: string): HTMLElement {
 }
 
 afterEach(() => {
+  serverReply = null;
   act(() => root.unmount());
   document.body.innerHTML = "";
   history.replaceState(null, "", "/");
   vi.unstubAllGlobals();
+});
+
+// The Status link's dot: the context engine's state, or grey when the server doesn't say, as one of
+// another version doesn't (an older one called it memory_engine), without taking the sidebar down.
+test("the Status dot shows the context engine's state, and grey when the server has none", async () => {
+  const server = { version: "1.0", pid: 7, port: 7778, data_dir: "~/.meko", started_at: "", uptime_seconds: 1,
+    auth: "token", children: [] };
+  serverReply = { ...server, context_engine: { state: "ready" } };
+  await render();
+  const dot = () =>
+    [...document.querySelectorAll("a")].find((a) => a.textContent === "Status")?.querySelector("span[title]")
+      ?.getAttribute("title");
+  expect(dot()).toBe("Context engine: ready");
+  act(() => root.unmount());
+  serverReply = { ...server, memory_engine: { state: "ready" } };
+  await render();
+  expect(dot()).toBe("Status unknown");
+  expect(link("alpha").getAttribute("href")).toBe(`/datapacks/${HERE}/overview`);
 });
 
 test("a row served here opens this UI's page", async () => {
@@ -189,4 +214,14 @@ test("Settings is a gear at the foot of the sidebar, not a row in the top links"
   expect(gear.closest(".border-t")).not.toBeNull();
   expect(gear.textContent).toBe("");
   expect(document.querySelectorAll('a[href="/settings"]')).toHaveLength(1);
+});
+
+test("Agents is a top link under Status, above Extensions, opening the Agents page", async () => {
+  await render({ view: "agents" });
+  const top = [...document.querySelectorAll<HTMLAnchorElement>("aside a")].map((a) => a.getAttribute("href"));
+  expect(top.indexOf("/status")).toBe(top.indexOf("/agents") - 1);
+  expect(top.indexOf("/agents")).toBeLessThan(top.indexOf("/extensions"));
+  const agents = document.querySelector<HTMLAnchorElement>('aside a[href="/agents"]')!;
+  expect(agents.textContent).toBe("Agents");
+  expect(agents.getAttribute("aria-current")).toBe("page");
 });

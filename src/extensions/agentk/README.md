@@ -73,7 +73,7 @@ Setup offers to install anything missing and prints the address to open. A new i
 the AgentK tour. Updates install by themselves.
 
 To share projects with your team, link Meko to Meko Cloud: Settings › Meko Cloud in Meko's web UI,
-or `meko cloud_link`.
+or `meko cloud-link`.
 
 AgentK has no login. With Meko's remote access (the default over SSH), anyone who can reach port
 7777 can open it and its terminals.
@@ -84,10 +84,10 @@ AgentK has no login. With Meko's remote access (the default over SSH), anyone wh
 
 | Command | What it does |
 |---|---|
-| `me_koder ui` | Open AgentK in your browser |
-| `me_koder status` | Show whether AgentK is running, and its address |
-| `me_koder attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches) |
-| `me_koder logs -f` | Follow the server log |
+| `meko kode ui` | Open AgentK in your browser |
+| `meko kode status` | Show whether AgentK is running, and its address |
+| `meko kode attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches) |
+| `meko kode logs -f` | Follow the server log |
 
 [All commands](docs/install.md#commands)
 

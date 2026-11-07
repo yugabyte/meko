@@ -25,8 +25,8 @@ import (
 // location: the datapack's id decides. The server calls Meko Cloud with the link's key, which never
 // leaves it.
 
-// owner says whether the request is the owner's: the admin token (meko-cli) or a browser on the web
-// listener (local or remote access), not an agent's client token. The owner's settings and a create
+// owner says whether the request is the owner's: the admin token (meko-cli) or a browser (local or
+// remote access), not an agent's client token. The owner's settings and a create
 // in the linked Meko Cloud take it; a client creates one through /mcp.
 func (a *api) owner(c echo.Context) bool {
 	switch a.Credential(c) {
@@ -66,7 +66,7 @@ func (a *api) staleTab(c echo.Context) bool {
 	return a.browser(c) && c.QueryParam("location") == "local"
 }
 
-// browser says whether the request is a browser's on the web listener (local or remote access).
+// browser says whether the request is a browser's (local or remote access).
 func (a *api) browser(c echo.Context) bool {
 	switch a.Credential(c) {
 	case "remote", "local":
@@ -89,7 +89,7 @@ func notLinkedOr(c echo.Context, err error) error {
 		return err
 	}
 	return envelope.Fail(c, http.StatusConflict, cloudlink.CodeNotLinked,
-		"This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link.")
+		"This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud-link.")
 }
 
 // byID serves a route that takes a datapack in the path and that Meko Cloud's REST API has too: h for
@@ -236,7 +236,7 @@ var restConversation = func() string {
 // "detail"}) by its code. A missing datapack (datapack_access_denied, not_found) is a 404 NOT_FOUND,
 // as on every route. A code ending in _failed is the tool's own failure (its failCode, Meko Cloud's
 // as Meko's), a 500 here, whose cause the server's log has, or a 502 CLOUD_CALL_FAILED from Meko
-// Cloud; memory_engine_unavailable is a 503, and storage_limit_exceeded the 402 every route answers
+// Cloud; context_engine_unavailable is a 503, and storage_limit_exceeded the 402 every route answers
 // past the storage limit. Any other is a 400 with the tool's code.
 func toolReply(c echo.Context, name, text string, cloud bool) error {
 	var e struct {
@@ -255,7 +255,7 @@ func toolReply(c echo.Context, name, text string, cloud bool) error {
 			"Meko Cloud's "+name+" failed: "+strings.TrimSuffix(e.Detail, ".")+".")
 	case strings.HasSuffix(code, "_failed"):
 		return envelope.Fail(c, http.StatusInternalServerError, "INTERNAL_ERROR", e.Detail)
-	case code == "memory_engine_unavailable":
+	case code == "context_engine_unavailable":
 		return envelope.Fail(c, http.StatusServiceUnavailable, code, e.Detail)
 	case code == "storage_limit_exceeded":
 		return envelope.Fail(c, http.StatusPaymentRequired, "STORAGE_LIMIT_EXCEEDED", e.Detail)

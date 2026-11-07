@@ -30,7 +30,7 @@ func TestStorageStep(t *testing.T) {
 		{name: "just under 90%", s: at(limit*9/10 - 1)},
 		{name: "90%", s: at(limit * 9 / 10), show: true, kind: stepWarn, text: "180.0 MB of 200 MB used"},
 		{name: "full", s: at(limit), show: true, kind: stepFail,
-			text: "full, 200.0 MB of 200 MB: delete what you don't need, or run meko cloud_link for larger datasets"},
+			text: "full, 200.0 MB of 200 MB: delete what you don't need, or run meko cloud-link for larger datasets"},
 		{name: "full and linked", s: at(limit + 5<<20), linked: true, show: true, kind: stepFail,
 			text: "full, 205.0 MB of 200 MB: delete what you don't need, or keep larger datasets in Meko Cloud"},
 	} {
@@ -47,7 +47,7 @@ func TestStorageStep(t *testing.T) {
 // [storage] max_content_mb in config.toml is the running server's limit: status says it, and a
 // write past it is refused with what to do.
 func TestStorageLimitFromConfig(t *testing.T) {
-	withMemoryEngine(t)
+	withContextEngine(t)
 	dir, port := setup(t)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

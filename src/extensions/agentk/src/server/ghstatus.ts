@@ -52,7 +52,7 @@ export function ghNeededMessage(what: string, state: GhState, noPath = isLoginPa
   if (state === 'unknown') return `${what} needs gh, which didn't answer in time: try again.`;
   if (noPath) {
     const allow = process.platform === 'darwin' ? ' If macOS asked whether meko may open a folder, allow it (System Settings › Privacy & Security › Files and Folders).' : '';
-    return `${what} needs gh, and AgentK can't find it because it couldn't read PATH from your login shell when it started.${allow} Then run me_koder restart, or install gh from AgentK.`;
+    return `${what} needs gh, and AgentK can't find it because it couldn't read PATH from your login shell when it started.${allow} Then run meko kode restart, or install gh from AgentK.`;
   }
   return `${what} needs gh, GitHub's command-line tool, which isn't installed: install it from AgentK, or from https://cli.github.com.`;
 }

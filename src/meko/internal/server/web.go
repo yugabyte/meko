@@ -19,12 +19,14 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/update"
 )
 
-// Web makes a Server the web listener: the port browsers use, for Meko's web UI and its extensions'
-// at /ext/<name>/. It takes no Bearer token and has no login: with local access it takes requests
-// from this computer (LocalAccess), and with remote access any browser's that another site's page
-// didn't send (SameSite).
+// Web lets browsers into a Server, for Meko's web UI and its extensions' at /ext/<name>/, with no
+// login: over plain HTTP, requests from this computer (LocalAccess); over TLS (remote access), any
+// browser's that another site's page didn't send (SameSite).
 type Web struct {
 	Access string // config.AccessLocal or config.AccessRemote
+	// Off keeps browsers out ([web] enabled = false, meko ui stop): the web UI and the extensions'
+	// answer 404, and only tokens get in.
+	Off bool
 	// Extensions are the extensions served at /ext/<name>/, read at each request.
 	Extensions func() []*extproxy.Proxy
 	// Installed names the registered extensions (extensions.json), read at each request; nil means
@@ -61,7 +63,7 @@ func (s *Server) proxy(name string) *extproxy.Proxy {
 	return nil
 }
 
-// The web listener's routes its credential check knows by name.
+// The browsers' routes the credential check knows by name.
 const (
 	authStatusRoute = "/api/v1/auth/status"
 	extRootRoute    = "/ext/:name"
@@ -70,52 +72,64 @@ const (
 
 func (s *Server) registerWeb(v1 *echo.Group) {
 	v1.GET("/auth/status", s.authStatus)
-	v1.GET("/extensions", s.extensionList)
-	v1.POST("/extensions/:name/:action", s.extensionAction)
-	v1.PATCH("/extensions/:name", s.extensionPatch)
-	v1.GET("/update", s.updateStatus)
-	v1.POST("/update/check", s.updateCheck)
-	v1.POST("/update/apply", s.updateApply)
-	s.registerCloud(v1)
+	v1.GET("/extensions", s.extensionList, ownerOnly)
+	v1.POST("/extensions/:name/:action", s.extensionAction, ownerOnly)
+	v1.PATCH("/extensions/:name", s.extensionPatch, ownerOnly)
+	v1.GET("/update", s.updateStatus, ownerOnly)
+	v1.POST("/update/check", s.updateCheck, ownerOnly)
+	v1.POST("/update/apply", s.updateApply, ownerOnly)
 	s.registerCloudSignIn(v1)
 	s.e.Any(extRootRoute, s.extensionRoot)
 	s.e.Any(extRoute, s.extension)
 }
 
-// requireBrowser is the web listener's credential check, keyed on the matched route as
-// requireToken is: with local access, a request from this computer (LocalAccess); with remote
-// access, any request another site's page didn't send (SameSite).
-func (s *Server) requireBrowser(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		switch c.Path() {
-		case "/healthz", authStatusRoute, uiRoute, extRootRoute:
-			return next(c)
-		case uploadRoute, downloadRoute:
-			c.Set(credentialKey, CredentialTicket)
-			return next(c)
-		}
-		r := c.Request()
-		if s.opts.Web.Access == config.AccessRemote {
-			if !SameSite(r) {
-				return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN", "Only Meko's own pages may call it.")
-			}
-			c.Set(credentialKey, CredentialRemote)
-			return next(c)
-		}
-		if s.local(c) {
-			c.Set(credentialKey, CredentialLocal)
-			return next(c)
-		}
-		return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
-			"Local access takes only requests made on this computer, straight to Meko.")
+// browser is the credential a browser's request gets, or "" for none: over plain HTTP (only ever
+// from this computer), a request from this computer (LocalAccess); over TLS, which only remote
+// access serves, any request another site's page didn't send (SameSite). With the web UI off, none.
+func (s *Server) browser(r *http.Request) string {
+	switch {
+	case s.opts.Web == nil || s.opts.Web.Off:
+		return ""
+	case r.TLS != nil && s.opts.Web.Access == config.AccessRemote && SameSite(r):
+		return CredentialRemote
+	case r.TLS == nil && LocalAccess(r):
+		return CredentialLocal
 	}
+	return ""
 }
 
-func (s *Server) local(c echo.Context) bool {
-	return s.opts.Web.Access == config.AccessLocal && LocalAccess(c.Request())
+// browserSent reports whether a request without a token looks like a browser's (Fetch Metadata) or
+// a proxy's, which get the browsers' refusal rather than the one asking for a token.
+func browserSent(r *http.Request) bool {
+	if len(r.Header.Values("Sec-Fetch-Site")) > 0 {
+		return true
+	}
+	for _, h := range forwarded {
+		if len(r.Header.Values(h)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
-// AuthStatus is GET /api/v1/auth/status: how this browser stands with the web listener. There's no
+// refuseBrowser answers a browser's request that browser didn't let in.
+func (s *Server) refuseBrowser(c echo.Context) error {
+	switch {
+	case s.opts.Web == nil || s.opts.Web.Off:
+		return webOff(c)
+	case c.Request().TLS != nil:
+		return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN", "Only Meko's own pages may call it.")
+	}
+	return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
+		"Local access takes only requests made on this computer, straight to Meko.")
+}
+
+// webOff is the answer to a browser's page while the web UI is off.
+func webOff(c echo.Context) error {
+	return envelope.Fail(c, http.StatusNotFound, "WEB_UI_OFF", "The web UI is off. Turn it on with meko ui start.")
+}
+
+// AuthStatus is GET /api/v1/auth/status: how this browser stands with Meko. There's no
 // login: signed_in is whether the request is let in, and setup_required, reset, username and
 // totp_enabled are always empty. It stays for pages that read it, AgentK's among them, which go to
 // a sign-in screen only when it says remote and not signed in.
@@ -130,9 +144,9 @@ type AuthStatus struct {
 }
 
 func (s *Server) authStatus(c echo.Context) error {
-	local := s.local(c)
-	signedIn := local || (s.opts.Web.Access == config.AccessRemote && SameSite(c.Request()))
-	return envelope.OK(c, AuthStatus{Access: s.opts.Web.Access, LocalAccess: local, SignedIn: signedIn})
+	cred := s.browser(c.Request())
+	return envelope.OK(c, AuthStatus{Access: s.opts.Web.Access, LocalAccess: cred == CredentialLocal,
+		SignedIn: cred != ""})
 }
 
 // ExtensionInfo is a row of GET /api/v1/extensions: a known extension, whether it's installed
@@ -202,7 +216,7 @@ func (s *Server) extensionInfo(name string, installed bool) ExtensionInfo {
 }
 
 // overtaken reports whether row's failed job no longer says how the extension is: something
-// outside the Extensions page (meko extension install, me_koder start) did what the job couldn't.
+// outside the Extensions page (meko extension install, me_kode start) did what the job couldn't.
 // The job is in memory until the next one, so without this a failed Install would stay on the card
 // of an extension installed from a terminal until Meko restarts. Only a running extension
 // overtakes one: an install can fail after registering it (it never answered on its socket, or a
@@ -306,6 +320,9 @@ func (s *Server) extensionPatch(c echo.Context) error {
 }
 
 func (s *Server) extensionRoot(c echo.Context) error {
+	if s.opts.Web.Off {
+		return webOff(c)
+	}
 	if s.proxy(c.Param("name")) == nil {
 		return echo.ErrNotFound
 	}

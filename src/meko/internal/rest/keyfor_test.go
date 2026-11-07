@@ -7,7 +7,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// The Connect page gets the client token only for a caller that holds a credential: never for the
+// provision-status gives the client token only for a caller that holds a credential: never for the
 // web listener's browsers (local access, which every user of the computer has, or remote, which
 // anyone who reaches its port has), nor auth = "none".
 func TestKeyFor(t *testing.T) {

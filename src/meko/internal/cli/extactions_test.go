@@ -29,7 +29,7 @@ func testListener(t *testing.T, dir string) *webListener {
 	if err = st.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return newWebListener(paths.New(dir), st, slog.New(slog.DiscardHandler))
+	return newWebListener(paths.New(dir), st, slog.New(slog.DiscardHandler), 0)
 }
 
 // webExtension writes a fake extension with a web UI at path: it logs its arguments, echoes
@@ -160,7 +160,7 @@ func TestRunExtensionInstallsWithoutATerminal(t *testing.T) {
 	_, tok, _ := run("token", "--data-dir", dir)
 	tok = strings.TrimSpace(tok)
 	home, _ := os.UserHomeDir()
-	ak := filepath.Join(home, ".local", "bin", "me_koder")
+	ak := filepath.Join(home, ".local", "bin", "me_kode")
 	sock := filepath.Join(shortDir(t), "web.sock")
 	webExtension(t, ak, sock)
 	listenAfter(t, sock, 0)

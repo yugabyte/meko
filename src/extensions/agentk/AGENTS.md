@@ -21,16 +21,17 @@ is in [docs/design.md](docs/design.md): an index, with one file per area under `
 
 **Naming:** the product is **AgentK** (it was AgentK Local until October 2026) in anything people
 read (UI, docs, messages), and `agentk` names the extension (its folder in Meko's data folder,
-`/ext/agentk/`, the tags, the npm package and the release tarballs, `agentk-<version>-…`). The
-program is `me_koder`, so a process list, `~/.local/bin` and the services say it's a Meko
-extension's: the command, the release's launcher (`bin/me_koder`) and its Node
-(`node/bin/me_koder`), the systemd units (`me_koder.service`, `me_koder-host.service`) and the
-launchd labels (`com.yugabyte.me_koder`, `.host`). It was `agentk` before, and `agent-k-local`
-before the rename. What installs from before still have keeps working: every release also ships its
-tarball as `agent-k-local-<version>-…` (until #238), its `bin/agentk` and `bin/agent-k-local` are
-links to `bin/me_koder` (`scripts/package-release.sh`), Meko moves the command in `~/.local/bin`
-onto `me_koder` (and the server adds `me_koder` beside an old link: `src/server/cmdlink.ts`), and a
-service keeps its old name until `me_koder install` moves it (`dropOldNames` in `src/server/service.ts`).
+`/ext/agentk/`, the tags, the npm package and the release tarballs, `agentk-<version>-…`). People
+run it through Meko, `meko kode <command>`: it has no command of its own on PATH. The program is
+`me_kode`, so a process list and the services say it's a Meko extension's: the release's launcher
+(`bin/me_kode`, which `meko kode` runs) and its Node (`node/bin/me_kode`), the systemd units
+(`me_kode.service`, `me_kode-host.service`) and the launchd labels (`com.yugabyte.me_kode`,
+`.host`). It was `me_koder` before, `agentk` before that, and `agent-k-local` before the rename.
+What installs from before still have keeps working: every release also ships its tarball as
+`agent-k-local-<version>-…` (until #238), its `bin/me_koder`, `bin/agentk` and `bin/agent-k-local`
+are links to `bin/me_kode` (`scripts/package-release.sh`), Meko's start removes the old
+`~/.local/bin` links (AgentK never makes one: `src/server/cmdlink.ts`), and a service keeps its old
+name until `meko kode install` moves it (`dropOldNames` in `src/server/service.ts`).
 The repo itself is `yugabyte/meko` now (it was `yugabyte/agent-k-local`; GitHub redirects the old
 name, so installs that still name it keep updating). `agent-k-local` stays in the socket folder, and every id AgentK gives Meko (its agent id, conversation keys, the
 `source` of its memories, its upload `client`), which name what's stored there. Strings AgentK wrote
@@ -55,7 +56,12 @@ npm ci
 npm run typecheck && npm run lint && npm test   # run all three before every commit
 npm run build                                   # dist/server + dist/web
 npm run dev                                     # the server on ./.dev-home/web.sock, Vite on :5173 proxying to it; state in ./.dev-home (AK_DEV_HOME to change)
+npm link                                        # after build: puts this build on PATH as me_kode, for Meko to use instead of a release
 ```
+
+`package.json`'s `bin` (`me_kode`) is only for a build from source: `npm link` puts it on PATH,
+where `meko extension install agentk` finds it and uses it as it is, never updating it. People run
+AgentK through Meko (`meko kode <command>`), never by that name.
 
 Requirements: Linux or macOS, Node 22 (`.nvmrc` pins the major), git, and a coding agent. node-pty
 is a native module that needs a C++20 compiler: on RHEL 8 the system g++ (8.5) is too old, hence
@@ -94,7 +100,7 @@ agents should read it before changing code there.
 | `src/shared/mekomd.ts` | Reading a repo's `MEKO.md` (its table of Datapack, ID and What's in it: `parseMekoMd`) and telling the gotchas datapack (`isGotchasDatapack`: a name ending in `/gotchas`). The code review lists them for its passes. |
 | `src/shared/branches.ts` | The branch prefix setting's `{login}` (`expandBranchPrefix`: gh's login, or left out with its joiner when gh can't say) and the default, `ak_{login}/`. Used by the server and the web UI. |
 | `src/shared/termcolors.ts` | The terminals' two themes' foreground and background (`TERM_COLORS`, which the web UI's palettes start from), `parseTermTheme`, and a color as an OSC 10/11 answer gives it (`oscColor`). Used by the web UI, the server (the colors sessions start with) and the session host (its answers). |
-| `src/shared/termreports.ts` | Telling a terminal's answers to a program's queries from typing (`isTerminalReport`): the browser terminal and `me_koder attach` drop them, since the session host answers them. Also mouse motion with no button held and focus reports (`isPassiveReport`), which don't count as using a screen (`src/server/screens.ts`). |
+| `src/shared/termreports.ts` | Telling a terminal's answers to a program's queries from typing (`isTerminalReport`): the browser terminal and `meko kode attach` drop them, since the session host answers them. Also mouse motion with no button held and focus reports (`isPassiveReport`), which don't count as using a screen (`src/server/screens.ts`). |
 | `src/shared/emails.ts` | The email check, the parsing of a list of emails for the Share dialog (commas, semicolons, whitespace, `Name <address>`), pasting into its field and picking a suggested address (`typedEntry`, `pickEmail`, `suggestContacts`), and the most one invite can send to. Used by the server and the web UI. |
 | `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the command that installs Meko on this computer (`MEKO_INSTALL_COMMAND`, for the banner shown while there's none), a datapack's share link on the web app Meko names (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app), and Meko's own pages AgentK links to (`MEKO_HOME_PATH`, its main page, from the projects pane's "m"; `mekoDatapackPath()`, a datapack's page, which datapack names link to: `mekoDatapackUrl()` in `src/web/util.ts`; `mekoGapsPath()`, its Context Gaps tab, from the project home's Meko line; Meko's web UI sends a Meko Cloud datapack's on to Meko Cloud's web app). Used by the server and the web UI, so Ask AgentK offers to join only the links the server will. |
 | `src/shared/pricing.ts` | Anthropic API list prices per model and the cost of a set of tokens (cache writes by duration). |
@@ -102,16 +108,16 @@ agents should read it before changing code there.
 | `src/mod/agentk-view/` | AgentK's view mod, loaded beside the mod with a second `--plugin-dir`: draws AgentK's prompts in the terminal as their first line (ctrl+o shows them whole) and a workshop host's events as nothing, with a `ui.render` hook on `UserMessage` rows. A plugin of its own because Claude Code never shows a plugin the rows of the prompts it submitted itself. It tells the session's first prompt (passed on the command line, drawn like typed text) by `AK_FIRST_PROMPT`, and the events by `AK_HIDDEN_PROMPT`. Checked like the mod. See [docs/design/mod.md](docs/design/mod.md#how-agentks-prompts-look). |
 | `src/tools/skill/SKILL.md` | The skill for AgentK's session tools (the `agentk_sessions` MCP server, `src/server/mcp.ts`): how an agent opens projects, starts sessions (from GitHub issues and PRs too), moves them and opens another session's PR. Its one source; the server copies it for every harness (`writeToolFiles` in `src/server/tools.ts`), and the build into `dist/tools`. See [docs/design/tools.md](docs/design/tools.md). |
 | `src/workshops/` | The workshops bundled with AgentK ([docs/design/workshops.md](docs/design/workshops.md)): each folder a host's script (`GUIDE.md`), its levels' prompts, the demo repo's files (`repo/`, a small browser game the lint leaves out), a teammate's change as a patch and the gotchas for the demo's gotchas datapack; the AgentK tour is `agentk-101`. Read by `src/server/workshops.ts`, copied into `dist/workshops` by `npm run build:workshops`. `npm run check:demo-review` (`scripts/check-demo-review.mjs`, by hand against a running AgentK) measures that Level 1's trap is caught only with Meko. |
-| `scripts/deps.sh`, `scripts/install.sh` | `deps.sh`: AgentK's prerequisites, which `me_koder install` runs first (a release has it as `lib/scripts/deps.sh`): installs missing tools (git, curl, and a coding agent when none of Claude Code, OpenCode and Kiro CLI is there: it asks which, OpenCode second, or `--agent`) after asking (`--install-deps`, `--no-install-deps`; nothing with `--non-interactive` unless `--install-deps`), offers gh in a question of its own once those are there (installed with `--install-deps`, skipped with a warning otherwise: AgentK asks for it when something needs it, [lifecycle.md](docs/design/lifecycle.md#gh-on-demand)), and checks each agent's sign-in and gh's. `--only gh` installs gh alone, without root, as the GitHub dialog's **Install gh** runs it. Meko installs AgentK (`meko extension install agentk`: it unpacks the release, then runs `me_koder install`), so `install.sh` only says so: releases still carry it for the Mekos and instructions that run it. Both tested against stub tools in `test/unit/install-script.test.ts`. |
-| `packaging/`, `scripts/`, `.github/` | Launcher wrapper (`packaging/me_koder`: runs the bundled Node, and hands `serve` and `host` to Meko's launcher, `meko _launch`, which runs a new version's probation and rollback), systemd and launchd templates, the prerequisites and release scripts, and (at the repo root, running from `src/extensions/agentk`) CI and releases (Linux and macOS) and Dependabot (`dependabot.yml`). The repo root's `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release/release-notes.sh` decides which types and components release each product (AgentK or Meko, `--product`; `scripts/release/product.sh` names each one's tags and components); their type lists are the ones the tests check (the docs, the commit skill and What's new's `RELEASE_TYPES` in `src/server/releasenotes.ts` repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`; `test/unit/release-scripts.test.ts` tests what each product counts (versions, notes, pruning). The repo root's `scripts/ci-scope.sh` decides which components' CI jobs a PR runs; `test/unit/ci-scope.test.ts` tests it, checks that every root file a test here reads (`../../../../../…`) runs AgentK's job, that the Markdown a Meko test globs or AgentK's release packs runs its component's, and that the `CI gate` job needs every other job. |
+| `scripts/deps.sh`, `scripts/install.sh` | `deps.sh`: AgentK's prerequisites, which `meko kode install` runs first (a release has it as `lib/scripts/deps.sh`): installs missing tools (git, curl, and a coding agent when none of Claude Code, OpenCode and Kiro CLI is there: it asks which, OpenCode second, or `--agent`) after asking (`--install-deps`, `--no-install-deps`; nothing with `--non-interactive` unless `--install-deps`), offers gh in a question of its own once those are there (installed with `--install-deps`, skipped with a warning otherwise: AgentK asks for it when something needs it, [lifecycle.md](docs/design/lifecycle.md#gh-on-demand)), and checks each agent's sign-in and gh's. `--only gh` installs gh alone, without root, as the GitHub dialog's **Install gh** runs it. Meko installs AgentK (`meko extension install agentk`: it unpacks the release, then runs `meko kode install`), so `install.sh` only says so: releases still carry it for the Mekos and instructions that run it. Both tested against stub tools in `test/unit/install-script.test.ts`. |
+| `packaging/`, `scripts/`, `.github/` | Launcher wrapper (`packaging/me_kode`: runs the bundled Node, and hands `serve` and `host` to Meko's launcher, `meko _launch`, which runs a new version's probation and rollback), systemd and launchd templates, the prerequisites and release scripts, and (at the repo root, running from `src/extensions/agentk`) CI and releases (Linux and macOS) and Dependabot (`dependabot.yml`). The repo root's `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release/release-notes.sh` decides which types and components release each product (AgentK or Meko, `--product`; `scripts/release/product.sh` names each one's tags and components); their type lists are the ones the tests check (the docs, the commit skill and What's new's `RELEASE_TYPES` in `src/server/releasenotes.ts` repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`; `test/unit/release-scripts.test.ts` tests what each product counts (versions, notes, pruning). The repo root's `scripts/ci-scope.sh` decides which components' CI jobs a PR runs; `test/unit/ci-scope.test.ts` tests it, checks that every root file a test here reads (`../../../../../…`) runs AgentK's job, that the Markdown a Meko test globs or AgentK's release packs runs its component's, and that the `CI gate` job needs every other job. |
 | `test/` | Unit tests, and integration tests against a real session host (in the test process) and git with a stub `claude` (`test/fixtures/fake-claude.mjs`), and stubs of `kiro-cli` and `opencode` (`fake-kiro.mjs`; `fake-opencode.mjs`, which runs AgentK's real OpenCode plugin as OpenCode 2 does). |
 | `docs/` | The design: [docs/design.md](docs/design.md) is its index (the decisions so far, and which part covers what), with one file per area under `docs/design/`. Also every feature ([docs/features.md](docs/features.md)), the install details and every command ([docs/install.md](docs/install.md)), the usage report's schema (`call-home-report.schema.json`) and the screenshots. |
 | `MEKO.md` | The Meko datapacks that hold context for AgentK, beside the repo root's [MEKO.md](../../../MEKO.md). Search them before any work here. |
 
 ## Invariants (don't break these)
 
-1. **Sessions survive the server.** The session host runs in its own service (`me_koder-host.service`
-   on Linux, the `com.yugabyte.me_koder.host` LaunchAgent on macOS). Never start the host or a session's
+1. **Sessions survive the server.** The session host runs in its own service (`me_kode-host.service`
+   on Linux, the `com.yugabyte.me_kode.host` LaunchAgent on macOS). Never start the host or a session's
    Claude as children of the server's service or process group (one-shot `claude` commands that end with
    their request, such as `--version`, `update` and Ask AgentK's `claude -p`, are the server's own). Server restarts and updates must never stop a
    session. Manage the services only through `service.ts`. When the host service is installed, the server
@@ -147,7 +153,7 @@ agents should read it before changing code there.
    holds a lock on that folder while the host runs.
 7. **Meko is the Meko on this computer; a project has at most one dedicated datapack.** It can't be
    turned off, and AgentK doesn't know or ask whether it's linked to Meko Cloud: no code branches on
-   local or Meko Cloud. Meko owns the link (its web UI's Settings › Meko Cloud, `meko cloud_link`)
+   local or Meko Cloud. Meko owns the link (its web UI's Settings › Meko Cloud, `meko cloud-link`)
    and its key, and its `/mcp` and its `/api/v1` (on the same origin, `mekoApiBase`) serve its own
    datapacks and pass any other id on to Meko Cloud while it's linked; what it can't do (sharing
    while unlinked) it refuses with an error that says what to do, which AgentK shows. AgentK reads

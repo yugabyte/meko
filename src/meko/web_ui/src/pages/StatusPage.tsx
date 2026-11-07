@@ -1,4 +1,4 @@
-// How this Meko is doing: the server, the memory engine with its embedder and reranker, and the
+// How this Meko is doing: the server, the context engine with its embedder and reranker, and the
 // child processes the server supervises. Refreshes every few seconds.
 
 import { useEffect } from "react";
@@ -52,7 +52,7 @@ export function StatusPage() {
   // Once loaded, a failed refresh (as while Meko restarts into an update) keeps the page, and the
   // Updates card waiting for Meko, on screen.
   if (!s) return status.error ? <ErrorNote error={status.error} /> : null;
-  const e = s.memory_engine;
+  const e = s.context_engine ?? { state: "unknown" };
 
   return (
     <div className="max-w-4xl">
@@ -78,7 +78,7 @@ export function StatusPage() {
         </MetricCard>
         <UpdatesCard />
         <ExtractorCard />
-        <MetricCard title="Memory engine">
+        <MetricCard title="Context engine">
           <KeyValues
             rows={[
               ["State", <State state={e.state} />],

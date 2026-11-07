@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/store"
 )
 
@@ -58,7 +58,7 @@ func QuestionKey(query string) string {
 
 // Answer is a search's reply as the rules judge it.
 type Answer struct {
-	Memories []memoryengine.Memory
+	Memories []contextengine.Memory
 	// Strong counts the knowledge-base chunks and conversation hits: they passed Meko's own distance
 	// cutoffs, so one that comes back is a real hit.
 	Strong int
@@ -404,11 +404,11 @@ func AnswerOf(tool, text string) (a Answer, ok bool) {
 	}
 	obj, _ := v.(map[string]any)
 	list := func(x any) []any { l, _ := x.([]any); return l }
-	memories := func(items []any) []memoryengine.Memory {
-		out := make([]memoryengine.Memory, 0, len(items))
+	memories := func(items []any) []contextengine.Memory {
+		out := make([]contextengine.Memory, 0, len(items))
 		for _, it := range items {
 			m, _ := it.(map[string]any)
-			var mem memoryengine.Memory
+			var mem contextengine.Memory
 			if f, isNum := m["score"].(float64); isNum {
 				mem.Score = &f
 			}

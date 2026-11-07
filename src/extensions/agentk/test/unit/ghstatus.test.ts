@@ -59,7 +59,7 @@ describe('gh', () => {
     expect(refusal).toBeInstanceOf(HttpError);
     expect(refusal).toMatchObject({ status: 409, code: GH_NEEDED, message: expect.stringMatching(/^Open PR needs gh, GitHub's command-line tool/) });
     // With no PATH from the login shell, gh may be installed where the server doesn't look.
-    expect(ghNeededMessage('Open PR', 'missing', true)).toMatch(/couldn't read PATH from your login shell.* run me_koder restart/);
+    expect(ghNeededMessage('Open PR', 'missing', true)).toMatch(/couldn't read PATH from your login shell.* run meko kode restart/);
     state.value = 'signed-out';
     await expect(gh.require('Merge')).rejects.toThrow(/^Merge needs gh signed in to GitHub/);
     state.value = 'ok';

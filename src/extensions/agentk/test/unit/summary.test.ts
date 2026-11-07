@@ -15,7 +15,7 @@ describe('summaryRow', () => {
     [false, 0, true, "wasn't running"],
     [true, 0, true, 'stopped'],
     [true, 2, true, 'stopped; 2 session(s) resume at meko start'],
-    [true, 1, false, 'stopped; 1 session(s) resume at me_koder serve'],
+    [true, 1, false, 'stopped; 1 session(s) resume at meko kode serve'],
   ])('says where stopped sessions resume (stopped %s, %i sessions, services %s)', (stopped, n, services, text) => {
     expect(stopRowText(stopped, n, services)).toBe(text);
   });

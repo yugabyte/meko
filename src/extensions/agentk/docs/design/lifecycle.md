@@ -195,7 +195,7 @@ without a token. What does need it asks for it then:
   `auth token`; Ubuntu 22.04's is 2.4), `gh auth status --hostname github.com`. Only a gh that isn't
   there is `missing`; one that doesn't answer within 10 s is `unknown` ("didn't answer in time: try
   again"). When the login shell gave the server no PATH at its start, a missing gh's words say so
-  and point to `me_koder restart` (as `ghMissing` in `github.ts` does), since gh may be installed
+  and point to `meko kode restart` (as `ghMissing` in `github.ts` does), since gh may be installed
   where the server doesn't look. It's read at start, and again by a gate whenever the last read
   wasn't good or is over 5 minutes old, so gh installed or signed in outside AgentK counts at once
   (the server's PATH has `~/.local/bin` and Homebrew's folders: `adoptLoginPath`). gh going from

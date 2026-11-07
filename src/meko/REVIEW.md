@@ -5,38 +5,45 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 **major** (wrong behavior users will hit), **minor** (clarity, style, small gaps).
 
 - [ ] `make test` and `make lint` pass in `src/meko`; new behavior has a test.
-- [ ] Tests never reach this machine's own extensions (an installed `me_koder`, or `agentk` and
-      `agent-k-local`, its old names): PATH stays
+- [ ] Tests never reach this machine's own extensions (an installed `me_kode`, or `me_koder`,
+      `agentk` and `agent-k-local`, its old names, or `me_present`): PATH stays
       `/usr/bin:/bin` (`noRealExtensions`) while anything can run one, and cleanups that run Meko
       commands leave the extensions alone (`setup`'s `stop --keep-extensions`), since cleanups run
-      last first and `t.Setenv` has restored PATH by then. A real `me_koder stop` ends every session.
+      last first and `t.Setenv` has restored PATH by then. A real `meko kode stop` ends every session.
 - [ ] Every database call goes through `internal/store`, the only package that imports the SQLite
       driver.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
-- [ ] On the API listener, every route but `/healthz` and the knowledge-file links needs a
+- [ ] Meko has one port, `[server] port` ([docs/web.md](docs/web.md)): nothing listens on
+      another, and `[web] port` stays refused. Every route but `/healthz`, the UI's files,
+      `/api/v1/auth/status`, `/ext/<name>` (the slash redirect) and the knowledge-file links needs a
       credential, checked on the matched route (`c.Path()`), never the raw URL. The links
       (`/api/v1/knowledge-uploads/:ticket`, `/api/v1/knowledge-downloads/:ticket`) take a one-time
       ticket instead: 256 random bits, 5 minutes, an upload's bound to its datapack, key, size and
       SHA-256 ([docs/knowledge.md](docs/knowledge.md)). Otherwise it's the admin token on
-      `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload`, the admin or client token
-      everywhere else, and nothing there only with `[server] auth = "none"`
-      ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text: a call's
+      `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload`; the owner (a browser or the
+      admin token, never the client token) on the Extensions, update and Meko Cloud link routes; and
+      the admin or client token or a browser everywhere else, with nothing there only with
+      `[server] auth = "none"`, from this computer and never from a browser
+      ([docs/api.md](docs/api.md#auth)). A request with a token is held to
+      it and never falls back to a browser's way in, and tokens are taken only from a loopback peer. Tokens and call-log rows never hold memory or turn text: a call's
       arguments and reply go only in `call_contents`, only while Settings keeps them, for 7 days, and
       never into an export, usage stats or a log. The store
-      API and the memory engine's API listen only on their unix sockets (0600) and need the internal
-      token on every route, the memory engine's `/healthz` too (its reply can say why the memory
-      engine failed). The API listener binds 127.0.0.1 only, checks `Host`, and refuses requests
-      whose `Origin` isn't its own (`http://127.0.0.1:<port>` or `http://localhost:<port>`).
+      API and the context engine's API listen only on their unix sockets (0600) and need the internal
+      token on every route, the context engine's `/healthz` too (its reply can say why the memory
+      engine failed). The port binds 127.0.0.1 only unless remote access is on; plain HTTP
+      comes only from a loopback peer (`Sniff`), must name 127.0.0.1, localhost or [::1] in `Host`,
+      and is refused with an `Origin` that isn't its own.
       `knowledgebase_upload_file` reads a path as the server's user, so it refuses a call that came
       in with no token.
-- [ ] The web listener ([docs/web.md](docs/web.md)) never takes a Bearer token and has no
-      admin-only routes, and no login. A request gets in by local access (`LocalAccess`, only with
-      `[web] access = "local"`) or, with remote access, by the site check (`SameSite`: no other
-      site's page sent it), checked on the matched route; only `/healthz`, the UI's files,
-      `/api/v1/auth/status`, `/ext/<name>` (the slash redirect) and the knowledge-file links go
-      without. Remote access is HTTPS; its Origin must be `https://<Host>`. A stop of the listener
-      (`meko ui stop`, a restart) closes the WebSockets the proxy upgraded (`CloseAll`).
-      `[web] enabled` is written to `web.toml`, never `config.toml`.
+- [ ] Browsers ([docs/web.md](docs/web.md)) have no login. One gets in, without a token, by local
+      access (`LocalAccess`, over plain HTTP from this computer) or, over TLS with remote access, by
+      the site check (`SameSite`: no other site's page sent it); its Origin over TLS must be
+      `https://<Host>`. While the web UI is off (`meko ui stop`) no browser gets in, `/` and
+      `/ext/<name>/` answer 404, agents keep the port, and the WebSockets the proxy upgraded close
+      (`CloseAll`); with remote access the port is taken again on 127.0.0.1 only. Nothing about
+      remote access (its certificate) can stop `serve`: it stays on 127.0.0.1 and says why. A settings change
+      swaps the server under the same socket, and takes the port again only when its address
+      changes. `[web] enabled` is written to `web.toml`, never `config.toml`.
 - [ ] `/ext/<name>/*` passes the browser's Host and Origin to the extension's socket, drops the
       Cookie and adds no `X-Forwarded-*` (the extension trusts its socket and checks only the
       origin). The handoff (`_handoff --json`) takes an extension's old settings over once and only
@@ -45,7 +52,7 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       only to a request with a token, never to a browser (local or remote access).
 - [ ] Files in the data folder are owner-only (folders 0700, files 0600), and tokens and memory text
       never reach logs or error replies (internal errors get the generic message), in Go or in the
-      memory engine (`logs/memory_engine.log`).
+      context engine (`logs/context-engine.log`).
 - [ ] REST routes keep Meko Cloud's paths and `{data, error}` shapes ([docs/api.md](docs/api.md)): a
       `datapack_id` that isn't a UUID is 400 `VALIDATION_ERROR`, one that doesn't exist is 404
       with code `NOT_FOUND`.
@@ -54,9 +61,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       (`{"error", "detail"}`, `isError: false`); every call is recorded in the call log without its
       arguments or text, through `Options.record` (with its contents while they're kept, and its
       client), the forwarded ones too. A search takes a search slot; nothing holds the writer while it waits on
-      the memory engine. A change to what AgentK's `meko.ts` sends or reads updates the replay in
+      the context engine. A change to what AgentK's `meko.ts` sends or reads updates the replay in
       `internal/mcp/agentk_contract_test.go`.
-- [ ] The memory engine stores only through the store API, its dependencies stay pinned, and nothing copies
+- [ ] The context engine stores only through the store API, its dependencies stay pinned, and nothing copies
       or cites Meko Cloud's private code.
 - [ ] No third-party C code is copied into `src/meko`. SQLite and sqlite-vec come from the
       `replace` of `yugabyte/go-sqlite3` in `go.mod`: a bump names a new `-yb.<n>` tag and updates
@@ -85,8 +92,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] A release keeps working offline: the tarball bundles the models, the embedder and the reranker
       (`MEKO_MODELS_OFFLINE`), and
       `scripts/smoke-release.sh` passes on each platform.
-- [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `me_koder` (or its old
-      names, `agentk` and `agent-k-local`).
+- [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `me_kode` (or its old
+      names, `me_koder`, `agentk` and `agent-k-local`).
 - [ ] No internal hostnames, mount paths, tokens or personal data in the diff, the PR title or its
       description (the repo root's AGENTS.md): no real person's name, email, handle or IP
       address, no customer names, nothing a user wrote or stored (memories, turns, knowledge

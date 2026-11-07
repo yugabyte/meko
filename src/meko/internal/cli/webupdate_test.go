@@ -122,8 +122,8 @@ func serveAndUpdate(t *testing.T, old, next string) (update.App, paths.Layout, e
 			<-done
 		}
 	})
-	// The web listener reads its port as serve does, from MEKO_WEB_PORT (setup's).
-	web := "http://127.0.0.1:" + os.Getenv("MEKO_WEB_PORT")
+	// Meko's one port, as serve reads it: MEKO_PORT (setup's).
+	web := "http://127.0.0.1:" + os.Getenv("MEKO_PORT")
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		resp, err := http.Get(web + "/api/v1/update") //nolint:noctx,gosec // G704: the test's own server
 		if err == nil {
@@ -199,7 +199,7 @@ func serveUntilUp(t *testing.T, dir, port string) {
 			t.Errorf("serve: %v", err)
 		}
 	}()
-	web := "http://127.0.0.1:" + os.Getenv("MEKO_WEB_PORT")
+	web := "http://127.0.0.1:" + os.Getenv("MEKO_PORT")
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		resp, err := http.Get(web + "/api/v1/update") //nolint:noctx,gosec // G704: the test's own server
 		if err == nil {
@@ -230,8 +230,8 @@ func TestServeRenamesExtensionsPastProbation(t *testing.T) {
 	if target, err := os.Readlink(old); err != nil || filepath.Base(target) != "agentk" {
 		t.Fatalf("on probation ~/.local/bin/agentk -> %q, %v", target, err)
 	}
-	if _, err := os.Lstat(filepath.Join(filepath.Dir(old), "me_koder")); !os.IsNotExist(err) {
-		t.Fatalf("~/.local/bin/me_koder on probation: %v", err)
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(old), "me_kode")); !os.IsNotExist(err) {
+		t.Fatalf("~/.local/bin/me_kode on probation: %v", err)
 	}
 	finishUpdate(context.Background(), app, release, 0, paths.New(dir), slog.New(slog.DiscardHandler))
 	wantRenamed(t, dir, old)

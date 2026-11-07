@@ -98,7 +98,7 @@ describe('gh missing from PATH', () => {
   // Node says "spawn gh ENOENT" for a missing gh and for a missing folder to run in alike.
   it.each([
     ['no gh', false, true, /^AgentK can't find gh, GitHub's command-line tool\. AgentK offers to install it the next time you open a PR/],
-    ['no gh, and no PATH from the login shell', true, true, /^AgentK can't find gh, because it couldn't read PATH from your login shell when it started\..* me_koder restart\.$/],
+    ['no gh, and no PATH from the login shell', true, true, /^AgentK can't find gh, because it couldn't read PATH from your login shell when it started\..* meko kode restart\.$/],
     ['a folder that is gone', false, false, /^spawn gh ENOENT$/],
   ])('%s', async (_, noLoginPath, folderThere, want) => {
     vi.stubEnv('PATH', tempDir('ak-no-gh-'));

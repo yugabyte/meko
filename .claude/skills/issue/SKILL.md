@@ -28,7 +28,7 @@ If one does, show it to the user and offer to comment on it or update it instead
 | Task | Planned work, a chore or a checklist (a release step, a setting, a cleanup) | `Task` | none |
 
 Add a product label for each product the issue is about: `meko` (Meko, `src/meko`), `agentk`
-(`src/extensions/agentk`), `presenter` (`src/extensions/presenter`). An issue about only the shared root
+(`src/extensions/agentk`), `present` (`src/extensions/present`). An issue about only the shared root
 (CI, `scripts/`, root docs) takes none. Forms can't set these, so issues filed on the web get
 theirs when someone triages them; add a missing one when you come across it.
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Session } from '../../src/shared/types.js';
-import { designLanding, designWorking, LATE_MS, REVISION_GRACE_MS, settleRevision, type Landing, type RevisionSent } from '../../src/web/util.js';
+import { designLanding, designPending, designWorking, LATE_MS, REVISION_GRACE_MS, settleRevision, type Landing, type RevisionSent } from '../../src/web/util.js';
 
 const NOW = 1_000_000;
 const JUST: RevisionSent = { at: NOW - 1_000, started: false };
@@ -41,12 +41,27 @@ describe("the design panel's working line (designWorking)", () => {
     ['exited', { status: 'exited' }, JUST, null],
     ['starting', { status: 'starting' }, JUST, null],
     ['an approval queued', { ...working, approvalQueued: true }, null, null],
-    // Only in Design, with a design on screen (before one, the panel says so with its own keycaps).
-    ['no design yet', { ...working, hasDesign: false }, null, null],
+    // Writing the first design shows it too (the panel's body has its placeholder page then).
+    ['no design yet, working', { ...working, hasDesign: false }, null, 'working'],
+    // Only in Design.
     ['past Design', { ...working, stage: 'code' }, null, null],
     ['archived', { ...working, desired: 'archived' } as Partial<Session>, null, null],
   ])('%s', (_, over, rev, want) => {
     expect(designWorking(session(over), rev, NOW)).toBe(want);
+  });
+});
+
+describe('the design panel opening before the first design (designPending)', () => {
+  it.each<[string, Partial<Session> | null, string | null]>([
+    ['in Design, running, no design', { hasDesign: false }, 's1'],
+    // The terminal's startup steps stay on screen; the panel opens as the first turn begins.
+    ['starting, no design', { status: 'starting', hasDesign: false }, null],
+    ['a design written', {}, null],
+    ['past Design', { hasDesign: false, stage: 'code' }, null],
+    ['archived', { hasDesign: false, desired: 'archived' } as Partial<Session>, null],
+    ['no session', null, null],
+  ])('%s', (_, over, want) => {
+    expect(designPending(over ? session({ id: 's1', ...over }) : null)).toBe(want);
   });
 });
 

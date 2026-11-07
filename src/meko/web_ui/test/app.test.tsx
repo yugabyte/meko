@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The app shell against a faked /api/v1: which datapack it opens from the one list of both sides,
-// and that a datapack in the address opens whatever the listing (which waits for Meko Cloud while
-// it's linked) is doing.
+// that a datapack in the address opens whatever the listing (which waits for Meko Cloud while it's
+// linked) is doing, and that agents have a page of their own, not a datapack tab.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -117,4 +117,17 @@ test("this Meko's own datapack stays here", async () => {
   serve(() => Response.json({ data: BOTH, error: null }));
   await open(`/datapacks/${HERE}/gaps`);
   expect(window.location.pathname).toBe(`/datapacks/${HERE}/gaps`);
+});
+
+test("/agents opens the Agents page, and a datapack has no Connect tab", async () => {
+  serve(() => Response.json({ data: BOTH, error: null }));
+  await open("/agents");
+  // The faked server has no agents route, as an older Meko.
+  expect(main()).toContain("This Meko is older than the Agents page");
+  expect(urls).toContain("/api/v1/agents");
+  act(() => root.unmount());
+  await open(`/datapacks/${HERE}/overview`);
+  const tabs = [...document.querySelectorAll("header nav a")].map((a) => a.textContent);
+  expect(tabs).toContain("Context Gaps");
+  expect(tabs).not.toContain("Connect");
 });

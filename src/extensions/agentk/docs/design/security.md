@@ -11,7 +11,7 @@ own copy.
   Its server listens only on a unix socket (`Paths.webSock`, `web.sock` in its home, or in its
   private socket folder in the temp dir when that path is too long), in a folder only you can open,
   and lets in every request that arrives there. The Meko on this computer serves it to browsers at
-  `/ext/agentk/` on its web listener (`:7777`), with the path stripped, after its own access
+  `/ext/agentk/` on its port (`:7777`), with the path stripped, after its own access
   check ([Meko's web.md](../../../../meko/docs/web.md)):
   - **Local access** (Meko's `[web] access = "local"`): Meko listens on 127.0.0.1 over plain HTTP,
     and a request from this computer needs no login: a loopback peer, a `Host` of `localhost`,
@@ -46,7 +46,7 @@ own copy.
   When Meko refuses a request (a 401, or a socket it refused), the page asks Meko's
   `/api/v1/auth/status`, and goes to Meko's sign-in only when it says remote access and not signed
   in, which only a Meko with a login says; otherwise it keeps retrying.
-- **The handoff.** At each of its starts Meko runs `me_koder _handoff --json` (`handoff.ts`), which
+- **The handoff.** At each of its starts Meko runs `me_kode _handoff --json` (`handoff.ts`), which
   says where the socket is and, for an install that served browsers itself (on port 7777, over
   HTTPS with its own login), its old `[server]` bind and port, its certificate (self-signed in
   `certs/`, or `[tls]`'s) and its login (`owner` in `state.db`). Meko takes the port, access and

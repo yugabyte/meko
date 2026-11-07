@@ -1,8 +1,8 @@
 // What a page load shows first, from /api/v1/auth/status: the app, since there's no login. The
-// old sign-in screens' addresses (/signin, /setup) go on to where they were headed, and the old
-// account page's (/account) to Settings; a page outside the app (an extension's, /ext/<name>/) is
-// loaded itself. A request Meko later refuses (401 UNAUTHORIZED, which only local access sends)
-// says it didn't look local.
+// old sign-in screens' addresses (/signin, /setup) go on to where they were headed, the old account
+// page's (/account) to Settings, and a datapack's old Connect tab (/datapacks/<id>/connect) to
+// Agents; a page outside the app (an extension's, /ext/<name>/) is loaded itself. A request Meko
+// later refuses (401 UNAUTHORIZED, which only local access sends) says it didn't look local.
 
 import { useEffect, useState } from "react";
 import App from "./App";

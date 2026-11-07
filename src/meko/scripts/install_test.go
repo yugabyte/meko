@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -254,6 +255,23 @@ func TestInstallRunsNothingWhenCutShort(t *testing.T) {
 	}
 	if _, err := os.Stat(e.app); !os.IsNotExist(err) {
 		t.Error("a cut-short script installed something")
+	}
+}
+
+// In a single-byte locale such as en_US.ISO-8859-1, bash takes a byte of a UTF-8 symbol right
+// after a variable as part of its name ("$bl◆" reads $bl\xe2), and set -u stops the install
+// with "unbound variable". So a variable before a non-ASCII character is written ${name}.
+func TestInstallBracesVariablesBeforeSymbols(t *testing.T) {
+	b, err := os.ReadFile("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := regexp.MustCompile(`\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]`)
+	for i, line := range strings.Split(string(b), "\n") {
+		if m := bare.FindString(line); m != "" {
+			name := strings.TrimRightFunc(m[1:], func(r rune) bool { return r > 0x7f })
+			t.Errorf("install.sh:%d: %q needs braces: ${%s}", i+1, m, name)
+		}
 	}
 }
 

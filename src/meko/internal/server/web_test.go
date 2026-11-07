@@ -3,11 +3,13 @@ package server
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extproxy"
 	"github.com/yugabyte/meko/src/meko/internal/store"
+	"github.com/yugabyte/meko/src/meko/internal/tlscert"
 )
 
 // fakeExtension listens on a unix socket like AgentK: it echoes what reached it, and a WebSocket
@@ -61,8 +64,9 @@ func shortTemp(t *testing.T) string {
 	return dir
 }
 
-// startWeb runs a web listener with access and one extension (agentk) on sock; each of with changes
-// its Web first. It returns the listener's URL and the extension's proxy.
+// startWeb runs a server that lets browsers in with access and one extension (agentk) on sock; each
+// of with changes its Web first. Remote access serves TLS and plain HTTP on one port (Sniff), as
+// serve does. It returns the server's URL (https:// with remote access) and the extension's proxy.
 func startWeb(t *testing.T, access, sock string, with ...func(*Web)) (string, *extproxy.Proxy) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "meko.db"))
@@ -82,18 +86,29 @@ func startWeb(t *testing.T, access, sock string, with ...func(*Web)) (string, *e
 	for _, f := range with {
 		f(web)
 	}
-	s := New(Options{Info: Info{Version: "test"}, Port: tcpPort(t, ln), Logger: slog.New(slog.DiscardHandler),
-		UI:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") }),
-		Web: web})
+	port := tcpPort(t, ln)
+	s := New(Options{Info: Info{Version: "test"}, Port: port, Token: token, ClientToken: clientToken,
+		Logger: slog.New(slog.DiscardHandler),
+		UI:     http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") }),
+		Web:    web})
 	probe(s)
+	scheme := "http"
+	if access == config.AccessRemote {
+		pair, err := tlscert.SelfSigned(t.TempDir(), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln, scheme = Sniff(ln, &tls.Config{Certificates: []tls.Certificate{pair.Cert}, MinVersion: tls.VersionTLS12}), "https"
+	}
 	go func() { _ = s.Serve(ln) }()
 	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
-	return fmt.Sprintf("http://127.0.0.1:%d", tcpPort(t, ln)), ext
+	return fmt.Sprintf("%s://127.0.0.1:%d", scheme, port), ext
 }
 
 func body(t *testing.T, req *http.Request) (int, string, http.Header) {
 	t.Helper()
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Transport: testClient.Transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +119,7 @@ func body(t *testing.T, req *http.Request) (int, string, http.Header) {
 }
 
 // With local access a request from this computer needs nothing, by AgentK's old rule; a proxy's
-// headers, another site's page, a foreign Host or a Bearer token alone get nothing.
+// headers, another site's page or a foreign Host get nothing. A token is held to the token rules.
 func TestWebLocalAccess(t *testing.T) {
 	base, _ := startWeb(t, config.AccessLocal, fakeExtension(t))
 	cases := []struct {
@@ -121,8 +136,8 @@ func TestWebLocalAccess(t *testing.T) {
 		{name: "another site's page", header: map[string]string{"Sec-Fetch-Site": "cross-site"}, want: 401},
 		{name: "another origin", header: map[string]string{"Origin": "http://example.com"}, want: 403},
 		{name: "a foreign Host", host: "evil.example.com", want: 403},
-		{name: "a Bearer token isn't a credential here",
-			header: map[string]string{"Authorization": "Bearer x", "X-Forwarded-For": "10.0.0.9"}, want: 401},
+		{name: "a wrong token never falls back to a browser's rules",
+			header: map[string]string{"Authorization": "Bearer x"}, want: 401},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,9 +155,10 @@ func TestWebLocalAccess(t *testing.T) {
 		m["setup_required"] != false {
 		t.Errorf("auth status: %d %+v", code, env)
 	}
-	for _, path := range []string{"/api/v1/status", "/api/v1/version", reloadWebRoute} {
-		if code, _ := get(t, base+path, nil, ""); code != 404 {
-			t.Errorf("%s on the web listener: %d, want 404", path, code)
+	// What only the admin token opens stays closed to a browser.
+	for _, path := range []string{"/api/v1/status", "/api/v1/version"} {
+		if code, _ := get(t, base+path, nil, ""); code != 401 {
+			t.Errorf("%s from a browser: %d, want 401", path, code)
 		}
 	}
 	req, _ := http.NewRequest(http.MethodGet, base+"/datapacks/x", nil)
@@ -156,13 +172,13 @@ func TestWebLocalAccess(t *testing.T) {
 // WebSockets it upgraded close at CloseAll (as the listener's shutdown runs it).
 func TestWebRemoteAccessAndProxy(t *testing.T) {
 	base, ext := startWeb(t, config.AccessRemote, fakeExtension(t))
-	host := strings.TrimPrefix(base, "http://")
+	host := strings.TrimPrefix(base, "https://")
 	code, env := get(t, base+authStatusRoute, nil, "")
 	if m, _ := env.Data.(map[string]any); code != 200 || m["access"] != "remote" || m["signed_in"] != true ||
 		m["setup_required"] != false || m["username"] != nil {
 		t.Fatalf("auth status: %d %+v", code, env)
 	}
-	own := "https://" + host
+	own := base
 	cases := []struct {
 		name   string
 		header map[string]string
@@ -175,7 +191,7 @@ func TestWebRemoteAccessAndProxy(t *testing.T) {
 		{name: "another site's page", header: map[string]string{"Sec-Fetch-Site": "cross-site"}, want: 403},
 		{name: "a sibling site's page", header: map[string]string{"Sec-Fetch-Site": "same-site"}, want: 403},
 		{name: "another origin", header: map[string]string{"Origin": "https://example.com"}, want: 403},
-		{name: "an http Origin on the HTTPS listener", header: map[string]string{"Origin": base}, want: 403},
+		{name: "an http Origin over TLS", header: map[string]string{"Origin": "http://" + host}, want: 403},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,9 +267,11 @@ func TestWebExtensionDown(t *testing.T) {
 	}
 }
 
+// dialWebSocket upgrades a connection over TLS (remote access) to a WebSocket at path.
 func dialWebSocket(t *testing.T, host, path string) net.Conn {
 	t.Helper()
-	c, err := net.Dial("tcp", host)
+	//nolint:gosec // G402: the test's own certificate
+	c, err := tls.Dial("tcp", host, &tls.Config{InsecureSkipVerify: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,4 +301,119 @@ func rowNamed(rows []any, name string) (map[string]any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// One port takes every credential, by what the request carries: tokens (only from this computer,
+// over plain HTTP or TLS), browsers (plain HTTP from this computer, or TLS with remote access), and
+// with the web UI off only tokens. The owner's routes refuse the client token; the admin-only ones
+// take only the admin token.
+func TestOnePortCredentials(t *testing.T) {
+	const port = 7790
+	serverFor := func(access string, off bool, authMode string) *Server {
+		s := New(Options{Info: Info{Version: "test"}, Port: port, Token: token, ClientToken: clientToken,
+			Auth: authMode, Logger: slog.New(slog.DiscardHandler), ReloadWeb: func() {},
+			UI:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") }),
+			Web: &Web{Access: access, Off: off}})
+		probe(s)
+		return s
+	}
+	const (
+		here      = "127.0.0.1:50000"
+		elsewhere = "192.0.2.7:50000"
+		overTLS   = true
+	)
+	admin := map[string]string{"Authorization": "Bearer " + token}
+	client := map[string]string{"Authorization": "Bearer " + clientToken}
+	cases := []struct {
+		name, access, auth, path, peer string
+		off, tls                       bool
+		header                         map[string]string
+		want                           int
+		wantCred                       string
+	}{
+		// Browsers.
+		{name: "a browser here, plain", access: "local", path: "/api/v1/probe",
+			peer: here, want: 200, wantCred: CredentialLocal},
+		{name: "a browser here, plain, remote access", access: "remote", path: "/api/v1/probe", peer: here, want: 200,
+			wantCred: CredentialLocal},
+		{name: "a browser elsewhere, TLS", access: "remote", path: "/api/v1/probe", peer: elsewhere, tls: overTLS, want: 200,
+			wantCred: CredentialRemote},
+		{name: "another site's page, TLS", access: "remote", path: "/api/v1/probe", peer: elsewhere, tls: overTLS,
+			header: map[string]string{"Sec-Fetch-Site": "cross-site"}, want: 403},
+		// Tokens.
+		{name: "the client token here", access: "remote", path: "/api/v1/probe", peer: here, header: client, want: 200,
+			wantCred: CredentialClient},
+		{name: "the client token here over TLS", access: "remote", path: "/api/v1/probe", peer: here, tls: overTLS,
+			header: client, want: 200, wantCred: CredentialClient},
+		{name: "the client token from elsewhere", access: "remote", path: "/api/v1/probe", peer: elsewhere, tls: overTLS,
+			header: client, want: 401},
+		{name: "the admin token from elsewhere", access: "remote", path: "/api/v1/status", peer: elsewhere, tls: overTLS,
+			header: admin, want: 401},
+		// The admin-only routes.
+		{name: "status, the admin token", access: "local", path: "/api/v1/status", peer: here, header: admin, want: 200,
+			wantCred: ""},
+		{name: "status, the client token", access: "local", path: "/api/v1/status", peer: here, header: client, want: 403},
+		{name: "status, a browser", access: "local", path: "/api/v1/status", peer: here, want: 401},
+		{name: "status, a browser over TLS", access: "remote", path: "/api/v1/status",
+			peer: elsewhere, tls: overTLS, want: 401},
+		// The owner's routes.
+		{name: "extensions, a browser", access: "local", path: "/api/v1/extensions", peer: here, want: 200},
+		{name: "extensions, the admin token", access: "local", path: "/api/v1/extensions",
+			peer: here, header: admin, want: 200},
+		{name: "extensions, the client token", access: "local", path: "/api/v1/extensions",
+			peer: here, header: client, want: 403},
+		{name: "extensions, auth off and the UI off", access: "local", auth: "none", off: true, path: "/api/v1/extensions",
+			peer: here, want: 403},
+		// An extension's pages take a browser, whatever token it sends; the proxy then finds nothing.
+		{name: "an extension's page with a token", access: "local", path: "/ext/agentk/x",
+			peer: here, header: client, want: 404},
+		// The web UI off: only tokens.
+		{name: "UI off: a browser", access: "local", off: true, path: "/api/v1/probe", peer: here, want: 401},
+		{name: "UI off: the client token", access: "local", off: true, path: "/api/v1/probe", peer: here, header: client,
+			want: 200, wantCred: CredentialClient},
+		{name: "UI off: the page", access: "local", off: true, path: "/", peer: here, want: 404},
+		{name: "UI off: an extension's page", access: "local", off: true, path: "/ext/agentk/x", peer: here, want: 404},
+		{name: "UI off: auth off", access: "local", auth: "none", off: true, path: "/api/v1/probe", peer: here, want: 200,
+			wantCred: CredentialNone},
+		{name: "UI off: auth off takes no browser", access: "local", auth: "none", off: true, path: "/api/v1/probe",
+			peer: here, header: map[string]string{"Sec-Fetch-Site": "same-origin"}, want: 404},
+		{name: "auth off takes no other site's page", access: "local", auth: "none", path: "/api/v1/probe",
+			peer: here, header: map[string]string{"Sec-Fetch-Site": "cross-site"}, want: 401},
+		{name: "auth off takes nothing from elsewhere", access: "remote", auth: "none", off: true, path: "/api/v1/probe",
+			peer: elsewhere, tls: overTLS, want: 404},
+		// The Host and Origin checks follow the connection.
+		{name: "plain with a foreign Host", access: "remote", path: "/api/v1/probe",
+			peer: here, header: map[string]string{"Host": "box.example.com:7790"},
+			want: 403},
+		{name: "TLS with any Host", access: "remote", path: "/api/v1/probe", peer: elsewhere, tls: overTLS,
+			header: map[string]string{"Host": "box.example.com:7790", "Origin": "https://box.example.com:7790"}, want: 200,
+			wantCred: CredentialRemote},
+		{name: "plain with an https Origin", access: "remote", path: "/api/v1/probe", peer: here,
+			header: map[string]string{"Origin": "https://127.0.0.1:7790"}, want: 403},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := serverFor(tc.access, tc.off, tc.auth)
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			req.Host, req.RemoteAddr = "127.0.0.1:7790", tc.peer
+			if tc.tls {
+				req.TLS = &tls.ConnectionState{}
+			}
+			for k, v := range tc.header {
+				if k == "Host" {
+					req.Host = v
+					continue
+				}
+				req.Header.Set(k, v)
+			}
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("%d, want %d: %s", rec.Code, tc.want, rec.Body)
+			}
+			if tc.wantCred != "" && !strings.Contains(rec.Body.String(), `"data":"`+tc.wantCred+`"`) {
+				t.Errorf("credential: %s, want %s", rec.Body, tc.wantCred)
+			}
+		})
+	}
 }

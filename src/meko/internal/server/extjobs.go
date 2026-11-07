@@ -75,8 +75,8 @@ func (j *job) finish(err error) {
 	}
 }
 
-// ExtensionJobs are the extensions' jobs, by name. The web listener's owner keeps one for all the
-// servers it builds (Web.Jobs), so a job outlives a restart of the listener; Cancel stops the
+// ExtensionJobs are the extensions' jobs, by name. The listener keeps one for all the servers it
+// builds (Web.Jobs), so a job outlives a swap of one for another; Cancel stops the
 // running ones when Meko stops.
 type ExtensionJobs struct {
 	ctx    context.Context

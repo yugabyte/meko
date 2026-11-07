@@ -52,10 +52,10 @@ describe('HTTP API: sharing, invites and Meko', () => {
     expect(env.mekoApi.calls).toEqual([]);
     await testMeko(env);
     // A Meko that doesn't share (one not linked to Meko Cloud) says so itself, and that's the error.
-    env.mekoApi.handle(() => ({ status: 409, body: { error: { code: 'CLOUD_NOT_LINKED', message: "This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link." } } }));
+    env.mekoApi.handle(() => ({ status: 409, body: { error: { code: 'CLOUD_NOT_LINKED', message: "This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud-link." } } }));
     const unlinked = await call('GET', '/api/meko/datapacks/dp-1/people');
     expect(unlinked.statusCode).toBe(409);
-    expect(unlinked.json().error).toBe("Meko: This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link.");
+    expect(unlinked.json().error).toBe("Meko: This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud-link.");
 
     let shareStatus = 200;
     env.mekoApi.handle((c: ApiCall) => {

@@ -22,11 +22,11 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
 	"github.com/yugabyte/meko/src/meko/internal/config"
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/logging"
 	"github.com/yugabyte/meko/src/meko/internal/mcp"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/rest"
 	"github.com/yugabyte/meko/src/meko/internal/secrets"
@@ -48,7 +48,7 @@ const (
 	jobsWait = 10 * time.Second
 )
 
-// testEmbedder, if set, makes the memory engine use a deterministic hashing embedder instead of
+// testEmbedder, if set, makes the context engine use a deterministic hashing embedder instead of
 // downloading its model. Only this package's tests set it (cli_test.go's TestMain), so no
 // environment can switch the shipped binary's model.
 var testEmbedder string
@@ -71,11 +71,10 @@ func SignalContext() context.Context {
 }
 
 // Serve runs the server until ctx ends: it locks the data folder, opens and migrates the
-// database, listens on 127.0.0.1 (the API listener), writes the admin token, pid and port files,
-// and serves; and it runs the web listener beside it (webListener), which hands over from the
-// extensions first. On
-// the way out it drains requests, stops children, checkpoints the WAL, closes the database and
-// removes the run files.
+// database, takes Meko's one port (webListener: 127.0.0.1, or every address with remote access),
+// writes the admin token, pid and port files, and serves agents, the CLI and browsers on it, with
+// the extensions' handoff once it serves. On the way out it drains requests, stops children,
+// checkpoints the WAL, closes the database and removes the run files.
 func Serve(ctx context.Context, o ServeOptions) (err error) {
 	l, cfg := o.Layout, o.Config
 	if err = l.Ensure(); err != nil {
@@ -160,9 +159,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		} else {
 			makeMekoCLI(app, log)
 			renameExtensions(l, log)
+			l.MoveRenamed()
 		}
 	} else {
 		renameExtensions(l, log) // a build from source is never on probation
+		l.MoveRenamed()
 	}
 	refreshLaunchAgent(l, log)
 
@@ -190,11 +191,13 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 
-	ln, err := server.Listen(cfg.Server.Port)
-	if err != nil {
+	// The one port, for agents, the CLI and browsers: taken now, so one another program holds stops
+	// serve before anything starts. The extensions hand over once it serves (web.Run).
+	web := newWebListener(l, st, log, cfg.Server.Port)
+	if err = web.Bind(cfg); err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer web.Close()
 	token, err := auth.NewToken()
 	if err != nil {
 		return err
@@ -216,7 +219,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 
-	// The store API the memory engine calls, on its unix socket with a per-start token of its own.
+	// The store API the context engine calls, on its unix socket with a per-start token of its own.
 	internalToken, err := auth.NewToken()
 	if err != nil {
 		return err
@@ -237,10 +240,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		log.Warn("killed children a previous server left running", "count", n, "error", err)
 	}
 	sup := supervisor.New(log)
-	noMemoryEngine := startMemoryEngine(sup, l, cfg, internalToken, log)
+	noContextEngine := startContextEngine(sup, l, cfg, internalToken, log)
 	var cloud *cloudlink.Service // set below, before anything serves
-	svc := memory.New(st, memoryengine.NewClient(l.MemoryEngineSock, internalToken), memory.Options{
-		UserID: userID, Log: log, NoMemoryEngine: noMemoryEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
+	svc := memory.New(st, contextengine.NewClient(l.ContextEngineSock, internalToken), memory.Options{
+		UserID: userID, Log: log, NoContextEngine: noContextEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
 		KBMaxDistance: cfg.KnowledgeBase.MaxDistance, FilesDir: l.KnowledgeFiles,
 		MaxContentBytes: cfg.Storage.MaxContentBytes(), BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
 		CloudLinked: func() bool {
@@ -255,9 +258,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			p, _ := app.ReadPending()
 			return p != nil && p.To == release
 		},
-		MemoryEngineChild: func() (supervisor.Status, bool) {
+		ContextEngineChild: func() (supervisor.Status, bool) {
 			for _, c := range sup.Statuses() {
-				if c.Name == memoryengine.Name {
+				if c.Name == contextengine.Name {
 					return c, true
 				}
 			}
@@ -266,7 +269,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	})
 	// Knowledge files a stopped server was indexing go back in the queue, and files no document
 	// names (a crash between storing a file and its row) are removed. Both are quick, and finish
-	// even when a stop arrives during start. Neither failing stops the server (the memory engine is
+	// even when a stop arrives during start. Neither failing stops the server (the context engine is
 	// already running, and returning here would skip stopping it): the files wait for the next start.
 	boot := context.WithoutCancel(ctx)
 	if n, err := svc.RequeueInterrupted(boot); err != nil {
@@ -283,7 +286,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	usage := callhome.New(callhome.Options{Store: st, Config: cfg.CallHome, Release: isRelease,
 		Facts: installFacts(l, cfg, svc), Tools: mcp.ToolNames(), Log: log, FirstCheck: testCallHomeFirstCheck})
 	// Embeds turns for conversation search and knowledge-base chunks as they arrive, and any the
-	// memory engine missed while down; indexes knowledge files; keeps the call log to its retention;
+	// context engine missed while down; indexes knowledge files; keeps the call log to its retention;
 	// and sends the usage stats.
 	embedCtx, stopEmbedder := context.WithCancel(context.Background())
 	embedderDone := make(chan struct{})
@@ -322,8 +325,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return mcp.Call(ctx, mcpOpts, cred, name, args)
 	}
 	registerREST := func(g *echo.Group) { rest.Register(g, restOpts) }
-	// The web listener: the web UI and the extensions' for browsers, with local or remote access.
-	web := newWebListener(l, st, log)
 	// Updates: a release install checks for them, and the Status page checks and installs them.
 	restart := make(chan struct{})
 	updCtx, stopUpdates := context.WithCancel(context.Background())
@@ -350,7 +351,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	local := agents.Target{Kind: agents.KindLocal, URL: fmt.Sprintf("http://127.0.0.1:%d/mcp", cfg.Server.Port),
 		Token: clientToken}
 	agentsMgr := &agents.Manager{Lock: agentsLock(l), Target: func() (agents.Target, error) { return local, nil }}
-	// The Meko Cloud link: the web UI and meko cloud_link change it; /mcp then offers its tools, the
+	// The Meko Cloud link: the web UI and meko cloud-link change it; /mcp then offers its tools, the
 	// agents an older Meko connected to it come back here, and the running extensions hear.
 	cloud = &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
 		List: cloudlink.ListDatapacks,
@@ -367,22 +368,17 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	// The routes that take a datapack send one this Meko doesn't have to the linked Meko Cloud.
 	restOpts.Cloud = cloud
 	mcpHandler := mcp.NewHandler(mcpOpts)
+	// The server for the settings the listener takes up: [web] (access, and whether browsers are let
+	// in) may change while serve runs; the rest is read at start.
 	web.newOpts = func(wcfg config.Config) server.Options {
-		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
-			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
-			MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, UI: ui, Cloud: cloud,
-			Agents: agentsMgr, Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
-				Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates, CheckExtensions: web.CheckExtensions,
-				SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
+		return server.Options{Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken,
+			Auth: cfg.Server.Auth, Logger: log, Children: sup.Statuses, ContextEngine: svc.EngineStatus,
+			UsageStats: usage.State, Storage: svc.Storage, MCP: mcpHandler, REST: registerREST, Upload: upload,
+			Download: download, UI: ui, Cloud: cloud, Agents: agentsMgr, WebStatus: web.Status, ReloadWeb: web.Reload,
+			Web: &server.Web{Access: wcfg.Web.Access, Off: !wcfg.Web.Enabled, Extensions: web.Proxies,
+				Installed: web.Installed, Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates,
+				CheckExtensions: web.CheckExtensions, SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
 	}
-	srv := server.New(server.Options{
-		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
-		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
-		MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, Cloud: cloud, Agents: agentsMgr,
-		WebStatus: web.Status, ReloadWeb: web.Reload,
-	})
-	served := make(chan error, 1)
-	go func() { served <- srv.Serve(ln) }()
 	webCtx, stopWeb := context.WithCancel(context.Background())
 	defer stopWeb()
 	webDone := make(chan struct{})
@@ -397,6 +393,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	go func() {
 		defer close(followDone)
 		moveBackOnce(followCtx, st, cloud, log)
+		moveToOnePortOnce(followCtx, st, agentsMgr, local, log)
 	}()
 	go cloud.CloudTools(followCtx)
 	// The extensions still running from before this start read Meko again: an update or a rollback may
@@ -409,7 +406,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			"write your memories through /mcp and /api/v1")
 	}
 
-	var serveErr error
 	// Without a service to start the new version, serve runs it in its own place once it has stopped.
 	var execInto string
 	select {
@@ -425,7 +421,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		if os.Getenv("MEKO_SERVICE") == "" {
 			execInto = app.CurrentExe()
 		}
-	case serveErr = <-served:
 	}
 	stopUpdates()
 	// An action still running is stopped (an install is cut off; Install again finishes it). Its
@@ -435,20 +430,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		defer close(jobsDone)
 		web.jobs.Cancel(jobsWait)
 	}()
-	if onProbation && serveErr == nil {
+	if onProbation {
 		// A clean stop of a version on probation isn't a failed start.
 		if err := app.Uncount(release); err != nil {
 			log.Warn("can't update the pending update", "error", err)
 		}
 	}
-	stopWeb() // Run drains the web listener (drainTimeout) before it returns
+	stopWeb() // Run drains the port (drainTimeout) before it returns
 	<-webDone
-	// The API listener's own drain, after the web listener's: agents' requests get the whole of it.
-	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
-	defer cancel()
-	if err := srv.Shutdown(drain); err != nil {
-		log.Warn("requests didn't finish in time", "error", err)
-	}
 	stopEmbedder()
 	<-embedderDone
 	stopFollow()
@@ -467,10 +456,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	<-jobsDone
 	log.Info("Meko stopped")
 	// A stop asked for while serve was stopping (meko stop, restart or destroy) wins over the exec.
-	if serveErr == nil && execInto != "" && ctx.Err() == nil {
+	if execInto != "" && ctx.Err() == nil {
 		return &execError{exe: execInto, why: "restarting into the update"}
 	}
-	return serveErr
+	return nil
 }
 
 // installFacts is what the usage stats say about this install: versions, platform, settings and
@@ -496,27 +485,27 @@ func installFacts(l paths.Layout, cfg config.Config, svc *memory.Service) func(c
 		}
 		return callhome.Install{Version: version.Version, Commit: version.Commit, Platform: runtime.GOOS,
 			Arch: runtime.GOARCH, Go: runtime.Version(), Service: service, Auth: cfg.Server.Auth, Secrets: secretsKind,
-			Update:       callhome.Update{Channel: cfg.Update.Channel, Auto: cfg.Update.Auto},
-			MemoryEngine: svc.EngineStatus(ctx).State, Extensions: installed}
+			Update:        callhome.Update{Channel: cfg.Update.Channel, Auto: cfg.Update.Auto},
+			ContextEngine: svc.EngineStatus(ctx).State, Extensions: installed}
 	}
 }
 
-// startMemoryEngine starts the memory engine under sup, or says why it can't (no Node, or the memory engine
+// startContextEngine starts the context engine under sup, or says why it can't (no Node, or the context engine
 // isn't built): the server then runs without it, and memory features say why.
-func startMemoryEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, token string,
+func startContextEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, token string,
 	log *slog.Logger) string {
-	o := memoryengine.Options{Node: cfg.MemoryEngine.Node, Dir: cfg.MemoryEngine.Dir, TestEmbedder: testEmbedder,
-		Models: memoryengine.FindModels()}
-	node, err := memoryengine.FindNode(o)
+	o := contextengine.Options{Node: cfg.ContextEngine.Node, Dir: cfg.ContextEngine.Dir, TestEmbedder: testEmbedder,
+		Models: contextengine.FindModels()}
+	node, err := contextengine.FindNode(o)
 	if err == nil {
 		var dir string
-		if dir, err = memoryengine.FindDir(o); err == nil {
-			sup.Start(memoryengine.Spec(node, dir, l, token, o))
-			log.Info("memory engine starting", "node", node, "dir", dir, "bundled_models", o.Models != "")
+		if dir, err = contextengine.FindDir(o); err == nil {
+			sup.Start(contextengine.Spec(node, dir, l, token, o))
+			log.Info("context engine starting", "node", node, "dir", dir, "bundled_models", o.Models != "")
 			return ""
 		}
 	}
-	log.Warn("the memory engine can't start; memory features are off", "reason", err)
+	log.Warn("the context engine can't start; memory features are off", "reason", err)
 	return err.Error()
 }
 
@@ -562,10 +551,11 @@ func makeMekoCLI(app update.App, log *slog.Logger) {
 	}
 }
 
-// renameExtensions moves this data folder's extensions installed under an older name of their
-// command onto the current one (extensions.Registry.Rename): AgentK's agentk becomes me_koder. Like
+// renameExtensions moves this data folder's release installs of extensions onto app/current's
+// program by its current name, with no command on PATH (extensions.Registry.Rename): AgentK's
+// ~/.local/bin/me_koder (or agentk) gives way to app/current/bin/me_kode, run as meko kode. Like
 // makeMekoCLI, serve runs it only once its release is past probation: a Meko rolled back after it
-// would have a registry naming links its catalog doesn't know, and old links it can't make again.
+// would have a registry naming a program its catalog doesn't know, and old links it can't make again.
 func renameExtensions(l paths.Layout, log *slog.Logger) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -721,7 +711,7 @@ func clientTokens(l paths.Layout, cfg config.Config) (auth.ClientTokens, error) 
 }
 
 func removeRunFiles(l paths.Layout) {
-	for _, p := range []string{l.Pid, l.Port, l.Token, l.StoreSock, l.MemoryEngineSock} {
+	for _, p := range []string{l.Pid, l.Port, l.Token, l.StoreSock, l.ContextEngineSock} {
 		_ = paths.RemoveIfExists(p)
 	}
 }
@@ -749,6 +739,33 @@ func moveBackOnce(ctx context.Context, st *store.Store, cloud *cloudlink.Service
 	}
 	if err := st.SetSetting(ctx, keyAgentsOnThisMeko, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		log.Warn("can't record that the agents came back from Meko Cloud", "error", err)
+	}
+}
+
+// keyAgentsOnOnePort records that this Meko moved the agents connected to the listener agents had
+// before one port (127.0.0.1:7778) to its one port, so it runs once.
+const keyAgentsOnOnePort = "agents_one_port"
+
+// oldAgentsURL is where a Meko before one port had its agents connect: its agents' listener's MCP URL.
+const oldAgentsURL = "http://127.0.0.1:7778/mcp"
+
+// moveToOnePortOnce connects to the one port, once, the agents a Meko before it connected to its
+// agents' listener: only those whose meko server is at exactly oldAgentsURL (an Exact move), so one
+// pointed by hand at another Meko on this computer is left as it is. It's recorded only when no
+// agent failed, so a failed one is tried again at the next start; a stop during it leaves it for
+// the next start too.
+func moveToOnePortOnce(ctx context.Context, st *store.Store, m *agents.Manager, to agents.Target, log *slog.Logger) {
+	if _, done, err := st.Setting(ctx, keyAgentsOnOnePort); err != nil || done {
+		return
+	}
+	from := agents.Target{Kind: agents.KindLocal, URL: oldAgentsURL, Token: to.Token, Exact: true}
+	moves := m.Move(ctx, from, to)
+	logMoves(log, moves)
+	if ctx.Err() != nil || len(moves.Failed) > 0 {
+		return
+	}
+	if err := st.SetSetting(ctx, keyAgentsOnOnePort, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		log.Warn("can't record that the agents moved to Meko's one port", "error", err)
 	}
 }
 

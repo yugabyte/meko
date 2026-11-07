@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -228,12 +229,11 @@ func removePathLines(home string) ([]string, error) {
 	return changed, nil
 }
 
-// checkAPIPort fails install, before anything is written, when another program holds the API port:
-// the service would be written and then fail to start. A port a Meko server holds is fine: this
-// data folder's (install restarts it), or the installed service's other data folder's (installing
-// the service moves it to this one). The web port isn't checked, since Meko takes it over from an
-// AgentK on this computer.
-func checkAPIPort(l paths.Layout, m service.Manager, home string, r report, stderr io.Writer) int {
+// checkPort fails install, before anything is written, when another program holds Meko's port (an
+// AgentK from before Meko served it, on 7777, is one): the service would be written and then fail to
+// start. A port a Meko server holds is fine: this data folder's (install restarts it), or the
+// installed service's other data folder's (installing the service moves it to this one).
+func checkPort(l paths.Layout, m service.Manager, home string, r report, stderr io.Writer) int {
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil {
 		return fail(stderr, err)
@@ -250,7 +250,9 @@ func checkAPIPort(l paths.Layout, m service.Manager, home string, r report, stde
 }
 
 // mekoHolds reports whether a Meko server that install replaces listens on port: this data
-// folder's, or the one the installed service runs.
+// folder's, or the one the installed service runs. Its port file names the port agents use; a Meko
+// from before one port listened on its web UI's too (7777, beside 7778 in the port file), which
+// its status reports.
 func mekoHolds(l paths.Layout, m service.Manager, port int) bool {
 	dirs := []string{l.Root}
 	if m.Installed() && m.DataDir() != "" {
@@ -264,8 +266,31 @@ func mekoHolds(l paths.Layout, m service.Manager, port int) bool {
 		if p, err := readInt(dl.Port); err == nil && p == port {
 			return true
 		}
+		if webPort(dl) == port {
+			return true
+		}
 	}
 	return false
+}
+
+// webPort is the port a running server's status says its web UI is on, or 0.
+func webPort(l paths.Layout) int {
+	c, err := newClient(l)
+	if err != nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	st, err := c.status(ctx)
+	if err != nil || st.Web == nil {
+		return 0
+	}
+	u, err := url.Parse(st.Web.URL)
+	if err != nil {
+		return 0
+	}
+	p, _ := strconv.Atoi(u.Port())
+	return p
 }
 
 // portFree reports, as an error, another program listening on port on this computer; tests replace it.
@@ -280,7 +305,8 @@ var portFree = func(port int) error {
 // portInUse prints install's failed Server row for a port another program holds, how to find it
 // or move Meko, and that running the installer again is safe.
 func portInUse(r report, port int, config string) {
-	r.step(stepFail, "Server", fmt.Sprintf("port %d is in use by another program", port))
+	r.step(stepFail, "Server", fmt.Sprintf("port %d is in use by another program (an AgentK from before Meko "+
+		"served it, or another)", port))
 	find := fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port)
 	if runtime.GOOS == "linux" {
 		find = fmt.Sprintf("ss -ltnp 'sport = :%d'", port)

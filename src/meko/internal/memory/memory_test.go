@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/store"
 	"github.com/yugabyte/meko/src/meko/internal/supervisor"
 )
 
-func TestMemoriesThroughTheMemoryEngine(t *testing.T) {
+func TestMemoriesThroughTheContextEngine(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, hashEmbedder)
 	const secret = "the zebra password is periwinkle"
@@ -25,7 +25,7 @@ func TestMemoriesThroughTheMemoryEngine(t *testing.T) {
 		t.Fatalf("add: %+v %v", added, err)
 	}
 	id := added[0].ID
-	more, err := h.svc.AddMemory(ctx, AddMemory{DatapackID: h.dp, Messages: []memoryengine.Message{
+	more, err := h.svc.AddMemory(ctx, AddMemory{DatapackID: h.dp, Messages: []contextengine.Message{
 		{Role: "system", Content: "skipped"},
 		{Role: "user", Content: "the rate limit is five hundred"},
 		{Role: "assistant", Content: "bananas are yellow", Name: "helper"},
@@ -111,54 +111,54 @@ func TestMemoriesThroughTheMemoryEngine(t *testing.T) {
 		t.Errorf("an empty query: %v", err)
 	}
 
-	// Memory text never reaches the memory engine's log.
-	log, err := os.ReadFile(h.l.MemoryEngineLog)
+	// Memory text never reaches the context engine's log.
+	log, err := os.ReadFile(h.l.ContextEngineLog)
 	if err != nil || strings.Contains(string(log), "zebra") || strings.Contains(string(log), "bananas") {
-		t.Errorf("memory text in memory_engine.log (%v):\n%s", err, log)
+		t.Errorf("memory text in context-engine.log (%v):\n%s", err, log)
 	}
 }
 
-// The memory engine going away gives ErrUnavailable; started again, it serves the same memories.
-func TestMemoryEngineDownAndBack(t *testing.T) {
+// The context engine going away gives ErrUnavailable; started again, it serves the same memories.
+func TestContextEngineDownAndBack(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, hashEmbedder)
-	kept := AddMemory{DatapackID: h.dp, Text: "kept across memory engine restarts"}
+	kept := AddMemory{DatapackID: h.dp, Text: "kept across context engine restarts"}
 	if _, err := h.svc.AddMemory(ctx, kept); err != nil {
 		t.Fatal(err)
 	}
-	h.stopMemoryEngine()
+	h.stopContextEngine()
 	_, err := h.svc.SearchMemories(ctx, Search{DatapackID: h.dp, Query: "restarts"})
-	if !errors.Is(err, memoryengine.ErrUnavailable) {
-		t.Errorf("with no memory engine: %v", err)
+	if !errors.Is(err, contextengine.ErrUnavailable) {
+		t.Errorf("with no context engine: %v", err)
 	}
 	if st := h.svc.EngineStatus(ctx); st.State == "ready" {
-		t.Errorf("status with no memory engine: %+v", st)
+		t.Errorf("status with no context engine: %+v", st)
 	}
-	h.startMemoryEngine()
-	res, err := h.svc.SearchMemories(ctx, Search{DatapackID: h.dp, Query: "memory engine restarts"})
+	h.startContextEngine()
+	res, err := h.svc.SearchMemories(ctx, Search{DatapackID: h.dp, Query: "context engine restarts"})
 	if err != nil || len(res) != 1 {
 		t.Errorf("after a restart: %+v %v", res, err)
 	}
 }
 
-// A memory engine whose model isn't the one the vectors were made with stays up, says why, and serves
+// A context engine whose model isn't the one the vectors were made with stays up, says why, and serves
 // nothing.
-func TestMemoryEngineWithAnotherModelIsRefused(t *testing.T) {
+func TestContextEngineWithAnotherModelIsRefused(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, hashEmbedder)
-	h.stopMemoryEngine()
+	h.stopContextEngine()
 	// Pretend the vectors were made with another model: rewrite the recorded one.
 	if err := h.st.SetSetting(ctx, "embedder_model", "another-model"); err != nil {
 		t.Fatal(err)
 	}
-	h.launchMemoryEngine()
-	st := h.waitMemoryEngine("error")
+	h.launchContextEngine()
+	st := h.waitContextEngine("error")
 	if !strings.Contains(st.Reason, "re-embedding") {
 		t.Errorf("status: %+v", st)
 	}
-	var notReady *memoryengine.NotReadyError
+	var notReady *contextengine.NotReadyError
 	if _, err := h.svc.SearchMemories(ctx, Search{DatapackID: h.dp, Query: "x"}); !errors.As(err, &notReady) {
-		t.Errorf("search on a refused memory engine: %v", err)
+		t.Errorf("search on a refused context engine: %v", err)
 	}
 }
 
@@ -171,16 +171,16 @@ func TestParaphraseAndIdentifierSearch(t *testing.T) {
 	}
 	ctx := context.Background()
 	h := newHarness(t, realEmbedder)
-	words := strings.Fields("server client session datapack memory engine socket token port worker model vector " +
+	words := strings.Fields("server client session datapack context engine socket token port worker model vector " +
 		"search keyword config release build test deploy branch commit review design approve merge cache index query")
 	rng := rand.New(rand.NewSource(1)) //nolint:gosec // G404: filler text
-	filler := make([]memoryengine.Message, 200)
+	filler := make([]contextengine.Message, 200)
 	for i := range filler {
 		var b strings.Builder
 		for j := 0; j < 10; j++ {
 			b.WriteString(words[rng.Intn(len(words))] + " ")
 		}
-		filler[i] = memoryengine.Message{Role: "user", Content: fmt.Sprintf("The %snote %d.", b.String(), i)}
+		filler[i] = contextengine.Message{Role: "user", Content: fmt.Sprintf("The %snote %d.", b.String(), i)}
 	}
 	if _, err := h.svc.AddMemory(ctx, AddMemory{DatapackID: h.dp, Messages: filler}); err != nil {
 		t.Fatal(err)
@@ -219,11 +219,11 @@ func TestParaphraseAndIdentifierSearch(t *testing.T) {
 	}
 }
 
-// A crashed memory engine's status says what the supervisor does about it, not "starting".
-func TestMemoryEngineStatusOfACrashedMemoryEngine(t *testing.T) {
-	child := supervisor.Status{Name: memoryengine.Name, State: supervisor.Failed, LastError: "exited: exit status 1"}
-	s := New(nil, memoryengine.NewClient("/nonexistent/mem_eng.sock", "tok"), Options{
-		MemoryEngineChild: func() (supervisor.Status, bool) { return child, true },
+// A crashed context engine's status says what the supervisor does about it, not "starting".
+func TestContextEngineStatusOfACrashedContextEngine(t *testing.T) {
+	child := supervisor.Status{Name: contextengine.Name, State: supervisor.Failed, LastError: "exited: exit status 1"}
+	s := New(nil, contextengine.NewClient("/nonexistent/ctx_eng.sock", "tok"), Options{
+		ContextEngineChild: func() (supervisor.Status, bool) { return child, true },
 	})
 	if st := s.EngineStatus(context.Background()); st.State != "failed" || st.Reason != child.LastError {
 		t.Errorf("failed: %+v", st)

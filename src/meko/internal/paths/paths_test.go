@@ -147,6 +147,63 @@ func TestEnsurePermissions(t *testing.T) {
 	}
 }
 
+// A data folder from before the context engine's rename keeps its engine's log and state folder
+// through Ensure (a release on probation may still roll back to them), and MoveRenamed then gives
+// them their new names, once: a new name that's already taken is left alone.
+func TestMoveRenamedMovesTheMemoryEnginesFiles(t *testing.T) {
+	l := New(filepath.Join(shortDir(t), "data"))
+	oldLog, oldDir := filepath.Join(l.LogDir, "memory_engine.log"), filepath.Join(l.Root, "memory_engine")
+	for _, d := range []string{l.LogDir, oldDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteFile(oldLog, []byte("old line\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(filepath.Join(oldDir, "config.json"), []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Ensure(); err != nil { // makes an empty context-engine/
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldLog); err != nil {
+		t.Fatalf("Ensure moved the old log: %v", err)
+	}
+	l.MoveRenamed()
+	if b, err := os.ReadFile(l.ContextEngineLog); err != nil || string(b) != "old line\n" {
+		t.Errorf("the log: %q, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(l.ContextEngineDir, "config.json")); err != nil {
+		t.Errorf("the state folder: %v", err)
+	}
+	for _, p := range []string{oldLog, oldDir} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s is still there: %v", p, err)
+		}
+	}
+
+	// Old files again (an older release run since): the new ones are taken, so both stay.
+	if err := WriteFile(oldLog, []byte("rolled back\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	l.MoveRenamed()
+	if b, err := os.ReadFile(l.ContextEngineLog); err != nil || string(b) != "old line\n" {
+		t.Errorf("the new log was overwritten: %q, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(l.ContextEngineDir, "config.json")); err != nil {
+		t.Errorf("the new state folder was replaced: %v", err)
+	}
+	for _, p := range []string{oldLog, oldDir} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+}
+
 // A data folder whose sockets' paths would pass the OS's limit is refused before anything is made.
 func TestEnsureRefusesADeepFolder(t *testing.T) {
 	deep := filepath.Join(shortDir(t), strings.Repeat("d", MaxSocketPath))

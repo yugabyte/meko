@@ -106,7 +106,7 @@ export function serviceFailure(svc: ServiceManager, message: string, logsDir: st
   const where = svc.kind === 'launchd' ? ` and ${tildify(join(logsDir, 'launchd*.log'))}` : '';
   return (
     `${message}\nCheck: ${svc.statusHint('server')}${where}.\n` +
-    'Or rerun with --no-service to skip the service setup, and start the server with: me_koder serve'
+    'Or rerun with --no-service to skip the service setup, and start the server with: meko kode serve'
   );
 }
 
@@ -182,7 +182,7 @@ function hostOf(url: string): string {
 /**
  * The installer's Meko step. AgentK uses the Meko running on this computer (`meko token --json`)
  * and stores nothing of it: that Meko serves its own datapacks and passes the rest on to Meko Cloud
- * once Meko Cloud is linked in Meko (Settings › Meko Cloud, or `meko cloud_link`). `--no-meko` skips
+ * once Meko Cloud is linked in Meko (Settings › Meko Cloud, or `meko cloud-link`). `--no-meko` skips
  * Meko's setup for the agents. Declining Meko's setup for Claude Code or Kiro (each offered only
  * where it's installed) is a warning, not a stop. Returns whether there's a Meko to use.
  */
@@ -413,11 +413,11 @@ export async function runInstall(args: string[]): Promise<void> {
     // 7. Services: rows only for what needs a look (the summary's "AgentK is running" says the rest).
     let running = false;
     if (values['no-service']) {
-      ui.warn('Services', 'skipped (--no-service). Start the server with: me_koder serve');
+      ui.warn('Services', 'skipped (--no-service). Start the server with: meko kode serve');
     } else if (installServices(paths)) {
       const probe = await waitForServer(paths);
       if (probe.ok) running = true;
-      else ui.warn('Server', `not answering yet (${probe.error}). See: me_koder logs`);
+      else ui.warn('Server', `not answering yet (${probe.error}). See: meko kode logs`);
     }
 
     // 8. Where to open it
@@ -436,14 +436,14 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.text(style.bold(running ? 'Done. AgentK is running.' : 'Done.'));
       ui.blank();
       ui.row('Browser', meko.meko?.webOff
-        ? "Meko's web UI is off: turn it on with meko ui start, then open AgentK with me_koder ui"
+        ? "Meko's web UI is off: turn it on with meko ui start, then open AgentK with meko kode ui"
         : meko.meko
           ? 'the Meko on this computer is too old to serve AgentK: update it with meko update'
-          : "Meko isn't running: start it with meko start, then open AgentK with me_koder ui");
+          : "Meko isn't running: start it with meko start, then open AgentK with meko kode ui");
     }
-    if (meko.meko?.webUrl) ui.row('Open', 'me_koder ui');
-    ui.row('Status', 'me_koder status');
-    ui.row('Logs', 'me_koder logs -f');
+    if (meko.meko?.webUrl) ui.row('Open', 'meko kode ui');
+    ui.row('Status', 'meko kode status');
+    ui.row('Logs', 'meko kode logs -f');
     ui.blank();
   } catch (e) {
     if (e instanceof InstallError || e instanceof ServiceError || e instanceof PrivateDirError) {

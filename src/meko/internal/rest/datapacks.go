@@ -220,7 +220,7 @@ func (a *api) deleteDatapack(c echo.Context) error {
 	return envelope.OK(c, map[string]string{"message": "datapack deleted"})
 }
 
-// provisionStatus is what the Connect page shows: the MCP URL and the key to send, the client
+// provisionStatus is Meko Cloud's route of that name: the MCP URL and the key to send, the client
 // token (per-client keys are #195). Only a request that sent a credential gets it: with auth =
 // "none" anyone local reaches this route, and the token must keep its meaning once auth is back on.
 func (a *api) provisionStatus(c echo.Context) error {

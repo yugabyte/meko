@@ -36,6 +36,9 @@ func TestEveryCommandHasHelp(t *testing.T) {
 			if listed == (c.hidden || c.subcommands) {
 				t.Errorf("%s %s: listed in --help %v, hidden %v", prog, c.name, listed, c.hidden)
 			}
+			if _, ok := extensionOfVerb(c.name); ok && prog == progMeko {
+				continue // meko kode --help is AgentK's own help: TestExtensionCommandRunsItsProgram
+			}
 			var out, errb bytes.Buffer
 			code := runProg(prog, append(strings.Fields(c.name), "--help"), &out, &errb)
 			if code != exitOK || !strings.Contains(out.String(), "Usage: "+c.usage) ||
@@ -79,6 +82,12 @@ func TestUsage(t *testing.T) {
 	want(t, "unknown command", code, exitUsage, errs, `meko: unknown command "frobnicate"`+"\nRun meko --help")
 	code, _, errs = run("statsu")
 	want(t, "a typo", code, exitUsage, errs, "Did you mean meko status?\n")
+	// cloud_link was renamed cloud-link: the old name runs nothing and points to the new one.
+	code, _, errs = run("cloud_link", "--off")
+	want(t, "cloud_link", code, exitUsage, errs, `meko: unknown command "cloud_link"`+"\nDid you mean meko cloud-link?\n")
+	code, out, _ = run("cloud-link", "-h")
+	want(t, "cloud-link -h", code, 0, out, "Usage: meko cloud-link [flags]")
+	want(t, "cloud-link -h", code, 0, out, "More: "+docsURL+"#cloud-link\n")
 	code, _, errs = run("start", "--nope")
 	want(t, "a bad flag", code, exitUsage, errs, "Run meko start --help for its flags\n")
 	code, _, errs = run("help", "frobnicate")
@@ -140,7 +149,7 @@ func TestExtensionCommands(t *testing.T) {
 		t.Errorf("meko help extension: exit %d, %q", code, help)
 	}
 	code, out, _ = run("extension", "delete", "-h")
-	want(t, "extension delete -h", code, 0, out, "Usage: meko extension delete agentk|presenter [flags]")
+	want(t, "extension delete -h", code, 0, out, "Usage: meko extension delete agentk|present [flags]")
 	want(t, "extension delete -h", code, 0, out, "--purge")
 	want(t, "extension delete -h", code, 0, out, "More: "+docsURL+"#extension-delete")
 	_, help, _ = run("help", "extension", "delete")
@@ -166,7 +175,7 @@ func TestExtensionCommands(t *testing.T) {
 	code, _, errs = run("extension list")
 	want(t, "one word with a space", code, exitUsage, errs, `unknown command "extension list"`)
 	code, _, errs = run("extension", "delete", "--data-dir", t.TempDir())
-	want(t, "extension delete with no name", code, exitUsage, errs, "name the extension (agentk, presenter)")
+	want(t, "extension delete with no name", code, exitUsage, errs, "name the extension (agentk, present)")
 	code, _, errs = run("extension", "delete", "frob", "--data-dir", t.TempDir())
 	want(t, "extension delete frob", code, exitUsage, errs, `no extension called "frob"`)
 }
@@ -215,16 +224,16 @@ func TestReport(t *testing.T) {
 	if r.color {
 		t.Error("color on a buffer")
 	}
-	r.step(stepWarn, "Memory engine", "starting")
+	r.step(stepWarn, "Context engine", "starting")
 	r.running("Meko 1.0 is running", "pid 7, up 2h")
 	r.links([]linkRow{{"Web UI", "http://127.0.0.1:7777", "local, from this computer"},
-		{"Agents", "http://127.0.0.1:7778/mcp", "MCP and API"}, {"Cloud", "", "not linked"}})
+		{"Agents", "http://127.0.0.1:7777/mcp", "MCP and API"}, {"Cloud", "", "not linked"}})
 	r.next([][2]string{{"meko ui", "open the web UI"},
 		{"meko status", "check on Meko at any time · meko uninstall removes it"}})
-	if want := "  ! Memory engine   starting\n" +
+	if want := "  ! Context engine  starting\n" +
 		"\n  ● Meko 1.0 is running · pid 7, up 2h\n" +
 		"\n  Web UI  http://127.0.0.1:7777 · local, from this computer\n" +
-		"  Agents  http://127.0.0.1:7778/mcp · MCP and API\n" +
+		"  Agents  http://127.0.0.1:7777/mcp · MCP and API\n" +
 		"  Cloud   not linked\n" +
 		"\nNext:\n" +
 		"  meko ui        open the web UI\n" +
@@ -238,10 +247,10 @@ func TestReport(t *testing.T) {
 	r.color = true
 	t.Setenv(spin.BackgroundEnv, "dark") // never ask the developer's terminal
 	r.running("Meko 1.0 is running", "")
-	r.links([]linkRow{{"Agents", "http://127.0.0.1:7778/mcp", ""}})
+	r.links([]linkRow{{"Agents", "http://127.0.0.1:7777/mcp", ""}})
 	r.next([][2]string{{"meko ui", "open the web UI"}, {"meko status", "check on Meko · meko uninstall removes it"}})
 	if want := "\n  \033[32m●\033[0m \033[1mMeko 1.0 is running\033[0m\n" +
-		"\n  \033[2mAgents\033[0m  " + spin.Link("http://127.0.0.1:7778/mcp", true) + "\n" +
+		"\n  \033[2mAgents\033[0m  " + spin.Link("http://127.0.0.1:7777/mcp", true) + "\n" +
 		"\nNext:\n" +
 		" \033[1;97;44m meko ui \033[0m       open the web UI\n" +
 		"  " + spin.Blue("meko status", true) + "    check on Meko" +

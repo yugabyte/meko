@@ -20,7 +20,7 @@ func TestCallLog(t *testing.T) {
 			OK: true, Ms: 12, MemoryN: 3, ConversationN: 1, ScoreHigh: 2, ScoreLow: 2, TokensSent: 1600,
 			TokensSaved: 8400, TokensIfRaw: 9000,
 			Steps: []Step{{Step: "memory_search", Ms: 9, N: 3, IDs: []string{"m1", "m2", "m3"}}}},
-		{At: now, Tool: "memory_add", DatapackID: "d2", OK: false, ErrorCode: "memory_engine_unavailable"},
+		{At: now, Tool: "memory_add", DatapackID: "d2", OK: false, ErrorCode: "context_engine_unavailable"},
 	}
 	for _, c := range calls {
 		if err := s.AddCall(ctx, c, nil); err != nil {
@@ -41,7 +41,7 @@ func TestCallLog(t *testing.T) {
 		t.Errorf("round trip: %+v", c)
 	}
 	all, _ := s.Calls(ctx, "", time.Time{})
-	if len(all) != 3 || all[2].OK || all[2].ErrorCode != "memory_engine_unavailable" || all[2].Steps == nil {
+	if len(all) != 3 || all[2].OK || all[2].ErrorCode != "context_engine_unavailable" || all[2].Steps == nil {
 		t.Errorf("all: %+v", all)
 	}
 

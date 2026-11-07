@@ -26,7 +26,7 @@ func post(t *testing.T, url string, header map[string]string) (int, envelope.Res
 	for k, v := range header {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestFailedJobOvertaken(t *testing.T) {
 	names := []string{}
 	register := func(n ...string) { mu.Lock(); defer mu.Unlock(); names = n }
 	fail := func(_ context.Context, _, action string, _ io.Writer) error {
-		return errors.New("me_koder " + action + " failed: exit status 1")
+		return errors.New("me_kode " + action + " failed: exit status 1")
 	}
 	sock := filepath.Join(shortTemp(t), "agentk.sock")
 	base, _ := startWeb(t, config.AccessLocal, sock,
@@ -222,26 +222,26 @@ func TestExtensionListShowsReleasesMekoUpdates(t *testing.T) {
 	close(f.release)
 	release := func(w *Web) {
 		w.ExtensionUpdates = func(name string) ExtensionUpdate {
-			if name == "presenter" {
+			if name == "present" {
 				return ExtensionUpdate{Version: "0.20261024.0", Updatable: true, RolledBack: []string{}}
 			}
 			return ExtensionUpdate{RolledBack: []string{}}
 		}
 	}
-	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("agentk", "presenter"), release,
+	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("agentk", "present"), release,
 		func(w *Web) { w.Run = f.run })
-	if r := extensionRow(t, base, "presenter"); r.Version != "0.20261024.0" || !r.Updatable {
-		t.Errorf("presenter: %+v", r)
+	if r := extensionRow(t, base, "present"); r.Version != "0.20261024.0" || !r.Updatable {
+		t.Errorf("present: %+v", r)
 	}
 	if r := agentkRow(t, base); r.Version != "" || r.Updatable {
 		t.Errorf("agentk: %+v", r)
 	}
-	if code, _ := post(t, base+"/api/v1/extensions/presenter/update", nil); code != http.StatusAccepted {
+	if code, _ := post(t, base+"/api/v1/extensions/present/update", nil); code != http.StatusAccepted {
 		t.Fatalf("update: %d", code)
 	}
 	for range 200 {
-		if r := extensionRow(t, base, "presenter"); r.Job != nil && r.Job.State != JobRunning {
-			if r.Job.Action != "update" || r.Job.State != JobDone || r.Job.Output != "update presenter\n" {
+		if r := extensionRow(t, base, "present"); r.Job != nil && r.Job.State != JobRunning {
+			if r.Job.Action != "update" || r.Job.State != JobDone || r.Job.Output != "update present\n" {
 				t.Errorf("update: %+v", r.Job)
 			}
 			return
@@ -367,7 +367,7 @@ func TestJobOutputKeepsTheEnd(t *testing.T) {
 // Check now checks in the request and answers with the row, or 409 UPDATE_BUSY while an update
 // holds the lock; PATCH saves Update automatically, and refuses a body without it.
 func TestExtensionCheckAndAutoUpdate(t *testing.T) {
-	auto := map[string]bool{"presenter": true}
+	auto := map[string]bool{"present": true}
 	busy := false
 	checks := 0
 	with := func(w *Web) {
@@ -385,20 +385,20 @@ func TestExtensionCheckAndAutoUpdate(t *testing.T) {
 		}
 		w.SetAutoUpdate = func(name string, on bool) error { auto[name] = on; return nil }
 	}
-	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("presenter"), with)
-	code, env := post(t, base+"/api/v1/extensions/presenter/check", nil)
+	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("present"), with)
+	code, env := post(t, base+"/api/v1/extensions/present/check", nil)
 	if row, _ := env.Data.(map[string]any); code != http.StatusOK || row["update_available"] != true || checks != 1 {
 		t.Errorf("check: %d %+v", code, env)
 	}
 	busy = true
-	if code, env = post(t, base+"/api/v1/extensions/presenter/check", nil); code != http.StatusConflict ||
+	if code, env = post(t, base+"/api/v1/extensions/present/check", nil); code != http.StatusConflict ||
 		env.Error == nil || env.Error.Code != "UPDATE_BUSY" || env.Data == nil {
 		t.Errorf("busy check: %d %+v", code, env)
 	}
 	patch := func(name, body string) (int, envelope.Response) {
 		req, _ := http.NewRequest(http.MethodPatch, base+"/api/v1/extensions/"+name, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := testClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -407,13 +407,13 @@ func TestExtensionCheckAndAutoUpdate(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&reply)
 		return resp.StatusCode, reply
 	}
-	if code, env = patch("presenter", `{"auto_update": false}`); code != http.StatusOK || auto["presenter"] {
+	if code, env = patch("present", `{"auto_update": false}`); code != http.StatusOK || auto["present"] {
 		t.Errorf("patch: %d %+v", code, env)
 	}
-	if row := extensionRow(t, base, "presenter"); row.AutoUpdate {
+	if row := extensionRow(t, base, "present"); row.AutoUpdate {
 		t.Errorf("row after patch: %+v", row)
 	}
-	if code, _ = patch("presenter", `{}`); code != http.StatusBadRequest {
+	if code, _ = patch("present", `{}`); code != http.StatusBadRequest {
 		t.Errorf("patch without auto_update: %d", code)
 	}
 	if code, _ = patch("agentk", `{"auto_update": true}`); code != http.StatusConflict {

@@ -25,9 +25,9 @@ import (
 // Options configure the routes.
 type Options struct {
 	Service *memory.Service
-	// Port is the server's, for the MCP URL the Connect page shows.
+	// Port is the server's, for the MCP URL provision-status gives.
 	Port int
-	// ClientToken is what the Connect page shows clients to send.
+	// ClientToken is what provision-status gives clients to send.
 	ClientToken string
 	// Credential is the credential a request got in with (admin, client or none), set by the
 	// server's auth check.
@@ -53,11 +53,11 @@ type api struct {
 	Options
 }
 
-// keyFor is the client token for a request that sent a credential, and "" otherwise. Not for the
-// web listener's browsers, with local access (every user of the computer) or remote (anyone who
+// keyFor is the client token for a request that sent a credential, and "" otherwise. Not for
+// browsers, with local access (every user of the computer) or remote (anyone who
 // reaches its port: there's no login), nor auth = "none": the token lets a caller do what neither
 // does (knowledgebase_upload_file reads a path as Meko's user), and keeps working when access or
-// auth changes. The Connect page then says to run meko token.
+// auth changes. Those callers run meko token for it.
 func (a *api) keyFor(c echo.Context) string {
 	switch a.Credential(c) {
 	case "admin", "client":
@@ -66,8 +66,8 @@ func (a *api) keyFor(c echo.Context) string {
 	return ""
 }
 
-// here gives a link the service made on the API listener (http://127.0.0.1:<port>/...) to a request
-// that came in on the web listener with that listener's own origin, which its browser can reach
+// here gives a link the service made for this computer (http://127.0.0.1:<port>/...) to a browser's
+// request with the origin the browser used, which it can reach
 // (from another computer, with remote access). Other links are given as they are.
 func (a *api) here(c echo.Context, link string) string {
 	if cred := a.Credential(c); cred != "remote" && cred != "local" {

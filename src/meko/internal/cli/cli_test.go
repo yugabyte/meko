@@ -34,7 +34,7 @@ import (
 // TestMain doubles as the meko binary: start re-runs os.Executable() (this test binary)
 // as "serve ...".
 func TestMain(m *testing.M) {
-	for _, k := range []string{paths.HomeEnv, "MEKO_PORT", "MEKO_LOG_LEVEL"} {
+	for _, k := range []string{paths.HomeEnv, "MEKO_LOG_LEVEL"} {
 		_ = os.Unsetenv(k)
 	}
 	// Never the login Keychain: the tests and the servers they start keep secrets in files.
@@ -64,14 +64,14 @@ func TestMain(m *testing.M) {
 	}
 	// Only in the tests' own process: a test sets them for the serve it starts.
 	for _, k := range []string{"MEKO_AUTH", "MEKO_CALL_HOME", "MEKO_CALL_HOME_URL", "YB_DISABLE_CALLHOME",
-		"MEKO_WEB_ACCESS"} {
+		"MEKO_WEB_ACCESS", "MEKO_PORT", "MEKO_WEB_PORT"} {
 		_ = os.Unsetenv(k)
 	}
-	// Never the web listener's real port (AgentK's, 7777): setup gives each test a free one, and this
-	// covers the tests that don't call it.
+	// Never Meko's real port (7777): setup gives each test a free one, and this covers the tests that
+	// don't call it.
 	if ln, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
 		if a, ok := ln.Addr().(*net.TCPAddr); ok {
-			_ = os.Setenv("MEKO_WEB_PORT", strconv.Itoa(a.Port))
+			_ = os.Setenv("MEKO_PORT", strconv.Itoa(a.Port))
 		}
 		_ = ln.Close()
 	}
@@ -103,7 +103,7 @@ func hungServe(mode string) {
 	if err := l.Ensure(); err != nil {
 		os.Exit(2)
 	}
-	if mode == "hang-with-child" { // a child in its own process group, recorded as serve records the memory engine
+	if mode == "hang-with-child" { // a child in its own process group, recorded as serve records the context engine
 		child := exec.Command("sleep", "3600")
 		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := child.Start(); err != nil {
@@ -113,7 +113,7 @@ func hungServe(mode string) {
 		if err != nil {
 			os.Exit(2)
 		}
-		if err := paths.WriteFile(filepath.Join(l.ChildrenDir, "memory_engine"), []byte(rec)); err != nil {
+		if err := paths.WriteFile(filepath.Join(l.ChildrenDir, "context-engine"), []byte(rec)); err != nil {
 			os.Exit(2)
 		}
 	}
@@ -196,7 +196,8 @@ func setup(t *testing.T) (dir, port string) {
 	t.Setenv("HOME", t.TempDir())
 	dir = shortDir(t)
 	port = strconv.Itoa(freePort(t))
-	t.Setenv("MEKO_WEB_PORT", strconv.Itoa(freePort(t)))
+	// The serve a test starts gets it even with no --port: a fake service's starts none.
+	t.Setenv("MEKO_PORT", port)
 	t.Cleanup(func() { run("stop", "--data-dir", dir, "--keep-extensions") })
 	return dir, port
 }
@@ -222,7 +223,7 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 	}
 	reg, _ := extensions.Load(dir)
 	reg.Entries["agentk"] = extensions.Entry{Command: script("agentk", "sleep 1\necho 'AgentK 1.0'\n")}
-	reg.Entries["presenter"] = extensions.Entry{Command: script("presenter", "echo 'Presenter 1.0'\nsleep 30\n")}
+	reg.Entries["present"] = extensions.Entry{Command: script("present", "echo 'Presenter 1.0'\nsleep 30\n")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -234,14 +235,14 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 		t.Errorf("status took %s", took)
 	}
 	want(t, "status", code, 0, out, "  ✓ AgentK          running, AgentK 1.0\n"+
-		"  ! Presenter       didn't answer in 2s (me_presenter status)\n")
+		"  ! Presenter       didn't answer in 2s (meko present status)\n")
 	want(t, "status's links", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
 	want(t, "status's Cloud", code, 0, out, "\n  Cloud   not linked\n")
 	want(t, "status's next steps", code, 0, out, "More detail: meko status --verbose\n\nNext:\n  meko ui ")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status --verbose", code, 0, out, "  Extension:     agentk, running (AgentK 1.0)\n"+
-		"  Extension:     presenter, didn't answer in 2s (me_presenter status)\n")
+	want(t, "status --verbose", code, 0, out, "  Extension:      agentk, running (AgentK 1.0)\n"+
+		"  Extension:      present, didn't answer in 2s (meko present status)\n")
 }
 
 func TestStartStatusStop(t *testing.T) {
@@ -253,10 +254,10 @@ func TestStartStatusStop(t *testing.T) {
 	want(t, "second start", code, 0, out, "already running")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Children:      none")
-	want(t, "status's auth", code, 0, out, "Auth:          token")
-	want(t, "status's service", code, 0, out, "Service:       none (meko install sets one up)")
-	want(t, "status's updates", code, 0, out, "Updates:       none (a build from source)")
+	want(t, "status", code, 0, out, "Children:       none")
+	want(t, "status's auth", code, 0, out, "Auth:           token")
+	want(t, "status's service", code, 0, out, "Service:        none (meko install sets one up)")
+	want(t, "status's updates", code, 0, out, "Updates:        none (a build from source)")
 	if strings.Contains(out, "Usage stats") {
 		t.Errorf("status --verbose shows usage stats:\n%s", out)
 	}
@@ -318,12 +319,12 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, mcpOut, _ := run("agent", "connect", "--data-dir", dir)
-	want(t, "agent connect with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
+	want(t, "agent connect with no server", code, 0, mcpOut, "http://127.0.0.1:"+port+"/mcp")
 	code, js, _ := run("token", "--data-dir", dir, "--json")
 	want(t, "token --json with no server", code, 0, js,
 		`{"cloud":{"set":false,"linked":false,"web_url":"","account":"","datapack_routing":true},`+
 			`"running":false,"token":"`+strings.TrimSpace(tok)+
-			`","url":"http://127.0.0.1:7778/mcp","web_url":"http://127.0.0.1:`+os.Getenv("MEKO_WEB_PORT")+`"}`)
+			`","url":"http://127.0.0.1:`+port+`/mcp","web_url":"http://127.0.0.1:`+port+`"}`)
 	for i := 0; i < 2; i++ {
 		started, out, serrs := run("start", "--data-dir", dir, "--port", port)
 		want(t, "start", started, 0, out+serrs, "is running")
@@ -367,7 +368,7 @@ func TestStatusWarnsWhenAuthIsOff(t *testing.T) {
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Auth:          none (every user and program on this machine")
+	want(t, "status", code, 0, out, "Auth:           none (every user and program on this machine")
 }
 
 func TestUsageStatsGoToTheConfiguredURL(t *testing.T) {
@@ -456,7 +457,7 @@ func TestStartReportsTakenPort(t *testing.T) {
 	defer ln.Close()
 	port := strconv.Itoa(tcpPort(t, ln))
 	code, _, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start on a taken port", code, 1, errs, "port "+port+" is already in use")
+	want(t, "start on a taken port", code, 1, errs, "port "+port+" is in use (an AgentK from before Meko served it")
 }
 
 func TestServeShutsDownCleanly(t *testing.T) {
@@ -537,7 +538,7 @@ func TestStopKillsAServerThatIgnoresSIGTERM(t *testing.T) {
 
 // stop's SIGKILL path also kills the children a hung server recorded, in their own groups.
 // startHungServe starts a serve that hangs after recording a child in its own process group, as
-// serve records the memory engine, and returns it and the child's pid.
+// serve records the context engine, and returns it and the child's pid.
 func startHungServe(t *testing.T, dir string) (*exec.Cmd, int) {
 	t.Helper()
 	l := paths.New(dir)
@@ -553,7 +554,7 @@ func startHungServe(t *testing.T, dir string) (*exec.Cmd, int) {
 	go func() { _ = cmd.Wait() }()
 	var child int
 	for deadline := time.Now().Add(10 * time.Second); child == 0; time.Sleep(50 * time.Millisecond) {
-		if b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "memory_engine")); err == nil {
+		if b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "context-engine")); err == nil {
 			_, _ = fmt.Sscanf(string(b), "%d", &child)
 		}
 		if time.Now().After(deadline) {
@@ -581,7 +582,7 @@ func waitGone(t *testing.T, dir string, child int, after string) {
 			t.Fatalf("the child outlived %s", after)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(paths.New(dir).ChildrenDir, "memory_engine")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(paths.New(dir).ChildrenDir, "context-engine")); !os.IsNotExist(err) {
 		t.Errorf("the child's record outlived %s: %v", after, err)
 	}
 }
@@ -616,63 +617,63 @@ func TestServeKillsAKilledServersChildren(t *testing.T) {
 	if !waitUnlocked(paths.New(dir).Lock, 5*time.Second) {
 		t.Fatal("the killed serve's lock wasn't released")
 	}
-	t.Setenv("MEKO_MEMORY_ENGINE_DIR", t.TempDir()) // no memory engine, so no new record
+	t.Setenv("MEKO_CONTEXT_ENGINE_DIR", t.TempDir()) // no context engine, so no new record
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	waitGone(t, dir, child, "the next serve's start")
 }
 
-// serve starts the memory engine (with the test embedder), status reports it ready, and stop stops it.
-func TestServeRunsTheMemoryEngine(t *testing.T) {
-	memoryEngineDir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
+// serve starts the context engine (with the test embedder), status reports it ready, and stop stops it.
+func TestServeRunsTheContextEngine(t *testing.T) {
+	contextEngineDir, err := filepath.Abs(filepath.Join("..", "..", "context_engine"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(memoryEngineDir, "dist", "main.js")); err != nil {
+	if _, err = os.Stat(filepath.Join(contextEngineDir, "dist", "main.js")); err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
-		t.Skip("the memory engine isn't built (make test builds it)")
+		t.Skip("the context engine isn't built (make test builds it)")
 	}
 	dir, port := setup(t)
-	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
+	t.Setenv("MEKO_CONTEXT_ENGINE_DIR", contextEngineDir)
 	t.Setenv(testEmbedderEnv, "hash")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 		_, out, _ = run("status", "--data-dir", dir, "--verbose")
-		if strings.Contains(out, "Memory engine: ready, test hash (384 dims)") &&
-			strings.Contains(out, "memory_engine running") {
+		if strings.Contains(out, "Context engine: ready, test hash (384 dims)") &&
+			strings.Contains(out, "context-engine running") {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the memory engine never got ready:\n%s", out)
+			t.Fatalf("the context engine never got ready:\n%s", out)
 		}
 	}
 	l := paths.New(dir)
-	b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "memory_engine"))
+	b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "context-engine"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var memoryEnginePid int
-	_, _ = fmt.Sscanf(string(b), "%d", &memoryEnginePid)
+	var contextEnginePid int
+	_, _ = fmt.Sscanf(string(b), "%d", &contextEnginePid)
 	code, out, _ = run("stop", "--data-dir", dir)
 	want(t, "stop", code, 0, out, "  ✓ Server          stopped\n")
-	if memoryEnginePid == 0 || syscall.Kill(memoryEnginePid, 0) == nil {
-		t.Errorf("the memory engine (pid %d) outlived stop", memoryEnginePid)
+	if contextEnginePid == 0 || syscall.Kill(contextEnginePid, 0) == nil {
+		t.Errorf("the context engine (pid %d) outlived stop", contextEnginePid)
 	}
-	for _, p := range []string{l.StoreSock, l.MemoryEngineSock, filepath.Join(l.ChildrenDir, "memory_engine")} {
+	for _, p := range []string{l.StoreSock, l.ContextEngineSock, filepath.Join(l.ChildrenDir, "context-engine")} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("%s left behind", p)
 		}
 	}
 }
 
-// withMemoryEngine has the servers a test starts run the built memory engine, with the hashing
-// embedder; it skips the test when the memory engine isn't built (outside CI).
-func withMemoryEngine(t *testing.T) {
+// withContextEngine has the servers a test starts run the built context engine, with the hashing
+// embedder; it skips the test when the context engine isn't built (outside CI).
+func withContextEngine(t *testing.T) {
 	t.Helper()
-	dir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
+	dir, err := filepath.Abs(filepath.Join("..", "..", "context_engine"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -680,29 +681,29 @@ func withMemoryEngine(t *testing.T) {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
-		t.Skip("the memory engine isn't built (make test builds it)")
+		t.Skip("the context engine isn't built (make test builds it)")
 	}
-	t.Setenv("MEKO_MEMORY_ENGINE_DIR", dir)
+	t.Setenv("MEKO_CONTEXT_ENGINE_DIR", dir)
 	t.Setenv(testEmbedderEnv, "hash")
 }
 
-// startReady starts a server and waits until its memory engine is ready.
+// startReady starts a server and waits until its context engine is ready.
 func startReady(t *testing.T, dir, port string) {
 	t.Helper()
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Memory engine: ready") {
+		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Context engine: ready") {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the memory engine never got ready:\n%s", out)
+			t.Fatalf("the context engine never got ready:\n%s", out)
 		}
 	}
 }
 
 func TestSearchAddAndDatapacks(t *testing.T) {
-	withMemoryEngine(t)
+	withContextEngine(t)
 	t.Setenv("MEKO_SECRETS", "file") // a name missing here reads the Meko Cloud link
 	dir, port := setup(t)
 	code, _, errs := runSh("search", "--data-dir", dir, "anything")
@@ -714,7 +715,7 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
 	want(t, "datapacks", code, 0, out+errs, "default   Created by Meko on first start.\n")
-	const note = "the build cache is in memory_engine/.models"
+	const note = "the build cache is in context_engine/.models"
 	code, out, errs = runSh("add_memory", "--data-dir", dir, note, "--datapack", "default")
 	want(t, "add_memory", code, 0, out+errs, "Added memory ")
 	code, out, errs = runSh("search", "--data-dir", dir, note, "--limit", "3")
@@ -1204,45 +1205,66 @@ func TestDestroyOnlyExtensionData(t *testing.T) {
 
 func TestUI(t *testing.T) {
 	dir, port := setup(t)
-	code, _, errs := run("ui", "--data-dir", dir, "--no-open")
+	display := true
+	can := canOpenBrowser
+	canOpenBrowser = func() bool { return display }
+	t.Cleanup(func() { canOpenBrowser = can })
+	code, _, errs := run("ui", "--data-dir", dir)
 	want(t, "ui when stopped", code, exitNotRunning, errs, "isn't running")
 
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	web := "http://127.0.0.1:" + os.Getenv("MEKO_WEB_PORT")
+	web := "http://127.0.0.1:" + os.Getenv("MEKO_PORT")
 
 	var opened []string
 	open := openBrowser
 	openBrowser = func(u string) error { opened = append(opened, u); return nil }
 	t.Cleanup(func() { openBrowser = open })
 
-	// With local access the link is the web listener's own address: it carries no credential.
-	code, out, _ = run("ui", "--data-dir", dir, "--no-open")
-	if code != 0 || strings.TrimSpace(out) != web+"/" || len(opened) != 0 {
-		t.Errorf("ui --no-open: %d %q, opened %v", code, out, opened)
+	// With local access the link is Meko's own address: it carries no credential.
+	code, out, _ = run("ui", "--data-dir", dir)
+	if link := strings.TrimSpace(out); code != 0 || link != web+"/" || len(opened) != 1 || opened[0] != link {
+		t.Errorf("ui: %d %q, opened %v", code, out, opened)
 	}
-	code, out, _ = run("ui", "/ext/agentk/", "--data-dir", dir)
-	if link := strings.TrimSpace(out); code != 0 || link != web+"/ext/agentk/" || len(opened) != 1 || opened[0] != link {
-		t.Errorf("ui /ext/agentk/: %d %q, opened %v", code, out, opened)
+	// With no browser here (over SSH), it only prints the link.
+	display = false
+	code, out, _ = run("ui", "--data-dir", dir)
+	if code != 0 || strings.TrimSpace(out) != web+"/" || len(opened) != 1 {
+		t.Errorf("ui with no browser: %d %q, opened %v", code, out, opened)
 	}
+	// It opens Meko's web UI only: an extension's page is opened through Meko's, or its own command.
+	code, _, errs = run("ui", "/ext/agentk/", "--data-dir", dir)
+	want(t, "ui with a path", code, exitUsage, errs, `unexpected argument "/ext/agentk/"`)
+	code, _, errs = run("ui", "--no-open", "--data-dir", dir)
+	want(t, "ui --no-open", code, exitUsage, errs, "Run meko ui --help for its flags")
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status's web line", code, 0, out, "Humans:        "+web+" (web UI), local, from this computer")
+	want(t, "status's web line", code, 0, out, "Humans:         "+web+" (web UI), local, from this computer")
 	code, out, _ = run("token", "--data-dir", dir, "--json")
 	want(t, "token --json's web URL", code, 0, out, `"web_url":"`+web+`"`)
 	code, _, errs = run("setup_link", "--data-dir", dir)
 	want(t, "setup_link is gone", code, exitUsage, errs, "unknown command")
 
-	// meko ui stop closes the port at once, and it stays closed across a restart until meko ui start.
+	// meko ui stop keeps browsers out at once, and they stay out across a restart until meko ui
+	// start; agents keep the port, with their token.
+	_, tok, _ := run("token", "--data-dir", dir)
+	tok = strings.TrimSpace(tok)
+	if got := httpCode(t, web+"/api/v1/server", ""); got != 200 {
+		t.Errorf("a browser before ui stop: %d", got)
+	}
 	code, out, _ = run("ui", "stop", "--data-dir", dir)
 	want(t, "ui stop", code, 0, out, "Stopped the web UI")
-	//nolint:gosec // G704: the test's own server
-	if c, err := net.DialTimeout("tcp", strings.TrimPrefix(web, "http://"), time.Second); err == nil {
-		_ = c.Close()
-		t.Error("the web port still answers after ui stop")
+	if got := httpCode(t, web+"/", ""); got != 404 {
+		t.Errorf("the web UI after ui stop: %d, want 404", got)
+	}
+	if got := httpCode(t, web+"/api/v1/server", ""); got != 401 {
+		t.Errorf("a browser after ui stop: %d, want 401", got)
+	}
+	if got := httpCode(t, web+"/api/v1/server", tok); got != 200 {
+		t.Errorf("the client token after ui stop: %d, want 200", got)
 	}
 	code, out, _ = run("ui", "stop", "--data-dir", dir)
 	want(t, "ui stop again", code, 0, out, "The web UI is already off")
-	code, _, errs = run("ui", "--data-dir", dir, "--no-open")
+	code, _, errs = run("ui", "--data-dir", dir)
 	want(t, "ui while off", code, exitError, errs, "the web UI is off. Turn it on with meko ui start")
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status while off", code, 0, out, "Web UI          off (meko ui start turns it on)")
@@ -1254,10 +1276,28 @@ func TestUI(t *testing.T) {
 	want(t, "start while off", code, 0, out+errs, "Web UI          off (meko ui start turns it on)")
 	code, out, _ = run("ui", "start", "--data-dir", dir)
 	want(t, "ui start", code, 0, out, "Started the web UI at "+web)
-	code, out, _ = run("ui", "--data-dir", dir, "--no-open")
+	code, out, _ = run("ui", "--data-dir", dir)
 	if code != 0 || strings.TrimSpace(out) != web+"/" {
 		t.Errorf("ui after ui start: %d %q", code, out)
 	}
+}
+
+// httpCode is the status a GET of url gets, with bearer as its token when it's set.
+func httpCode(t *testing.T, url, bearer string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil) //nolint:gosec // G704: the test's own server
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: the test's own server
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
 }
 
 // With Meko stopped, meko ui stop and start only set the switch, which the next start reads; and
@@ -1295,27 +1335,27 @@ func TestSuggestedName(t *testing.T) {
 // export writes a datapack's JSON to the file the server names, here or at -o, by name, id or the
 // default; it won't replace a file unless --force, and an unknown name exits 1.
 func TestExport(t *testing.T) {
-	memoryEngineDir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
+	contextEngineDir, err := filepath.Abs(filepath.Join("..", "..", "context_engine"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(memoryEngineDir, "dist", "main.js")); err != nil {
+	if _, err = os.Stat(filepath.Join(contextEngineDir, "dist", "main.js")); err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
-		t.Skip("the memory engine isn't built (make test builds it)")
+		t.Skip("the context engine isn't built (make test builds it)")
 	}
 	dir, port := setup(t)
-	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
+	t.Setenv("MEKO_CONTEXT_ENGINE_DIR", contextEngineDir)
 	t.Setenv(testEmbedderEnv, "hash")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Memory engine: ready") {
+		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Context engine: ready") {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the memory engine never got ready:\n%s", out)
+			t.Fatalf("the context engine never got ready:\n%s", out)
 		}
 	}
 	code, out, errs = runSh("add_memory", "--data-dir", dir, "releases ship on Tuesdays")
