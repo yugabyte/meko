@@ -69,6 +69,25 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
+// Meko's and Kode's releases moved from 0.YYYYMMDD.N to 1.YYYYMMDD.N: an install on a 0.x release
+// updates to a 1.x one, even one dated before its own.
+func TestPickAcrossMajors(t *testing.T) {
+	goos, arch := "linux", "x64"
+	rels := []Release{
+		rel("meko-v0.20261109.4", TarballName("0.20261109.4", goos, arch), Sums),
+		rel("meko-v1.20261108.0", TarballName("1.20261108.0", goos, arch), Sums),
+		rel("kode-v0.20261109.2", PackageTarball("kode", "0.20261109.2", goos, arch), Sums),
+		rel("kode-v1.20261108.0", PackageTarball("kode", "1.20261108.0", goos, arch), Sums),
+	}
+	if _, v, ok := PickMeko(rels, goos, arch, nil); !ok || v != "1.20261108.0" {
+		t.Errorf("Meko picked %q %v, want 1.20261108.0", v, ok)
+	}
+	_, v, ok := PickPackage(rels, []string{"kode-v", "agentk-v", "v"}, []string{"kode", "agentk"}, goos, arch, nil)
+	if !ok || v != "1.20261108.0" {
+		t.Errorf("Kode picked %q %v, want 1.20261108.0", v, ok)
+	}
+}
+
 // fakeMeko is a release's bin/meko: `version --json` prints its version, or it fails with fail.
 func fakeMeko(version string, fail bool) string {
 	if fail {

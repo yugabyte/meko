@@ -223,7 +223,7 @@ agents should read it before changing code there.
   for Kode, the component `agentk` (`feat(agentk/web): …`; `feat(agentk,meko): …` for a change
   that ships in Meko too, which releases both), checked by
   the repo root's `scripts/check-title.sh` (see the repo root's `.claude/skills/commit/SKILL.md`).
-  `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
+  `feat`/`fix`/`perf`/`deps` commits trigger a release (`1.YYYYMMDD.N`) when pushed to `main`;
   `ci`/`test`/`docs`/`nit`/`chore` don't. PRs are squash-merged, so the PR title is the subject;
   the `PR title` workflow (`pr-title.yml`) checks it. Changes reach `main` only through PRs that
   pass CI, that check and the CLA check (`license/cla`), and that the `meko-maintainers` team

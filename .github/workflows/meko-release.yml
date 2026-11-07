@@ -1,7 +1,7 @@
 name: Meko release
 
 # Meko (src/meko) releases on its own train, beside Kode's (agentk-release.yml). Versions are
-# 0.<UTC date YYYYMMDD>.<n>, tagged meko-v<version>. A push to main that changes src/meko cuts a
+# 1.<UTC date YYYYMMDD>.<n> (0.… before 1.x), tagged meko-v<version>. A push to main that changes src/meko cuts a
 # release when it contains meko feat/fix/perf/deps commits (naming meko, alone or in a list such as
 # agentk,meko) since the last Meko tag and the tests pass. The release scripts are the repo root's
 # scripts/release/*.sh --product meko. Meko's releases are the repo's "latest": their install.sh is

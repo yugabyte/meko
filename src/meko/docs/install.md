@@ -261,7 +261,7 @@ release scripts with `--product meko`:
 
 | | Kode (`agentk-release.yml`) | Meko (`meko-release.yml`) | Present (`present-release.yml`) |
 |---|---|---|---|
-| Tag | `kode-v0.YYYYMMDD.N` (`agentk-v0.…` before Meko called it Kode, `v0.…` before that) | `meko-v0.YYYYMMDD.N` | `present-v0.YYYYMMDD.N` |
+| Tag | `kode-v1.YYYYMMDD.N` (`kode-v0.…` before 1.x, `agentk-v0.…` before Meko called it Kode, `v0.…` before that) | `meko-v1.YYYYMMDD.N` (`meko-v0.…` before 1.x) | `present-v0.YYYYMMDD.N` |
 | Title | its tag | its tag | its tag |
 | Releases on | feat/fix/perf/deps subjects other than those naming only `meko` or `present` | feat/fix/perf/deps subjects naming `meko`, alone or in a list (`feat(agentk,meko): …`) | feat/fix/perf/deps subjects naming `present`, alone or in a list |
 | Assets | Kode tarballs, `SHA256SUMS`, `SHA256SUMS.sig`, and a stub `install.sh` that tells an older Meko, which looks for it, to update first | Meko tarballs, `SHA256SUMS`, `SHA256SUMS.sig`, Meko's `install.sh` | `present-<version>-<os>-<arch>.tar.gz` (holding `bin/me_present`), `SHA256SUMS`, `SHA256SUMS.sig`; no installer: Meko installs them |

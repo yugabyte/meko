@@ -15,6 +15,8 @@
 #   product       agentk, meko or present
 #   tag_prefix    the prefix of the product's new tags: tag = <tag_prefix><version>
 #   tag_prefixes  every prefix the product's tags have used, newest scheme first
+#   major         the major version of the product's new releases: 1 for Kode and Meko (their
+#                 releases were 0.… before), 0 for Present. Versions are <major>.<UTC date>.<n>
 #   scope         an extended regex for the `(<component>[/<area>])` of the subjects that may
 #                 release the product, and
 #   exclude       one for those that don't, even though scope matches them. Meko takes the
@@ -43,29 +45,32 @@ case $product in
   agentk)
     tag_prefix=kode-v
     tag_prefixes='kode-v agentk-v v'
+    major=1
     scope='(\([^)]*\))?'
     exclude='\((meko|present|presenter)(/[^,)]*)?(,(meko|present|presenter)(/[^,)]*)?)*\)'
     ;;
   meko)
     tag_prefix=meko-v
     tag_prefixes='meko-v'
+    major=1
     scope='\(([^,)]*,)*meko(/[^,)]*)?(,[^)]*)?\)'
     exclude=''
     ;;
   present)
     tag_prefix=present-v
     tag_prefixes='present-v'
+    major=0
     scope='\(([^,)]*,)*present(/[^,)]*)?(,[^)]*)?\)'
     exclude=''
     ;;
   *) echo "unknown product: $product (agentk, meko or present)" >&2; exit 2 ;;
 esac
 
-# The product's newest tag of the form <prefix>0.<date>.<n>[-<pre>], or nothing. A release sorts
-# above its own prereleases.
+# The product's newest tag of the form <prefix><major>.<date>.<n>[-<pre>], of any major, or nothing.
+# A higher major sorts above any lower one, and a release above its own prereleases.
 newest_tag() {
   for _p in $tag_prefixes; do
-    git tag -l "${_p}0.*" | sed -n "s/^\\(${_p}\\)\\([0-9][0-9]*\\.[0-9][0-9]*\\.[0-9][0-9]*\\)\\(-.*\\)\\{0,1\\}\$/\\2 \\3 &/p"
+    git tag -l "${_p}[0-9]*" | sed -n "s/^\\(${_p}\\)\\([0-9][0-9]*\\.[0-9][0-9]*\\.[0-9][0-9]*\\)\\(-.*\\)\\{0,1\\}\$/\\2 \\3 &/p"
   done | awk '
     {
       split($1, v, ".")
