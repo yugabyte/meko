@@ -673,6 +673,8 @@ describe('code review before the PR (real session host + git, fake claude runnin
         const pane = all<{ tmux_name: string }>(env.core.db, 'SELECT tmux_name FROM sessions WHERE parent_id = ?', id).at(-1)?.tmux_name;
         const screen = pane ? await env.core.host.capture(pane).catch((x: Error) => `no capture: ${x.message}`) : '';
         e.message += `\nthe review session's screen: ${JSON.stringify(screen.slice(-3000))}`;
+        const stdin = existsSync(join(env.fakeDir, 'stdin.log')) ? readFileSync(join(env.fakeDir, 'stdin.log'), 'utf8') : '';
+        e.message += `\nthe fakes' terminal input: ${stdin.slice(-6000)}`;
         try {
           const reviewRow = all(env.core.db, 'SELECT state, asked, detail FROM code_reviews WHERE task_id = ? ORDER BY rowid DESC LIMIT 1', id);
           const childRow = all(env.core.db, 'SELECT status, status_detail, interrupted, desired FROM sessions WHERE parent_id = ?', id);
@@ -692,6 +694,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const keyAt = (id: string, line: number) => env.core.reviews.detail(id).findings.find((f) => f.line === line)!.key;
 
     it("holds a round's findings for your notes and dismissals, through Open PR, then sends the rest with the notes", async () => {
+      fake('debug', '');
       const s = await task({ review: { rounds: 1, check: true } });
       fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.'), one(4, 'major', 'Rename it.')] } });
       await env.core.sessions.action(s.id, 'open-pr');
