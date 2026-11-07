@@ -673,6 +673,13 @@ describe('code review before the PR (real session host + git, fake claude runnin
         const pane = all<{ tmux_name: string }>(env.core.db, 'SELECT tmux_name FROM sessions WHERE parent_id = ?', id).at(-1)?.tmux_name;
         const screen = pane ? await env.core.host.capture(pane).catch((x: Error) => `no capture: ${x.message}`) : '';
         e.message += `\nthe review session's screen: ${JSON.stringify(screen.slice(-3000))}`;
+        try {
+          const reviewRow = all(env.core.db, 'SELECT state, asked, detail FROM code_reviews WHERE task_id = ? ORDER BY rowid DESC LIMIT 1', id);
+          const childRow = all(env.core.db, 'SELECT status, status_detail, interrupted, desired FROM sessions WHERE parent_id = ?', id);
+          e.message += `\nthe review's row: ${JSON.stringify(reviewRow)}; its session's row: ${JSON.stringify(childRow)}; a turn end is being handled: ${env.core.sessions.turnEndsBusy()}`;
+        } catch (x) {
+          e.message += `\nno rows: ${String(x)}`;
+        }
         const child = all<{ id: string; claude_session_id: string }>(env.core.db, 'SELECT id, claude_session_id FROM sessions WHERE parent_id = ?', id).at(-1);
         const asked = child ? prompts(child.claude_session_id).slice(-2) : [];
         const session = child ? env.core.sessions.get(child.id) : null;
