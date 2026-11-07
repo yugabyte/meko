@@ -44,7 +44,7 @@ var Known = map[string]Catalog{
 		Title: "AgentK",
 		Description: "Runs Claude Code, OpenCode and Kiro sessions across your projects, from task to merged PR, " +
 			"with Meko as their shared memory.",
-		Summary: "runs coding agents across your projects, from task to merged PR",
+		Summary: "agentic development — reviews, PRs, refactors",
 		Command: "me_kode",
 		Verb:    "kode",
 		// Its names before, newest first: me_koder, agentk, and agent-k-local before the rename to
