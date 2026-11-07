@@ -747,14 +747,16 @@ const keyAgentsOnOnePort = "agents_one_port"
 const oldAgentsURL = "http://127.0.0.1:7778/mcp"
 
 // moveToOnePortOnce connects to the one port, once, the agents a Meko before it connected to its
-// agents' listener: Move connects every agent whose meko server is on this computer and isn't the
-// target, and leaves the rest. It's recorded only when no agent failed, so a failed one is tried
-// again at the next start; a stop during it leaves it for the next start too.
+// agents' listener: only those whose meko server is at exactly oldAgentsURL (an Exact move), so one
+// pointed by hand at another Meko on this computer is left as it is. It's recorded only when no
+// agent failed, so a failed one is tried again at the next start; a stop during it leaves it for
+// the next start too.
 func moveToOnePortOnce(ctx context.Context, st *store.Store, m *agents.Manager, to agents.Target, log *slog.Logger) {
 	if _, done, err := st.Setting(ctx, keyAgentsOnOnePort); err != nil || done {
 		return
 	}
-	moves := m.Move(ctx, agents.Target{Kind: agents.KindLocal, URL: oldAgentsURL, Token: to.Token}, to)
+	from := agents.Target{Kind: agents.KindLocal, URL: oldAgentsURL, Token: to.Token, Exact: true}
+	moves := m.Move(ctx, from, to)
 	logMoves(log, moves)
 	if ctx.Err() != nil || len(moves.Failed) > 0 {
 		return

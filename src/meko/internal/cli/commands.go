@@ -251,6 +251,8 @@ func printStatusShort(l paths.Layout, c *client, st server.StatusReply, exts fun
 		r.step(stepWarn, "Web UI", webOffNote)
 	case !st.Web.Listening && st.Web.Error != "":
 		r.step(stepFail, "Web UI", "not listening: "+st.Web.Error)
+	case st.Web.Error != "":
+		r.step(stepFail, "Web UI", st.Web.Error)
 	}
 	if st.Auth == config.AuthNone {
 		r.step(stepWarn, "Auth", "none: every user and program on this machine can read and write your memories")

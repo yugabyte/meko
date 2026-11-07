@@ -23,7 +23,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload`; the owner (a browser or the
       admin token, never the client token) on the Extensions, update and Meko Cloud link routes; and
       the admin or client token or a browser everywhere else, with nothing there only with
-      `[server] auth = "none"` ([docs/api.md](docs/api.md#auth)). A request with a token is held to
+      `[server] auth = "none"`, from this computer and never from a browser
+      ([docs/api.md](docs/api.md#auth)). A request with a token is held to
       it and never falls back to a browser's way in, and tokens are taken only from a loopback peer. Tokens and call-log rows never hold memory or turn text: a call's
       arguments and reply go only in `call_contents`, only while Settings keeps them, for 7 days, and
       never into an export, usage stats or a log. The store
@@ -39,7 +40,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       the site check (`SameSite`: no other site's page sent it); its Origin over TLS must be
       `https://<Host>`. While the web UI is off (`meko ui stop`) no browser gets in, `/` and
       `/ext/<name>/` answer 404, agents keep the port, and the WebSockets the proxy upgraded close
-      (`CloseAll`); with remote access the port is taken again on 127.0.0.1 only. A settings change
+      (`CloseAll`); with remote access the port is taken again on 127.0.0.1 only. Nothing about
+      remote access (its certificate) can stop `serve`: it stays on 127.0.0.1 and says why. A settings change
       swaps the server under the same socket, and takes the port again only when its address
       changes. `[web] enabled` is written to `web.toml`, never `config.toml`.
 - [ ] `/ext/<name>/*` passes the browser's Host and Origin to the extension's socket, drops the

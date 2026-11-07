@@ -213,3 +213,27 @@ func TestBindHost(t *testing.T) {
 		}
 	}
 }
+
+// A certificate that can't be read doesn't stop Meko: remote access stays off, the port stays on
+// 127.0.0.1 for agents and the CLI, and status and meko ui say why.
+func TestRemoteAccessWithoutItsCertificate(t *testing.T) {
+	dir, port := setup(t)
+	missing := filepath.Join(t.TempDir(), "gone")
+	cfg := fmt.Sprintf("[web]\naccess = \"remote\"\n\n[tls]\ncert = %q\nkey = %q\n",
+		filepath.Join(missing, "c.pem"), filepath.Join(missing, "k.pem"))
+	if err := os.WriteFile(paths.New(dir).Config, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	want(t, "start's Web UI row", code, 0, out,
+		"  ✗ Web UI          remote access is off, since the certificate can't be read")
+	_, tok, _ := run("token", "--data-dir", dir)
+	if got := httpCode(t, "http://127.0.0.1:"+port+"/api/v1/server", strings.TrimSpace(tok)); got != 200 {
+		t.Errorf("the client token: %d, want 200", got)
+	}
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status", code, 0, out, "  ✗ Web UI          remote access is off")
+	code, _, errs = run("ui", "--data-dir", dir, "--no-open")
+	want(t, "ui", code, exitError, errs, "can't be reached at https://")
+}

@@ -122,7 +122,7 @@ func serveAndUpdate(t *testing.T, old, next string) (update.App, paths.Layout, e
 			<-done
 		}
 	})
-	// The web listener reads its port as serve does, from MEKO_WEB_PORT (setup's).
+	// Meko's one port, as serve reads it: MEKO_PORT (setup's).
 	web := "http://127.0.0.1:" + os.Getenv("MEKO_PORT")
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		resp, err := http.Get(web + "/api/v1/update") //nolint:noctx,gosec // G704: the test's own server

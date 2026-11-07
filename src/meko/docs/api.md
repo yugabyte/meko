@@ -12,13 +12,16 @@ from scratch. Both call the service layer in `internal/memory`
 Every request comes to the one port, and its credential depends on what it carries, never on how
 it came in (`authorize` in `internal/server/server.go`):
 
-- **A token** (`Authorization: Bearer`): the admin token or the client token. A wrong one is a 401,
-  never a browser's way in. Tokens are taken only from this computer (a loopback peer), over plain
-  HTTP or, with remote access, TLS; from anywhere else, a 401.
+- **A token** (`Authorization: Bearer`): the admin token or the client token. A wrong one is a 401
+  (with `auth = "none"`, it's let in as nothing, below), and never a browser's way in. Tokens are
+  taken only from this computer (a loopback peer), over plain HTTP or, with remote access, TLS;
+  from anywhere else, a 401.
 - **A browser** (no token; no login, [web.md](web.md)): `local`, a request from this computer over
   plain HTTP (`LocalAccess`), or `remote`, over TLS with remote access, any request another site's
   page didn't send (`SameSite`). While the web UI is off (`meko ui stop`) no browser gets in.
-- **Nothing**, with `[server] auth = "none"`, from this computer.
+- **Nothing**, with `[server] auth = "none"`, from this computer, and never a browser's request
+  (one with `Sec-Fetch-Site` or a proxy's headers): a browser gets in only by the browsers' rules,
+  and not at all while the web UI is off.
 
 | Route | Admin token | Client token | A browser (`local`, `remote`) | Nothing |
 |---|---|---|---|---|

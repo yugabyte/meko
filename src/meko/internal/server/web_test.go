@@ -375,6 +375,10 @@ func TestOnePortCredentials(t *testing.T) {
 		{name: "UI off: an extension's page", access: "local", off: true, path: "/ext/agentk/x", peer: here, want: 404},
 		{name: "UI off: auth off", access: "local", auth: "none", off: true, path: "/api/v1/probe", peer: here, want: 200,
 			wantCred: CredentialNone},
+		{name: "UI off: auth off takes no browser", access: "local", auth: "none", off: true, path: "/api/v1/probe",
+			peer: here, header: map[string]string{"Sec-Fetch-Site": "same-origin"}, want: 404},
+		{name: "auth off takes no other site's page", access: "local", auth: "none", path: "/api/v1/probe",
+			peer: here, header: map[string]string{"Sec-Fetch-Site": "cross-site"}, want: 401},
 		{name: "auth off takes nothing from elsewhere", access: "remote", auth: "none", off: true, path: "/api/v1/probe",
 			peer: elsewhere, tls: overTLS, want: 404},
 		// The Host and Origin checks follow the connection.

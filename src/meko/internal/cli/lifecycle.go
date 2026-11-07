@@ -153,6 +153,8 @@ func printRunning(l paths.Layout, o runningOptions, stdout io.Writer) {
 		switch {
 		case !w.Enabled:
 			r.step(stepWarn, "Web UI", webOffNote)
+		case w.Listening && w.Error != "":
+			r.step(stepFail, "Web UI", w.Error)
 		case w.Listening:
 		case w.Error != "":
 			r.step(stepFail, "Web UI", "not listening: "+w.Error)

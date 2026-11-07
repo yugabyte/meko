@@ -344,7 +344,8 @@ func (s *Server) reloadWeb(c echo.Context) error {
 //     browser rules: only from this computer, the admin token anywhere, the client token everywhere
 //     but the admin-only routes and the browsers' own (ownerOnly);
 //   - one without a token is a browser's (browser) when it passes their rules, then, with auth =
-//     "none", anything from this computer on the data routes, and else refused.
+//     "none", anything from this computer on the data routes that isn't a browser's (browserSent),
+//     and else refused.
 func (s *Server) authorize(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		r := c.Request()
@@ -373,7 +374,9 @@ func (s *Server) authorize(next echo.HandlerFunc) echo.HandlerFunc {
 			c.Set(credentialKey, cred)
 			return next(c)
 		}
-		if s.opts.Auth == config.AuthNone && fromThisComputer(r) {
+		// auth = "none" is for programs on this computer, never a browser's way in: one the browsers'
+		// rules refused (or kept out while the web UI is off) is refused here too.
+		if s.opts.Auth == config.AuthNone && fromThisComputer(r) && !browserSent(r) {
 			c.Set(credentialKey, CredentialNone)
 			return next(c)
 		}

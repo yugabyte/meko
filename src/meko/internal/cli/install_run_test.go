@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yugabyte/meko/src/meko/internal/auth"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 )
@@ -215,5 +218,47 @@ func TestMekoHoldsItsOwnPort(t *testing.T) {
 	other := &fakeService{file: filepath.Join(t.TempDir(), "none")}
 	if mekoHolds(paths.New(dirB), other, p) {
 		t.Error("a port counted as Meko's with no service and no server for this folder")
+	}
+}
+
+// A Meko from before one port wrote its agents' port (7778) to its port file, while its web UI held
+// 7777: installing over it counts 7777 as its own, from its status, and restarts it rather than
+// refusing the port.
+func TestMekoHoldsItsOldWebPort(t *testing.T) {
+	dir, _ := setup(t)
+	l := paths.New(dir)
+	if err := l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireServeLock(l.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { releaseLock(lock) })
+	const webPortNow = 47777
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/status" || r.Header.Get("Authorization") != "Bearer admin-test-token" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"data":{"version":"old","web":{"url":"http://127.0.0.1:%d","listening":true}}}`, webPortNow)
+	}))
+	t.Cleanup(old.Close)
+	u, _ := url.Parse(old.URL)
+	if err = paths.WriteFile(l.Port, []byte(u.Port()+"\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err = auth.WriteToken(l.Token, "admin-test-token"); err != nil {
+		t.Fatal(err)
+	}
+	none := &fakeService{file: filepath.Join(t.TempDir(), "none")}
+	if !mekoHolds(l, none, webPortNow) {
+		t.Error("the old server's web port isn't counted as Meko's")
+	}
+	if p, _ := strconv.Atoi(u.Port()); !mekoHolds(l, none, p) {
+		t.Error("the old server's port file isn't counted as Meko's")
+	}
+	if mekoHolds(l, none, webPortNow+1) {
+		t.Error("another port counted as Meko's")
 	}
 }

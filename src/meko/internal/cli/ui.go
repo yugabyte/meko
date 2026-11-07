@@ -63,6 +63,9 @@ func runUI(l paths.Layout, path string, open bool, stdout, stderr io.Writer) int
 		}
 		return fail(stderr, fmt.Errorf("the web UI isn't listening at %s yet: %s", w.URL, why))
 	}
+	if w.Error != "" {
+		return fail(stderr, fmt.Errorf("the web UI can't be reached at %s: %s", w.URL, w.Error))
+	}
 	if path == "" {
 		path = "/"
 	}
@@ -127,6 +130,8 @@ func runUISwitch(l paths.Layout, on bool, stdout, stderr io.Writer) int {
 	case st.Enabled != on:
 		return fail(stderr, fmt.Errorf("the web UI is %s in the settings, but Meko hasn't taken it up yet "+
 			"(meko status says when it has)", state))
+	case st.Listening && st.Error != "":
+		return fail(stderr, fmt.Errorf("the web UI is %s, but can't be reached at %s: %s", state, st.URL, st.Error))
 	case !st.Listening:
 		why := st.Error
 		if why == "" {

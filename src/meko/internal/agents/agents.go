@@ -47,6 +47,10 @@ type Target struct {
 	Kind  string
 	URL   string
 	Token string
+	// Exact, on a move's from, takes only the agents whose meko server is at exactly URL, not every
+	// one Meko owns: Meko's agents' old listener, 127.0.0.1:7778, when Meko moved to one port, leaving
+	// one pointed by hand at another Meko on this computer as it is.
+	Exact bool
 }
 
 // ours says whether an MCP URL is one of Meko's own: this computer's loopback, where Meko listens,
@@ -530,7 +534,7 @@ func (m *Manager) Move(ctx context.Context, from, to Target) Moves {
 			continue
 		case s == nil || to.state(s) == StateConnected:
 			continue
-		case !from.owns(s) && !to.owns(s):
+		case from.Exact && !sameURL(s.url, from.URL), !from.Exact && !from.owns(s) && !to.owns(s):
 			out.Left = append(out.Left, Left{a.Name, a.Title, shownURL(s.url)})
 			continue
 		}

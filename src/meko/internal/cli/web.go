@@ -74,7 +74,8 @@ type webListener struct {
 	status  server.WebStatus
 	cfg     config.Config              // the settings taken up
 	ln      net.Listener               // the port, from Bind until Run serves it
-	host    string                     // the address it's bound to (bindHost)
+	host    string                     // the address it's bound to (bindHost, or 127.0.0.1: certErr)
+	certErr string                     // why remote access couldn't start: its certificate
 	httpSrv *http.Server               // serving the port, while Run does
 	sockets map[string]string          // an extension's name to the socket its handoff named
 	handed  map[string]bool            // the extensions handed over since this server started
@@ -149,7 +150,7 @@ func (w *webListener) forget(name string) {
 
 // Bind takes the port for cfg, the settings serve started with.
 func (w *webListener) Bind(cfg config.Config) error {
-	if err := w.bindFor(cfg); err != nil {
+	if err := w.bindTo(w.hostFor(cfg, "", false)); err != nil {
 		return err
 	}
 	w.mu.Lock()
@@ -159,14 +160,40 @@ func (w *webListener) Bind(cfg config.Config) error {
 	return nil
 }
 
-// open takes the port for cfg: over Sniff, with the certificate, when it's on every address.
-func (w *webListener) open(cfg config.Config) (net.Listener, error) {
+// hostFor is the address to take the port on for cfg (bindHost), reading the certificate when
+// that's every address. A certificate that can't be read keeps the port on 127.0.0.1, so agents
+// and the CLI keep it, and status says why browsers elsewhere can't reach Meko (certErr) until a
+// later change reads one; except while TLS already serves one (bound to every address, up), which
+// is kept.
+func (w *webListener) hostFor(cfg config.Config, bound string, up bool) string {
 	host := bindHost(cfg.Web)
-	if host == "" {
-		if err := w.loadCert(cfg); err != nil {
-			return nil, err
-		}
+	if host != "" {
+		w.setCertErr("")
+		return host
 	}
+	err := w.loadCert(cfg)
+	switch {
+	case err == nil:
+		w.setCertErr("")
+	case up && bound == "":
+		w.log.Warn("can't read the certificate; keeping the one it has", "error", err)
+	default:
+		w.log.Error("can't read the certificate, so remote access is off: Meko listens on 127.0.0.1 only",
+			"error", err)
+		w.setCertErr("remote access is off, since the certificate can't be read: " + err.Error())
+		host = "127.0.0.1"
+	}
+	return host
+}
+
+func (w *webListener) setCertErr(why string) {
+	w.mu.Lock()
+	w.certErr = why
+	w.mu.Unlock()
+}
+
+// open takes the port on host: over Sniff, with the certificate, when it's every address ("").
+func (w *webListener) open(host string) (net.Listener, error) {
 	ln, err := server.ListenOn(host, w.port)
 	if err != nil {
 		return nil, err
@@ -196,11 +223,13 @@ func (w *webListener) loadCert(cfg config.Config) error {
 	return nil
 }
 
-// report is what status says once the listener has taken up cfg.
+// report is what status says once the listener has taken up cfg: listening, and why browsers
+// elsewhere can't reach it when remote access couldn't start.
 func (w *webListener) report(cfg config.Config) {
 	w.set(func(s *server.WebStatus) {
-		s.URL, s.Access, s.Enabled, s.Listening, s.Error = webURL(cfg.Web, w.port), cfg.Web.Access, cfg.Web.Enabled, true, ""
-		if bindHost(cfg.Web) != "" {
+		s.URL, s.Access, s.Enabled, s.Listening, s.Error = webURL(cfg.Web, w.port), cfg.Web.Access, cfg.Web.Enabled, true,
+			w.certErr
+		if w.host != "" {
 			s.Fingerprint, s.SelfSigned = "", false
 		}
 	})
@@ -276,19 +305,14 @@ func (w *webListener) takeUp(now, next config.Config, served <-chan error) (conf
 	w.mu.Lock()
 	host, up := w.host, w.httpSrv != nil
 	w.mu.Unlock()
-	rebind := !up || bindHost(next.Web) != host
-	if !rebind && host == "" {
-		// The certificate's files may have changed, or the self-signed one be due again.
-		if err := w.loadCert(next); err != nil {
-			w.log.Warn("can't read the certificate; keeping the one it has", "error", err)
-		}
-	}
+	want := w.hostFor(next, host, up)
+	rebind := !up || want != host
 	if rebind {
 		w.stop()
-		err := w.bindFor(next)
+		err := w.bindTo(want)
 		if err != nil && up {
 			w.log.Error("can't take the port for the new settings; keeping the old ones", "error", err)
-			if err = w.bindFor(now); err == nil {
+			if err = w.bindTo(host); err == nil {
 				next = now
 			}
 		}
@@ -316,14 +340,14 @@ func (w *webListener) takeUp(now, next config.Config, served <-chan error) (conf
 	return next, served
 }
 
-// bindFor takes the port for cfg, after stop.
-func (w *webListener) bindFor(cfg config.Config) error {
-	ln, err := w.open(cfg)
+// bindTo takes the port on host, after stop.
+func (w *webListener) bindTo(host string) error {
+	ln, err := w.open(host)
 	if err != nil {
 		return err
 	}
 	w.mu.Lock()
-	w.ln, w.host = ln, bindHost(cfg.Web)
+	w.ln, w.host = ln, host
 	w.mu.Unlock()
 	return nil
 }
@@ -619,8 +643,11 @@ func printWeb(stdout io.Writer, w *server.WebStatus) {
 		return
 	}
 	fmt.Fprintf(stdout, "  Humans:        %s (web UI), %s\n", w.URL, webAccessNote(w))
-	if !w.Listening && w.Error != "" {
+	switch {
+	case !w.Listening && w.Error != "":
 		fmt.Fprintf(stdout, "                 not listening: %s\n", w.Error)
+	case w.Error != "":
+		fmt.Fprintf(stdout, "                 %s\n", w.Error)
 	}
 	if w.Fingerprint != "" {
 		kind := "from [tls]"
