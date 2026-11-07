@@ -6,7 +6,7 @@ import { homedir, hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { HARNESS_CAPS, type HarnessId } from '../shared/harnesses.js';
 import { parseTermTheme, type TermTheme } from '../shared/termcolors.js';
-import type { AppState, HarnessStatus, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
+import type { AppState, GhState, HarnessStatus, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import * as github from './github.js';
 import { TranscriptCapture, mekoPluginKeys } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
@@ -55,6 +55,7 @@ import { removeOldMekoLogs } from './mekologcleanup.js';
 import { openProjectDatapacks, projectRows, pruneSessionEvents, sessionRows, toProject } from './store.js';
 import { CallHomeService } from './callhome.js';
 import { ClaudeCode } from './claudecode.js';
+import { GhService, ghNeededMessage } from './ghstatus.js';
 import { SessionHost } from './hostclient.js';
 import { legacyTmuxPanes } from './legacytmux.js';
 import { servicesFor, type ServiceManager } from './service.js';
@@ -95,6 +96,8 @@ export interface CoreOptions {
   mekoAgents?: () => Promise<MekoAgentsRead>;
   /** Where the bundled workshops are (workshops.ts; tests point it at their own); by default the install's. */
   workshopsRoot?: string;
+  /** Whether gh is installed and signed in (tests fake it); by default `gh --version` and `gh auth token`. */
+  ghProbe?: () => Promise<GhState>;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -186,6 +189,8 @@ export class Core extends EventEmitter {
   readonly callHome: CallHomeService;
   /** The Claude Code sessions launch with: its version (for AgentK's mod) and updating it. */
   readonly claudeCode: ClaudeCode;
+  /** gh: whether it's usable, the gate of every action that works on GitHub, and the GitHub dialog's install and sign-in. */
+  readonly gh: GhService;
   /** Claude Code was available at its last version change (`claudeChanged`). */
   private claudeAvailable = false;
   /** Every coding agent sessions can run on (src/server/harness/). */
@@ -251,6 +256,18 @@ export class Core extends EventEmitter {
     this.hostFull = hostname();
     this.updateStatus = () => ({ current: this.version, justUpdatedFrom: null, lastUpdatedFrom: null });
     this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.claudeChanged() });
+    this.gh = new GhService({
+      changed: () => this.changed(),
+      login: () => this.ghLogin(this.paths.home),
+      forgetLogin: () => {
+        this.ghUser = null;
+        this.ghTimedOutAt = 0;
+        this.changed();
+      },
+      knownLogin: () => this.ghUser,
+      warn: (m, d) => this.log.warn(m, d),
+      probe: o.ghProbe,
+    });
     this.autoConnect = new MekoAutoConnect(this.db);
     this.mekoAgents = new MekoAgents({ db: this.db, read: o.mekoAgents ?? (() => readMekoAgents(localMeko().meko)), changed: () => this.changed(), log: this.log });
     // Meko's Context Gaps are on the Meko on this computer, for its own datapacks and any it passes calls on for.
@@ -273,7 +290,12 @@ export class Core extends EventEmitter {
       db: this.db,
       changed: () => this.changed(),
       warn: (m, d) => this.log.warn(m, d),
-      reviewRequests: () => github.reviewRequests(homedir()),
+      // Without gh, the GitHub source's own sync fails with the reason, and Slack's still runs.
+      reviewRequests: async () => {
+        const gh = await this.gh.ready();
+        if (gh !== 'ok') throw new Error(ghNeededMessage("The work queue's GitHub sync", gh));
+        return github.reviewRequests(homedir());
+      },
       readSlack: () => readList(this.cfg, join(this.paths.run, 'work-sync')),
       claudeAvailable: () => this.harnesses.of('claude').status(this.cfg).available,
       githubTitle: async (repo, number) => (await github.issueOrPr(homedir(), repo, number)).title,
@@ -618,6 +640,7 @@ export class Core extends EventEmitter {
       invites: this.invites.pending(),
       failedStarts: this.sessions.failedStarts(),
       claudeCode: this.claudeCode.status(),
+      gh: this.gh.status(),
       harnesses,
       // Still offered while an agent that's turned on hasn't answered yet (just after a start).
       askAgentk: this.cfg.askAgentk.enabled && harnesses.some((h) => h.available || !h.checked),
@@ -688,6 +711,7 @@ export class Core extends EventEmitter {
     void this.mekoAgents.refresh();
     // Not awaited: the New session dialog shows branch names with it once it's in.
     void this.ghLogin(this.paths.home);
+    void this.gh.check();
     // A session host that is down must not keep the web server from starting: the UI stays
     // reachable, and recovery (which needs the host) retries on every reconcile tick.
     await this.host.ensureServer().catch((e: unknown) => this.log.error('the session host is not available', e));
@@ -728,6 +752,7 @@ export class Core extends EventEmitter {
     for (const i of this.intervals) clearInterval(i);
     this.intervals = [];
     this.callHome.stop();
+    this.gh.stop();
     this.lifecycle.stop();
     // No new plan read may start now: a turn reaching onTurnEnd during shutdown (hooks aren't
     // awaited) must not run `/usage` after the settled() wait below has already passed.

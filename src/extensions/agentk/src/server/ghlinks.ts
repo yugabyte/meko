@@ -9,6 +9,7 @@ import type { Core } from './core.js';
 import { all, get } from './db.js';
 import { isMainRepo, remoteFor } from './git.js';
 import * as github from './github.js';
+import { ghNeededMessage } from './ghstatus.js';
 import { TRUSTED_ASSOCIATIONS } from './headtrust.js';
 import { errMsg } from './log.js';
 import { repoKey } from './paths.js';
@@ -36,6 +37,10 @@ export class GithubLinkService {
 
   /** What the link would start, and where; `currentProjectId` (the project on screen) is preferred among those on its repo. */
   async plan(ref: unknown, currentProjectId?: unknown): Promise<LinkPlan> {
+    // The palette asks as typing pauses on anything like a link, before the user picks it: the
+    // reason, but no GitHub dialog (no GH_NEEDED code). Starting from it asks for gh.
+    const gh = await this.core.gh.ready();
+    if (gh !== 'ok') throw new HttpError(409, ghNeededMessage('Starting from a GitHub link', gh));
     const { repo, item } = await this.read(ref);
     const dpIds = datapackIdsIn(item.body);
     const onRepo = await this.projectsOnRepo(repo);
@@ -67,6 +72,7 @@ export class GithubLinkService {
     if (req.model != null && typeof req.model !== 'string') throw new HttpError(400, "The session's model must be text.");
     const badModel = req.model?.trim() && checkModel(req.model.trim());
     if (badModel) throw new HttpError(400, badModel);
+    await this.core.gh.require('Starting from a GitHub link');
     const { repo, item } = await this.read(req.ref);
     if (req.autoRun && (item.kind === 'pr' || req.start !== 'code')) {
       throw new HttpError(400, "Run to merge is only for an issue's task that starts at Code.");

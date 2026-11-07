@@ -100,14 +100,18 @@ meko extension install agentk -- --agent kiro      # options after -- go to `mek
 #     --json`, `meko kode selftest`), and points app/current at it; an
 #     install AgentK already has (one still in ~/.agent-k-local too) is set up again in place
 # then `meko kode install --meko-url … --meko-key …`, on the terminal it was started from:
-#  1. scripts/deps.sh (lib/scripts/deps.sh in a release): checks for git, curl, gh and a coding
+#  1. scripts/deps.sh (lib/scripts/deps.sh in a release): checks for git, curl and a coding
 #     agent (Claude Code, OpenCode or Kiro CLI; one is enough); offers to install whatever is
 #     missing (it shows the commands and asks first): brew on macOS, the package manager with sudo
-#     on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux from its GitHub release
-#     (checksum-verified) into ~/.local/bin, and an agent with its own installer (Claude Code's
-#     claude.ai/install.sh, which publishes no checksum, OpenCode's or Kiro's; which one: --agent,
-#     else it asks, else Claude Code); with GITHUB_TOKEN set, a missing gh is only installed with
-#     --install-deps. It checks the tools themselves afterwards: Homebrew exiting with an error
+#     on Linux (apt-get, dnf, yum, zypper, pacman or apk), and an agent with its own installer
+#     (Claude Code's claude.ai/install.sh, which publishes no checksum, OpenCode's or Kiro's; which
+#     one: --agent, else it asks, else Claude Code). gh is optional (AgentK asks for it when a PR
+#     or a review needs it: lifecycle.md's "gh on demand"): once the rest is there, a missing gh is
+#     offered in a question of its own, default yes, after showing what it runs (brew on macOS, its
+#     GitHub release, checksum-verified, into ~/.local/bin on Linux, no root either way);
+#     --install-deps installs it with the rest, and --non-interactive and --no-install-deps skip it
+#     with a warning. `--only gh` installs gh alone that way (the GitHub dialog's Install gh). It
+#     checks the tools themselves afterwards: Homebrew exiting with an error
 #     once they work (it builds from source on a macOS it no longer supports) is a warning, while
 #     a failed Linux package manager stops it; then offers each agent's sign-in and `gh auth
 #     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login

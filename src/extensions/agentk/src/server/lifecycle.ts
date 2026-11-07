@@ -752,6 +752,7 @@ export class Lifecycle {
     const given = openPrInstructions(body);
     if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
     checkOpensPr(this.db, row);
+    await this.core.gh.require('Open PR');
     row = await this.sessions.awake(row, 'for Open PR');
     if (row.desired === 'running' && !this.sessions.runtime(row.id).busy && this.turnRunning(row)) {
       if (row.queued_gate !== 'open-pr') {
@@ -1199,6 +1200,11 @@ export class Lifecycle {
     if (prompt != null && typeof prompt !== 'boolean') throw new HttpError(400, 'prompt must be true or false.');
     if (task != null && typeof task !== 'string') throw new HttpError(400, 'The task must be text.');
     const instructions = checkInstructions(req?.instructions);
+    // Outside the session's queue, so a wait on gh holds up nothing queued behind it.
+    if (stage === 'review') {
+      checkOpensPr(this.db, row);
+      await this.core.gh.require('A move to Pull Request');
+    }
     // An agent stopped for sitting idle starts again only for a move that sends it something: its
     // prompt or the user's instructions. A move to Pull Request decides in moveToReview.
     if (row.idle_stopped_at && stage !== 'review' && !moveBlockedIn(row.stage) && !moveError(row, stage)
@@ -2366,6 +2372,7 @@ export class Lifecycle {
     if (row.kind !== 'review-pr' || row.stage !== 'reviewing-pr' || !row.pr_number || !row.pr_repo || !row.review_sha) {
       throw new HttpError(409, "Only a Review a PR session can update to its PR's latest commits.");
     }
+    await this.core.gh.require('Update to latest');
     await this.sessions.awake(row, 'for Update to latest');
     await this.serial(row.id, async () => {
       const cur = this.sessions.row(row.id);
@@ -2431,6 +2438,8 @@ export class Lifecycle {
   async merge(row: SessionRow, req: CloseSessionRequest = {}): Promise<void> {
     if (row.stage !== 'review' || !row.pr_number || !row.pr_url) throw new HttpError(409, 'Merge is only available in the Review stage.');
     if (!projectRow(this.db, row.project_id)) throw new HttpError(404, 'Project not found.');
+    // Before the in-progress check: nothing may await between that check and `merging.add`.
+    await this.core.gh.require('Merge');
     if (this.merging.has(row.id)) throw new HttpError(409, 'A merge is already in progress.');
     // Written only once the merge is requested or queued, and kept until it lands, when the learn
     // step runs or doesn't (Learner.beforeClose); a merge given up on clears it (giveUpMerge).
@@ -2503,7 +2512,10 @@ export class Lifecycle {
       throw new HttpError(409, row.stage === 'explore' ? 'Run to merge starts at Design or later. Move the session on first.' : 'This session is already past its merge.');
     }
     if (row.stage === 'design' && row.plan_mode) throw new HttpError(409, "This session designs in Claude's plan mode, so Run to merge isn't available for it.");
-    if (on) checkOpensPr(this.db, row);
+    if (on) {
+      checkOpensPr(this.db, row);
+      await this.core.gh.require('Run to merge');
+    }
     if (!!row.auto_run === on) return;
     if (!on) {
       if (this.merging.has(row.id)) throw new HttpError(409, 'The merge is already being requested.');

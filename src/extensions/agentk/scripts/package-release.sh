@@ -22,7 +22,7 @@
 #     lib/node_modules/        production dependencies only
 #     lib/packaging/systemd/   service templates used by `meko kode install` (Linux)
 #     lib/packaging/launchd/   service templates used by `meko kode install` (macOS)
-#     lib/scripts/deps.sh      the prerequisites check `meko kode install` runs first (git, curl, gh, a coding agent)
+#     lib/scripts/deps.sh      the prerequisites check `meko kode install` runs first (git, curl, a coding agent; gh offered)
 #     VERSION
 #
 # and the same files as <out-dir>/agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz, in

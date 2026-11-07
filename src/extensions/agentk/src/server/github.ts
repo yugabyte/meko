@@ -18,6 +18,11 @@ export function setLoginPathMissing(missing: boolean): void {
   loginPathMissing = missing;
 }
 
+/** Whether the login shell gave the server no PATH at its start: gh may be installed where it isn't looked for. */
+export function isLoginPathMissing(): boolean {
+  return loginPathMissing;
+}
+
 /** `gh` with a time limit (0: none). */
 async function ghWithin(cwd: string, timeoutMs: number, ...args: string[]): Promise<string> {
   try {
@@ -36,7 +41,7 @@ async function ghWithin(cwd: string, timeoutMs: number, ...args: string[]): Prom
  */
 function ghMissing(e: unknown, cwd: string): Error | null {
   if ((e as NodeJS.ErrnoException).code !== 'ENOENT' || !existsSync(cwd)) return null;
-  if (!loginPathMissing) return new Error("AgentK can't find gh, GitHub's command-line tool. Install gh, then run meko kode restart.");
+  if (!loginPathMissing) return new Error("AgentK can't find gh, GitHub's command-line tool. AgentK offers to install it the next time you open a PR, or install it from https://cli.github.com.");
   const allow = process.platform === 'darwin'
     ? ' If macOS asked whether meko may open a folder, allow it (System Settings › Privacy & Security › Files and Folders), then run meko kode restart.'
     : ' Run meko kode restart.';
