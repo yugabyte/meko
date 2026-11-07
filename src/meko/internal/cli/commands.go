@@ -237,9 +237,9 @@ func runStatus(l paths.Layout, o statusOptions, stdout, stderr io.Writer) int {
 }
 
 // printStatusShort is status's checklist: the memory engine, the service, updates and the
-// extensions, each a row (and the Meko Cloud link, when it can't be read; otherwise it's the box's
-// Cloud row), then the links in a box titled with how Meko runs, as install's summary has them, and
-// the commands to run next.
+// extensions, each a row (and the Meko Cloud link, when it can't be read; otherwise it's the Cloud
+// link row), then a ● headline with the version, pid and uptime, the links, as install's summary
+// has them, and the commands to run next.
 func printStatusShort(l paths.Layout, c *client, st server.StatusReply, exts func() extensionResults,
 	stdout io.Writer) {
 	r := newReport(stdout)
@@ -299,8 +299,9 @@ func printStatusShort(l paths.Layout, c *client, st server.StatusReply, exts fun
 			r.step(k, extensionTitle(n), state)
 		}
 	}
-	r.box(fmt.Sprintf("Meko %s is running (pid %d, up %s)", st.Version, st.PID,
-		(time.Duration(st.UptimeSeconds)*time.Second).String()), linkRows(st, cloudRow(l)))
+	r.running(fmt.Sprintf("Meko %s is running", st.Version), fmt.Sprintf("pid %d, up %s", st.PID,
+		(time.Duration(st.UptimeSeconds)*time.Second).String()))
+	r.links(linkRows(st, cloudRow(l)))
 	fmt.Fprintln(stdout, "\nMore detail: meko status --verbose")
 	s := readNextState(l, c)
 	if st.Web != nil {
@@ -325,13 +326,14 @@ func memoryEngineStep(e memory.EngineStatus) (stepKind, string) {
 	return stepWarn, text
 }
 
-// linkRows are where people and agents reach Meko, and the Meko Cloud it's linked to (cloud).
-func linkRows(st server.StatusReply, cloud [2]string) [][2]string {
-	var rows [][2]string
+// linkRows are where people (the web UI) and agents (MCP, and the API) reach Meko, and the Meko
+// Cloud it's linked to (cloud).
+func linkRows(st server.StatusReply, cloud linkRow) []linkRow {
+	var rows []linkRow
 	if w := st.Web; w != nil && w.URL != "" && w.Enabled {
-		rows = append(rows, [2]string{"Humans (web UI)", w.URL + " (" + webAccessNote(w) + ")"})
+		rows = append(rows, linkRow{"Web UI", w.URL, webAccessNote(w)})
 	}
-	return append(rows, [2]string{"Agents (MCP, API)", fmt.Sprintf("http://127.0.0.1:%d/mcp", st.Port)}, cloud)
+	return append(rows, linkRow{"Agents", fmt.Sprintf("http://127.0.0.1:%d/mcp", st.Port), "MCP and API"}, cloud)
 }
 
 // extensionTitle is how a known extension is named to people (AgentK), else its name.

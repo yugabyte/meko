@@ -8,9 +8,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/yugabyte/meko/src/meko/internal/paths"
+	"github.com/yugabyte/meko/src/meko/internal/spin"
 	"github.com/yugabyte/meko/src/meko/internal/update"
 )
 
@@ -216,20 +216,40 @@ func TestReport(t *testing.T) {
 		t.Error("color on a buffer")
 	}
 	r.step(stepWarn, "Memory engine", "starting")
-	r.box("Meko 1.0 is running", [][2]string{{"Agents (MCP, API)", "http://127.0.0.1:7778/mcp"}, {"Data", "/d"}})
-	lines := strings.Split(strings.TrimSuffix(b.String(), "\n"), "\n")
-	if lines[0] != "  ! Memory engine   starting" || lines[1] != "" {
-		t.Errorf("step %q, then %q", lines[0], lines[1])
+	r.running("Meko 1.0 is running", "pid 7, up 2h")
+	r.links([]linkRow{{"Web UI", "http://127.0.0.1:7777", "local, from this computer"},
+		{"Agents", "http://127.0.0.1:7778/mcp", "MCP and API"}, {"Cloud", "", "not linked"}})
+	r.next([][2]string{{"meko ui", "open the web UI"},
+		{"meko status", "check on Meko at any time · meko uninstall removes it"}})
+	if want := "  ! Memory engine   starting\n" +
+		"\n  ● Meko 1.0 is running · pid 7, up 2h\n" +
+		"\n  Web UI  http://127.0.0.1:7777 · local, from this computer\n" +
+		"  Agents  http://127.0.0.1:7778/mcp · MCP and API\n" +
+		"  Cloud   not linked\n" +
+		"\nNext:\n" +
+		"  meko ui        open the web UI\n" +
+		"  meko status    check on Meko at any time · meko uninstall removes it\n"; b.String() != want {
+		t.Errorf("printed:\n%s\nwant:\n%s", b.String(), want)
 	}
-	width := utf8.RuneCountInString(lines[2])
-	for _, l := range lines[2:] {
-		if utf8.RuneCountInString(l) != width {
-			t.Errorf("box lines differ in width:\n%s", b.String())
-			break
-		}
+
+	// In color: the palette's roles, and the first command as the call to action, its text lined up
+	// with the commands below it.
+	b.Reset()
+	r.color = true
+	t.Setenv(spin.BackgroundEnv, "dark") // never ask the developer's terminal
+	r.running("Meko 1.0 is running", "")
+	r.links([]linkRow{{"Agents", "http://127.0.0.1:7778/mcp", ""}})
+	r.next([][2]string{{"meko ui", "open the web UI"}, {"meko status", "check on Meko · meko uninstall removes it"}})
+	if want := "\n  \033[32m●\033[0m \033[1mMeko 1.0 is running\033[0m\n" +
+		"\n  \033[2mAgents\033[0m  " + spin.Link("http://127.0.0.1:7778/mcp", true) + "\n" +
+		"\nNext:\n" +
+		" \033[1;97;44m meko ui \033[0m       open the web UI\n" +
+		"  " + spin.Blue("meko status", true) + "    check on Meko" +
+		"\033[2m · meko uninstall removes it\033[0m\n"; b.String() != want {
+		t.Errorf("printed in color %q\nwant %q", b.String(), want)
 	}
-	if !strings.Contains(b.String(), "│ Data                /d                        │") {
-		t.Errorf("box rows aren't aligned:\n%s", b.String())
+	if strings.Contains(b.String(), "│") {
+		t.Error("a box")
 	}
 	t.Setenv("NO_COLOR", "1")
 	if newReport(os.Stdout).color {

@@ -1,5 +1,15 @@
 // Package spin prints the CLI's summary rows ("  ✓ Server          running"), and the rotating dots a
-// row shows on a terminal while its step runs: gh's spinner, cyan, the one install.sh's download shows.
+// row shows on a terminal while its step runs: gh's spinner, blue, the one install.sh's download shows.
+//
+// It holds the CLI's palette, which install.sh repeats (docs/install.md, "Colors"), so the rows read
+// on a white terminal as on a black one. Blue marks, commands, links and dots: a light blue on a
+// dark background and a deeper one on a light one (background.go finds which). The rest are
+// base ANSI colors, which every terminal theme tunes for its own background: green (32) ✓ and ●;
+// bold yellow (1;33) !; red (31) ✗; faint (2) notes; bold (1) in the terminal's own text color for
+// emphasis. White (37, 97) and the bright colors (90–97) are never text on the terminal's own
+// background, since a light theme draws them pale or not at all, with two exceptions: the call to
+// action, which sets its own blue background, is white (1;97;44), and the blue on a dark background
+// with only 16 colors is bright blue (94).
 package spin
 
 import (
@@ -23,7 +33,17 @@ const (
 
 var (
 	marks  = [...]string{"✓", "!", "✗"}
-	colors = [...]string{"\033[32m", "\033[33m", "\033[31m"}
+	colors = [...]string{green, "\033[1;33m", "\033[31m"}
+)
+
+// The palette's codes.
+const (
+	reset = "\033[0m"
+	green = "\033[32m"
+	bold  = "\033[1m"
+	faint = "\033[2m"
+	cta   = "\033[1;97;44m"
+	under = "\033[4m"
 )
 
 // Frames and Interval are the dots' animation: gh's.
@@ -32,13 +52,57 @@ var (
 	Interval = 120 * time.Millisecond
 )
 
-// frame is the dots' i-th frame, cyan when color is set, as gh draws them.
-func frame(i int, color bool) string {
-	f := Frames[i%len(Frames)]
-	if !color {
-		return f
+// frame is the dots' i-th frame, blue when color is set.
+func frame(i int, color bool) string { return Blue(Frames[i%len(Frames)], color) }
+
+func paint(code, s string, color bool) string {
+	if !color || s == "" {
+		return s
 	}
-	return "\033[36m" + f + "\033[0m"
+	return code + s + reset
+}
+
+// Blue is s as a mark (◆ ? ❯ →) or a command in a hint.
+func Blue(s string, color bool) string {
+	if !color {
+		return s
+	}
+	return paint(blueCode(), s, color)
+}
+
+// Green is s as done: ✓ and the ● of a headline.
+func Green(s string, color bool) string { return paint(green, s, color) }
+
+// Bold is s emphasized, in the terminal's own text color.
+func Bold(s string, color bool) string { return paint(bold, s, color) }
+
+// Dim is s as a note: secondary text, after a row's value.
+func Dim(s string, color bool) string { return paint(faint, s, color) }
+
+// Note is text followed by note, dim, after " · ": "~/.meko · secrets in your login Keychain". An
+// empty note leaves text as it is.
+func Note(text, note string, color bool) string {
+	if note == "" {
+		return text
+	}
+	return text + Dim(" · "+note, color)
+}
+
+// Link is url blue and underlined, and an OSC 8 hyperlink, which terminals that know it make
+// clickable (and others ignore).
+func Link(url string, color bool) string {
+	if !color {
+		return url
+	}
+	return "\033]8;;" + url + "\033\\" + under + blueCode() + url + reset + "\033]8;;\033\\"
+}
+
+// CTA is s as the call to action, white on blue with a space on each side; without color, s alone.
+func CTA(s string, color bool) string {
+	if !color {
+		return s
+	}
+	return cta + " " + s + " " + reset
 }
 
 // animates reports whether w shows the dots: a terminal that draws them; tests replace it.
@@ -55,15 +119,17 @@ func IsTerminal(v any) bool {
 	return err == nil && fi.Mode()&fs.ModeCharDevice != 0
 }
 
-// Color reports whether rows on w are colored: w is a terminal and NO_COLOR is unset.
-func Color(w io.Writer) bool { return IsTerminal(w) && os.Getenv("NO_COLOR") == "" }
+// Color reports whether rows on w are colored: w is a terminal, NO_COLOR is unset and TERM isn't dumb.
+func Color(w io.Writer) bool {
+	return IsTerminal(w) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
+}
 
 // Mark is k's mark, colored when color is set.
 func Mark(k Kind, color bool) string {
 	if !color {
 		return marks[k]
 	}
-	return colors[k] + marks[k] + "\033[0m"
+	return colors[k] + marks[k] + reset
 }
 
 // Row prints one row: "  ✓ Server          running".
@@ -92,6 +158,16 @@ func Start(w io.Writer, label, doing string) *Step {
 		s.run()
 	case label != "" && doing != "":
 		fmt.Fprintf(w, "%s%s\n", strings.ToUpper(doing[:1]), doing[1:])
+	}
+	return s
+}
+
+// Quiet begins a step whose row shows the dots on a terminal, as Start's does, but that prints
+// nothing anywhere else until it ends: for a short wait, whose row says the rest ("ready in 2.4s").
+func Quiet(w io.Writer, label, doing string) *Step {
+	s := &Step{w: w, label: label, doing: doing}
+	if animates(w) {
+		s.run()
 	}
 	return s
 }
@@ -134,10 +210,13 @@ func (s *Step) end(row func()) {
 	})
 }
 
-// Done ends the step with its ✓ row, saying text.
-func (s *Step) Done(text string) {
-	s.end(func() { Row(s.w, OK, Color(s.w), s.label, text) })
+// End ends the step with its row marked k, saying text.
+func (s *Step) End(k Kind, text string) {
+	s.end(func() { Row(s.w, k, Color(s.w), s.label, text) })
 }
+
+// Done ends the step with its ✓ row, saying text.
+func (s *Step) Done(text string) { s.End(OK, text) }
 
 // Fail ends the step with its ✗ row, saying what it was doing; the caller prints the error.
 func (s *Step) Fail() {

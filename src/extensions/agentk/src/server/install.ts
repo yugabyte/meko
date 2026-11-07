@@ -53,17 +53,34 @@ function which(bin: string): string | null {
 
 type Prompter = (question: string, def: string) => Promise<string>;
 
-function makePrompter(interactive: boolean): { ask: Prompter; close: () => void } {
-  if (!interactive || !process.stdin.isTTY) {
+type Line = { question: (q: string) => Promise<string>; close: () => void };
+
+/**
+ * The install's questions, asked on the terminal. Its readline opens at the first question, not
+ * before: an open readline keeps the terminal in raw mode, and the tools' check (deps.sh) runs
+ * first and reads its own answers from /dev/tty, which in raw mode echo nothing and never end at
+ * Enter. Meko's first install runs this install right after its own picker, so that check's
+ * question is often the first thing asked.
+ */
+export function makePrompter(
+  interactive: boolean,
+  tty = process.stdin.isTTY === true,
+  open: () => Line = () => createInterface({ input: process.stdin, output: process.stdout }),
+): { ask: Prompter; close: () => void } {
+  if (!interactive || !tty) {
     return { ask: async (_q, def) => def, close: () => {} };
   }
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let rl: Line | undefined;
   return {
     ask: async (q, def) => {
+      rl ??= open();
       const a = (await rl.question(ui.prompt(q, def))).trim();
       return a || def;
     },
-    close: () => rl.close(),
+    close: () => {
+      rl?.close();
+      rl = undefined;
+    },
   };
 }
 
@@ -245,6 +262,21 @@ function checkTools(args: string[]): void {
 }
 
 /**
+ * The repos folder the install was given, made when it isn't there yet (with its parents), since
+ * AgentK clones into it. It says whether it made it, or why it couldn't.
+ */
+export function reposFolder(root: string): { created: boolean; error?: string } {
+  const dir = expandHome(root);
+  if (existsSync(dir)) return { created: false };
+  try {
+    mkdirSync(dir, { recursive: true });
+    return { created: true };
+  } catch (e) {
+    return { created: false, error: (e as Error).message };
+  }
+}
+
+/**
  * A fresh install starts the AgentK tour at the server's first start (`[welcome] tour`); an upgrade
  * or a reinstall doesn't, and keeps the user's projects as they are.
  */
@@ -363,8 +395,9 @@ export async function runInstall(args: string[]): Promise<void> {
       ui,
     });
     ui.ok('Agents', agents.map((id) => `${HARNESS_CAPS[id].label} ${versions[id]}`).join(', ') + ` (new sessions start on ${HARNESS_CAPS[cfg.agents.default].label})`);
-    if (existsSync(expandHome(reposRoot))) ui.ok('Repos folder', reposRoot);
-    else ui.warn('Repos folder', `${reposRoot} doesn't exist yet`);
+    const repos = reposFolder(reposRoot);
+    if (repos.error) ui.warn('Repos folder', `${reposRoot} doesn't exist, and couldn't be created: ${repos.error}`);
+    else ui.ok('Repos folder', repos.created ? `${reposRoot} (created)` : reposRoot);
 
     // 6. Keep SQLite off network filesystems
     let db = dbPath(paths, cfg);
@@ -401,7 +434,7 @@ export async function runInstall(args: string[]): Promise<void> {
     if (meko.meko?.webUrl) {
       ui.text(style.bold(running ? 'Done. AgentK is running:' : 'Done. AgentK will be at:'));
       ui.blank();
-      ui.text(`    ${style.cyan(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
+      ui.text(`    ${style.blue(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
       ui.blank();
       // A new user lands in the tour; over SSH or with no display there's nothing to open here.
       if (opensBrowser({ fresh, interactive, running }) && (await openBrowser(`${meko.meko.webUrl}${AGENTK_PATH}`))) {

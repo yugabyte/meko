@@ -110,12 +110,12 @@ func Update(ctx context.Context, o UpdateOptions, name string) (bool, error) {
 	// The other installed versions go, but for one a process still runs from. Prune deletes only
 	// version folders: a .staging- or .download- folder that a killed update left behind stays.
 	app.Prune(cur, from)
-	installing := spin.Start(out, "Release", fmt.Sprintf("installing %s %s (%s)", cat.Title, next, rel.Tag))
+	installing := spin.Start(out, "Release", fmt.Sprintf("installing %s %s", cat.Title, next))
 	if err = app.Stage(ctx, o.Client, rel, next); err != nil {
 		installing.Fail()
 		return false, err
 	}
-	installing.Done(fmt.Sprintf("%s %s (%s), downloaded and checked", cat.Title, next, rel.Tag))
+	installing.Done(fmt.Sprintf("%s %s, downloaded and checked", cat.Title, next))
 	up, _ := e.Status(o.Root)
 	if len(cat.RestartArgs) > 0 {
 		return restartInto(o.Root, cat, e, app, from, next, up, out)

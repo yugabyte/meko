@@ -166,7 +166,7 @@ func TestUpdateExtensionInstallsTheNewestReleaseAndRestartsIt(t *testing.T) {
 	code, out, errs = run("extension", "update", "presenter", "--data-dir", dir)
 	want(t, "extension update", code, 0, out+errs, "Presenter is running "+next)
 	want(t, "extension update", code, 0, out,
-		"  ✓ Release         Presenter "+next+" (presenter-v"+next+"), downloaded and checked\n")
+		"  ✓ Release         Presenter "+next+", downloaded and checked\n")
 	if app.Current() != next {
 		t.Errorf("app/current is %s", app.Current())
 	}
@@ -267,7 +267,7 @@ func TestInstallExtensionInstallsPresentersRelease(t *testing.T) {
 	presenterReleases(t, version, presenterTarball(t, version, ""))
 	code, out, errs = run("extension", "install", "presenter", "--data-dir", dir)
 	want(t, "extension install", code, 0, out+errs,
-		"  ✓ Release         Presenter "+version+" (presenter-v"+version+"), downloaded and checked")
+		"  ✓ Release         Presenter "+version+", downloaded and checked")
 	app := extensions.Known["presenter"].App(dir, "presenter")
 	if app.Current() != version {
 		t.Errorf("app/current is %q", app.Current())
@@ -353,7 +353,7 @@ func TestUpdateExtensionSaysWhenTheReleaseFails(t *testing.T) {
 	presenterReleases(t, next, []byte("not a tarball"))
 	code, out, _ := run("extension", "update", "presenter", "--data-dir", dir)
 	want(t, "extension update", code, 1, out,
-		"  ✗ Release         installing Presenter "+next+" (presenter-v"+next+")\n")
+		"  ✗ Release         installing Presenter "+next+"\n")
 	if app.Current() != installedVersion {
 		t.Errorf("app/current is %s", app.Current())
 	}
@@ -447,7 +447,7 @@ func TestRunExtensionUpdates(t *testing.T) {
 	var out bytes.Buffer
 	if err := w.RunExtension(context.Background(), "presenter", "update", &out); err != nil ||
 		!strings.Contains(out.String(), "it runs at its next start") ||
-		!strings.HasPrefix(out.String(), "Installing Presenter "+next+" (presenter-v"+next+")\n") {
+		!strings.HasPrefix(out.String(), "Installing Presenter "+next+"\n") {
 		t.Fatalf("stopped: %v %q", err, out.String())
 	}
 

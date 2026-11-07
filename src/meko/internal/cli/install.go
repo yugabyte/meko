@@ -66,8 +66,11 @@ const installCommand = "curl -fsSL https://mekodata.ai/install.sh | sh"
 var runningRelease = update.Running
 
 // runInstall sets this meko up: as a release install, app/current and the meko command point at
-// it; then the client token, the web listener's access, and the login service, which it starts. It
-// installs Meko alone: extensions are meko extension install's.
+// it (and, asked, the shell's profile puts the command on the PATH); then the client token, the web
+// listener's access, and the login service, which it starts once the API port is known to be free.
+// It installs Meko alone: extensions are meko extension install's, which the picker at the end of a
+// first install runs (pickExtension). Run by install.sh, it reads the MEKO_INSTALL_* variables the
+// installer sets (installRun).
 func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout, stderr io.Writer) int {
 	r := newReport(stdout)
 	if access != "" && access != config.AccessLocal && access != config.AccessRemote {
@@ -80,6 +83,21 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	exe, err := os.Executable()
 	if err != nil {
 		return fail(stderr, err)
+	}
+	run := installRun(os.Getenv)
+	// The service's checks come before anything is written, so a failure leaves nothing half-done:
+	// install.sh, run again, finds app/current at the version it would install and stops there.
+	var m service.Manager
+	if !noService {
+		if m, err = newManager(); err != nil {
+			return fail(stderr, err)
+		}
+		if err = m.Preflight(); err != nil {
+			return fail(stderr, err)
+		}
+		if code := checkAPIPort(l, m, home, r, stderr); code != exitOK {
+			return code
+		}
 	}
 	if app, ver, ok := runningRelease(); ok {
 		if err = app.Repoint(ver); err != nil {
@@ -97,16 +115,12 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			return fail(stderr, err)
 		}
 		exe = app.CurrentExe()
-		fmt.Fprintln(stdout, "Installing Meko")
-		if bin := filepath.Dir(link); onPath(bin) {
-			r.step(stepOK, "Commands", "meko and meko-cli, in "+bin)
-		} else {
-			r.step(stepWarn, "Commands", fmt.Sprintf("meko and meko-cli, in %s (add it to your PATH to run them directly)", bin))
-		}
+		installRow(r, filepath.Dir(link), home, run.ask)
 	} else {
 		fmt.Fprintf(stdout, "Setting up this build of meko (%s). It isn't from a release, "+
 			"so it doesn't update itself\n", exe)
 	}
+	kept := paths.LooksLikeDataDir(l.Root)
 	if err = l.Ensure(); err != nil {
 		return fail(stderr, err)
 	}
@@ -121,25 +135,25 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	if _, err = ct.Ensure(); err != nil {
 		return fail(stderr, err)
 	}
-	r.step(stepOK, "Data", fmt.Sprintf("%s (secrets %s)", l.Root, map[string]string{
-		"keychain": "in your login Keychain", "file": "in it, readable only by you"}[ct.Store.Kind()]))
-	if err = setWebAccess(l, access, noUI, home, stdout); err != nil {
+	dataNote := "kept"
+	if !kept {
+		dataNote = map[string]string{"keychain": "secrets in your login Keychain",
+			"file": "secrets in it, readable only by you"}[ct.Store.Kind()]
+	}
+	r.step(stepOK, "Data", spin.Note(homeRel(l.Root, home), dataNote, r.color))
+	if err = setWebAccess(l, access, noUI, home); err != nil {
 		return fail(stderr, err)
 	}
 	if noService {
+		if noUI {
+			r.step(stepOK, "Web UI", fmt.Sprintf("%s, in %s", webOffNote, homeRel(config.WebFile(l.Config), home)))
+		}
 		r.step(stepWarn, "Service", "none (--no-service): start Meko with meko start")
 		r.next([][2]string{
 			{"meko start", "start Meko"},
 			{"meko status", "check on Meko at any time"},
 		})
 		return exitOK
-	}
-	m, err := newManager()
-	if err != nil {
-		return fail(stderr, err)
-	}
-	if err := m.Preflight(); err != nil {
-		return fail(stderr, err)
 	}
 	if other := m.DataDir(); m.Installed() && other != "" && other != l.Root {
 		fmt.Fprintf(stdout, "The service ran the data folder %s; it now runs %s\n", other, l.Root)
@@ -152,10 +166,12 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	}
 	host, _ := os.Hostname()
 	pid := currentPID(l)
+	began := time.Now()
 	if err := m.Install(service.Spec{Exe: exe, DataDir: l.Root, ServiceLog: l.ServiceLog, Host: host}); err != nil {
 		return fail(stderr, err)
 	}
-	r.step(stepOK, "Service", m.Kind()+", starts at login and restarts on failure")
+	r.step(stepOK, "Service", "starts at login, restarts on failure"+spin.Dim(" · stop it with ", r.color)+
+		spin.Blue("meko stop", r.color))
 	if sd, ok := m.(*service.Systemd); ok {
 		if ok, detail, note := sd.Linger(); ok {
 			r.step(stepOK, "Boot", detail)
@@ -163,21 +179,34 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			r.step(stepWarn, "Boot", detail+". "+note)
 		}
 	}
-	st, ok := waitAnswering(l, serviceStartTimeout, pid)
-	if !ok {
+	starting := spin.Quiet(stdout, "Server", "starting")
+	if _, ok := waitAnswering(l, serviceStartTimeout, pid); !ok {
+		starting.End(stepFail, "didn't answer")
 		return fail(stderr, fmt.Errorf("the service didn't answer within %s. Check: %s, and meko logs",
 			serviceStartTimeout, m.StatusHint()))
 	}
-	r.step(stepOK, "Server", fmt.Sprintf("running at http://127.0.0.1:%d (pid %d)", st.Port, st.PID))
-	printRunning(l, "", nextInstall, stdout)
+	verb := "started"
+	if pid != 0 || run.from != "" {
+		verb = "restarted"
+	}
+	starting.Done(verb + " in " + seconds(time.Since(began)))
+	o := runningOptions{kind: nextInstall, verb: "installed", since: run.started}
+	if run.from != "" {
+		o.verb = "upgraded"
+	}
+	if run.first {
+		o.pick = pickExtension(l, run.ask, stdout, stderr)
+	}
+	printRunning(l, o, stdout)
 	return exitOK
 }
 
 // setWebAccess writes the web listener's access to web.toml (config.AddWeb) when neither it nor
 // config.toml sets one: with access, or, unless an AgentK is on this computer (whose own access Meko
 // takes over when it hands over its port), with the default AgentK had: remote over SSH or on Linux
-// with no display, local otherwise. With noUI it turns the web UI off there too (config.SetWebEnabled).
-func setWebAccess(l paths.Layout, access string, noUI bool, home string, stdout io.Writer) error {
+// with no display, local otherwise. The summary's Web UI link row says which. With noUI it turns
+// the web UI off there too (config.SetWebEnabled), which the summary's Web UI row says.
+func setWebAccess(l paths.Layout, access string, noUI bool, home string) error {
 	if noUI {
 		if err := config.SetWebEnabled(l.Config, false); errors.Is(err, config.ErrWebEnabledSet) {
 			return errors.New("config.toml sets [web] enabled, which --no-ui would change: change it there instead")
@@ -185,39 +214,23 @@ func setWebAccess(l paths.Layout, access string, noUI bool, home string, stdout 
 			return err
 		}
 	}
-	added, err := addWebAccess(l, access, home)
-	switch {
-	case err != nil:
-		return err
-	case noUI:
-		newReport(stdout).step(stepOK, "Web UI", fmt.Sprintf("%s, in %s", webOffNote, config.WebFile(l.Config)))
-	case added != "":
-		note := "from this computer"
-		if added == config.AccessRemote {
-			note = "every address, over HTTPS, no login"
-		}
-		newReport(stdout).step(stepOK, "Web UI", fmt.Sprintf("%s access (%s), in %s; [web] in config.toml overrides it",
-			added, note, config.WebFile(l.Config)))
-	}
-	return nil
+	return addWebAccess(l, access, home)
 }
 
-// addWebAccess is setWebAccess's access: the one it wrote, or "" when it wrote none.
-func addWebAccess(l paths.Layout, access, home string) (string, error) {
+// addWebAccess writes setWebAccess's access, unless web.toml or config.toml sets one, or an AgentK
+// on this computer will hand its own over.
+func addWebAccess(l paths.Layout, access, home string) error {
 	if access == "" {
 		if cat := extensions.Known["agentk"]; cat.Find("agentk", home, l.Root) != "" {
-			return "", nil
+			return nil
 		}
 		access = config.AccessLocal
 		if headless() {
 			access = config.AccessRemote
 		}
 	}
-	added, err := config.AddWeb(l.Config, config.Web{Access: access}, config.TLS{})
-	if err != nil || !added {
-		return "", err
-	}
-	return access, nil
+	_, err := config.AddWeb(l.Config, config.Web{Access: access}, config.TLS{})
+	return err
 }
 
 // headless reports whether this looks like a machine reached from elsewhere: an SSH session, or Linux
@@ -254,36 +267,29 @@ func onPath(dir string) bool {
 	return false
 }
 
-// runUninstall removes the service, the meko command and the release installs. The data stays
-// unless purge, which first destroys it as meko destroy does (asking, unless o.force; the
-// extensions go too unless o.force keeps them), with the client token wherever it's kept, and then
-// disconnects the agents that sent that token (disconnectAgents). Extensions stay installed unless
-// that destroy removed them. It ends saying how to install Meko again.
+// runUninstall removes the extensions, then the service, the meko command, the release installs,
+// and the line meko install added to a shell's profile to put the command on the PATH. It asks
+// nothing about the extensions: with Meko gone nothing would run them. Without purge each one is
+// removed as meko extension delete does (its services, releases and command), and its data stays
+// with Meko's; the first that fails stops it, before anything of Meko's is removed. With purge it
+// first destroys the data folder as meko destroy does, the extensions' data with it (asking once,
+// unless o.force), and then disconnects the agents that sent its token (disconnectAgents). It ends
+// saying how to install Meko again.
 func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fail(stderr, err)
 	}
-	// Read before a purge removes the data folder, which holds the extension list.
-	var exts []string
-	if reg, rerr := extensions.Load(l.Root); rerr == nil {
-		for _, n := range reg.Names() {
-			exts = append(exts, fmt.Sprintf("Extension %s is still installed: %s uninstall removes it", n,
-				reg.Entries[n].Command))
-		}
-	}
 	if purge {
 		// Found while the data folder still says what this Meko's token is.
 		disconnect := connectedAgents(l)
 		o.uninstall = true
-		code, kept := destroy(l, o, stdin, stdout, stderr)
-		if code != exitOK {
+		if code := destroy(l, o, stdin, stdout, stderr); code != exitOK {
 			return code
 		}
-		if !kept {
-			exts = nil
-		}
 		disconnect(stdout, stderr)
+	} else if code := removeExtensions(l, stdout, stderr); code != exitOK {
+		return code
 	}
 	if m, merr := newManager(); merr == nil && m.Installed() && (m.DataDir() == "" || paths.SameDir(m.DataDir(), l.Root)) {
 		if err = m.Remove(); err != nil {
@@ -317,13 +323,49 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 			}
 		}
 	}
-	for _, line := range exts {
-		fmt.Fprintln(stdout, line)
+	changed, err := removePathLines(home)
+	for _, p := range changed {
+		fmt.Fprintf(stdout, "Removed the PATH line meko install added to %s\n", homeRel(p, home))
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "meko: can't remove the PATH line meko install added: %v\n", err)
 	}
 	if !purge {
 		fmt.Fprintf(stdout, "Your data is still in %s; meko destroy (or meko uninstall --purge) removes it\n", l.Root)
 	}
 	fmt.Fprintln(stdout, "Meko removed. You can install it again using\n  `"+installCommand+"`")
+	return exitOK
+}
+
+// removeExtensions removes every installed extension for uninstall, keeping its data: each one
+// registered, or with a release Meko installed. It holds the update lock meanwhile.
+func removeExtensions(l paths.Layout, stdout, stderr io.Writer) int {
+	exts, err := findExtensionData(l)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	lock := update.NewLock(l.Root)
+	if len(exts) > 0 {
+		if !lock.TryLock() {
+			return fail(stderr, update.ErrLocked)
+		}
+		defer lock.Unlock()
+	}
+	for _, e := range exts {
+		cat := extensions.Known[e.name]
+		if _, serr := os.Stat(cat.App(l.Root, e.name).Root); !e.registered && (!cat.Managed || serr != nil) {
+			continue // only its data is left, which stays
+		}
+		if err := removeExtension(l, e, false, stdout, stderr); err != nil {
+			return fail(stderr, fmt.Errorf("couldn't remove %s: %w. Meko is still installed: run meko uninstall "+
+				"again once that's fixed", extensionTitle(e.name), err))
+		}
+		if e.dir != "" {
+			fmt.Fprintf(stdout, "Removed %s; its data stays in %s\n", extensionTitle(e.name), e.dir)
+		} else {
+			fmt.Fprintf(stdout, "Removed %s\n", extensionTitle(e.name))
+		}
+	}
 	return exitOK
 }
 
@@ -461,7 +503,7 @@ func installExtension(ctx context.Context, l paths.Layout, name string, o extIns
 		return fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
 			"needs: update it (the Update button in AgentK), then run this again", cat.Title)
 	}
-	fmt.Fprintf(stdout, "%s is installed (%s): setting it up to use this Meko\n", cat.Title, cmd)
+	fmt.Fprintf(stdout, "  %s %s is installed\n", spin.Mark(spin.OK, spin.Color(stdout)), cat.Title)
 	env := extensions.CommandEnv(l.Root, cmd)
 	if err = runAttached(ctx, cmd, append([]string{"install"}, args...), env, stdin, stdout, stderr); err != nil {
 		return fmt.Errorf("%s install failed: %w", cat.Command, err)
@@ -518,7 +560,8 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 	}
 	app := cat.App(l.Root, name)
 	goos, arch := update.Platform()
-	rel, ver, ok := update.Release{}, version, false
+	var rel update.Release
+	ver, ok := version, false
 	if version == "" {
 		rel, ver, ok = update.PickPackage(rels, cat.TagPrefixes, name, goos, arch, app.BadVersions())
 	} else {
@@ -532,7 +575,7 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 		}
 		return "", fmt.Errorf("%s for %s-%s was found in %s", what, goos, arch, c.Repo)
 	}
-	installing := spin.Start(stdout, "Release", fmt.Sprintf("installing %s %s (%s)", cat.Title, ver, rel.Tag))
+	installing := spin.Start(stdout, "Release", fmt.Sprintf("installing %s %s", cat.Title, ver))
 	// Owner-only, like the rest of the data folder; the extension's own folder may not be there yet.
 	if err := os.MkdirAll(filepath.Dir(app.Root), 0o700); err != nil {
 		installing.Fail()
@@ -542,7 +585,7 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 		installing.Fail()
 		return "", err
 	}
-	installing.Done(fmt.Sprintf("%s %s (%s), downloaded and checked", cat.Title, ver, rel.Tag))
+	installing.Done(fmt.Sprintf("%s %s, downloaded and checked", cat.Title, ver))
 	notices.print(stdout)
 	if err := app.Repoint(ver); err != nil {
 		return "", err

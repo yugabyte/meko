@@ -189,9 +189,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.noUI, "no-ui", false, "leave the web UI off (meko ui start turns it on)")
 	case "uninstall":
 		fs.BoolVar(&c.purge, "purge", false, "also destroy the data folder and its secrets")
-		fs.BoolVar(&c.force, "force", false, "with --purge, destroy without asking (keeping the extensions' data)")
-		fs.BoolVar(&c.withExtensions, "with-extensions", false,
-			"with --purge, uninstall the extensions and remove their data too")
+		fs.BoolVar(&c.force, "force", false, "with --purge, destroy without asking")
 	case "destroy":
 		fs.BoolVar(&c.force, "force", false, "destroy without asking (keeping the extensions' data)")
 		fs.BoolVar(&c.withExtensions, "with-extensions", false, "uninstall the extensions and remove their data too")
@@ -352,7 +350,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	case "install":
 		return runInstall(l, c.noService, c.access, c.noUI, stdout, stderr)
 	case "uninstall":
-		return runUninstall(l, c.purge, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdout, stderr)
+		return runUninstall(l, c.purge, destroyOptions{force: c.force}, stdout, stderr)
 	case "extension list":
 		return runListExtensions(l, t.json, stdout, stderr)
 	case "extension install":

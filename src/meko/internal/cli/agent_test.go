@@ -197,7 +197,7 @@ func TestAgentConnect(t *testing.T) {
 		"  kiro-cli                         start a new Kiro CLI session, with Meko's tools "+
 		"(ones already running need a restart)\n"+
 		"  meko cloud_link                  share with your team through Meko Cloud\n"+
-		"  meko extension install agentk    add AgentK, the agentic coder for ADLC\n" {
+		"  meko extension install agentk    add AgentK, which runs coding agents from task to merged PR\n" {
 		t.Fatalf("agent connect kiro: %d %q %q", code, out, errs)
 	}
 	if !strings.Contains(readFile(t, kiroFile(t)), "Bearer "+tok) {

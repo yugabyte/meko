@@ -130,8 +130,11 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	configurePort(t, dir, port)
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, 0, out+errs, "  ✓ Server          running at http://127.0.0.1:"+port)
+	want(t, "install", code, 0, out+errs, "  ✓ Server          started in ")
+	want(t, "install's agents link", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
 	want(t, "install's next steps", code, 0, out, "meko extension install agentk")
+	want(t, "install's way out", code, 0, out,
+		"  meko status                      check on Meko at any time · meko uninstall removes it\n")
 	if f.spec.DataDir != dir || f.spec.ServiceLog != paths.New(dir).ServiceLog || f.spec.Exe == "" {
 		t.Errorf("spec %+v", f.spec)
 	}
@@ -164,33 +167,93 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 		t.Errorf("extension ran %q (restart and --keep-extensions must leave it alone)", got)
 	}
 
+	// The line meko install added to a shell's profile goes too, and the rest of the profile stays.
+	bashrc := filepath.Join(os.Getenv("HOME"), ".bashrc")
+	//nolint:gosec // G703: the test's own HOME
+	if err := os.WriteFile(bashrc, []byte("alias ll='ls -l'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := addPathLine(bashrc, `export PATH="$HOME/.local/bin:$PATH"`); err != nil {
+		t.Fatal(err)
+	}
+	// An extension that can't be removed stops it before anything of Meko's goes: the service, the
+	// meko command, the PATH line and the registration stay, for meko uninstall to run again.
+	bad := filepath.Join(t.TempDir(), "bad")
+	//nolint:gosec // G306: test script
+	if err := os.WriteFile(bad, []byte("#!/bin/sh\n[ \"$1\" = uninstall ] && exit 1\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reg.Entries["agentk"] = extensions.Entry{Command: bad, InstalledByMeko: true}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	mekoLink := filepath.Join(os.Getenv("HOME"), ".local", "bin", "meko")
+	_, linkErr := os.Lstat(mekoLink) //nolint:gosec // G703: the test's own HOME
+	code, out, errs = run("uninstall", "--data-dir", dir)
+	want(t, "uninstall, an extension failing", code, 1, errs,
+		"couldn't remove AgentK: ")
+	want(t, "uninstall, an extension failing", code, 1, errs,
+		"Meko is still installed: run meko uninstall again once that's fixed")
+	if strings.Contains(out, "Removed") {
+		t.Errorf("uninstall removed something though an extension failed:\n%s", out)
+	}
+	if _, err := os.Stat(f.file); err != nil {
+		t.Errorf("the service went though an extension failed: %v", err)
+	}
+	if _, err := os.Lstat(mekoLink); (err == nil) != (linkErr == nil) { //nolint:gosec // G703: the test's own HOME
+		t.Errorf("the meko command changed though an extension failed: %v", err)
+	}
+	if got := readFile(t, bashrc); !strings.Contains(got, pathMark) {
+		t.Errorf("the PATH line went though an extension failed: %q", got)
+	}
+	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Command != bad {
+		t.Errorf("the extension was unregistered though it failed: %v", reg.Entries)
+	}
+	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+
 	code, out, _ = run("uninstall", "--data-dir", dir)
 	want(t, "uninstall", code, 0, out, "Removed the fake service")
-	want(t, "uninstall", code, 0, out, "Extension agentk is still installed")
+	want(t, "uninstall's PATH line", code, 0, out, "Removed the PATH line meko install added to ~/.bashrc\n")
+	if got := readFile(t, bashrc); got != "alias ll='ls -l'\n" {
+		t.Errorf(".bashrc after uninstall: %q", got)
+	}
+	// It removes the extensions first, asking nothing, as meko extension delete does: their own
+	// uninstall keeps their data, as Meko's stays.
+	want(t, "uninstall's extensions", code, 0, out, "Removed AgentK\n")
+	if got := readLog(t, log); !strings.HasSuffix(got, "uninstall --non-interactive\n") {
+		t.Errorf("extension ran %q", got)
+	}
+	if reg, _ = extensions.Load(dir); len(reg.Entries) != 0 {
+		t.Errorf("uninstall left extensions registered: %v", reg.Entries)
+	}
 	want(t, "uninstall", code, 0, out, "Your data is still in "+dir+"; meko destroy")
 	if _, err := os.Stat(paths.New(dir).DB); err != nil {
 		t.Errorf("uninstall deleted the data: %v", err)
+	}
+	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
 	}
 	stdin = strings.NewReader("n\n")
 	t.Cleanup(func() { stdin = os.Stdin })
 	code, _, errs = run("uninstall", "--data-dir", dir, "--purge")
 	want(t, "uninstall --purge, declined", code, 1, errs, "Nothing was removed")
-	// --force keeps the extensions' data (the registry here) and says the extension is still installed.
-	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force")
-	want(t, "uninstall --purge --force", code, 0, out, "kept the extensions' data in it")
-	want(t, "uninstall --purge --force", code, 0, out, "Extension agentk is still installed")
-	if _, err := os.Stat(paths.New(dir).DB); !os.IsNotExist(err) {
-		t.Errorf("meko.db is still there: %v", err)
-	}
 	// A service for this data folder goes too, though the purge removed the folder before it's looked at.
+	// --force asks nothing, and the extensions and their data go with Meko's, with no question of their own.
 	if err := os.WriteFile(f.file, []byte(dir), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force", "--with-extensions")
-	want(t, "uninstall --purge --force --with-extensions", code, 0, out, "Removed "+dir)
-	want(t, "uninstall --purge --force --with-extensions", code, 0, out, "Removed the fake service")
-	if strings.Contains(out, "still installed") {
-		t.Errorf("uninstall said a removed extension is still installed:\n%s", out)
+	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force")
+	want(t, "uninstall --purge --force", code, 0, out, "Removed "+dir)
+	want(t, "uninstall --purge --force", code, 0, out, "Removed the fake service")
+	if strings.Contains(out, "--with-extensions") {
+		t.Errorf("uninstall --purge --force names a flag it doesn't have:\n%s", out)
+	}
+	if strings.Contains(out, "still installed") || strings.Contains(out, "kept the extensions") {
+		t.Errorf("uninstall --purge kept the extensions:\n%s", out)
 	}
 	if got := readLog(t, log); !strings.HasSuffix(got, "uninstall --purge --delete-worktrees --non-interactive\n") {
 		t.Errorf("extension ran %q", got)
@@ -254,7 +317,10 @@ func TestInstallWithoutTheWebUI(t *testing.T) {
 	configurePort(t, dir, port)
 	useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir, "--no-ui", "--access", "local")
-	want(t, "install --no-ui", code, 0, out+errs, "  ✓ Web UI          off (meko ui start turns it on), in ")
+	want(t, "install --no-ui", code, 0, out+errs, "  ! Web UI          off (meko ui start turns it on)\n")
+	if n := strings.Count(out, "Web UI          "); n != 1 {
+		t.Errorf("install --no-ui printed %d Web UI rows:\n%s", n, out)
+	}
 	want(t, "install --no-ui's next steps", code, 0, out, "meko ui start")
 	cfg, err := config.Load(paths.New(dir).Config, func(string) string { return "" }, config.Overrides{})
 	if err != nil || cfg.Web.Enabled || cfg.Web.Access != config.AccessLocal {
@@ -305,7 +371,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	ak := filepath.Join(home, ".local", "bin", "agent-k-local")
 	log := fakeExtension(t, ak)
 	code, out, errs = run("extension", "install", "agentk", "--data-dir", dir)
-	want(t, "extension install", code, 0, out+errs, "setting it up to use this Meko")
+	want(t, "extension install", code, 0, out+errs, "  ✓ AgentK is installed\n")
 	if strings.Contains(out, "start and stop it") {
 		t.Errorf("extension install says how meko start and stop run it:\n%s", out)
 	}
@@ -486,9 +552,10 @@ func TestStartRefusesFlagsTheServiceWouldIgnore(t *testing.T) {
 	configurePort(t, dir, port)
 	useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, 0, out+errs, "  ✓ Service         fake, starts at login and restarts on failure\n")
-	want(t, "install's box", code, 0, out, "│ Meko dev ")
-	want(t, "install's Cloud", code, 0, out, "│ Cloud               Not linked ")
+	want(t, "install", code, 0, out+errs,
+		"  ✓ Service         starts at login, restarts on failure · stop it with meko stop\n")
+	want(t, "install's headline", code, 0, out, "\n  ● Meko dev is running\n")
+	want(t, "install's Cloud", code, 0, out, "\n  Cloud   not linked\n")
 	code, _, errs = run("restart", "--data-dir", dir, "--log-level", "debug")
 	want(t, "restart --log-level", code, 1, errs, "reads config.toml")
 	code, _, errs = run("stop", "--data-dir", dir)

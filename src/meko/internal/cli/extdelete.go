@@ -94,14 +94,35 @@ func runDeleteExtension(l paths.Layout, name string, o extDeleteOptions, in io.R
 		return fail(stderr, update.ErrLocked)
 	}
 	defer lock.Unlock()
-	if err := uninstallExtensions(l, []extensionData{ext}, o.purge, stdout, stderr); err != nil {
+	if err := removeExtension(l, ext, o.purge, stdout, stderr); err != nil {
 		return fail(stderr, err)
+	}
+	if o.purge || ext.dir == "" || !known {
+		fmt.Fprintf(stdout, "Deleted %s\n", title)
+	} else {
+		fmt.Fprintf(stdout, "Deleted %s. Its data stays in %s\n", title, ext.dir)
+	}
+	return exitOK
+}
+
+// removeExtension is extension delete's work, and uninstall's for each extension, with the update
+// lock held: the extension's own uninstall (RemoveArgs, or UninstallArgs with purge), then the
+// releases Meko installed and the command it linked, its folder too with purge, and its
+// registration. Releases a live process still runs from are kept, with its registration, and that's
+// an error.
+func removeExtension(l paths.Layout, ext extensionData, purge bool, stdout, stderr io.Writer) error {
+	name := ext.name
+	cat, known := extensions.Known[name]
+	title := extensionTitle(name)
+	app := cat.App(l.Root, name)
+	if err := uninstallExtensions(l, []extensionData{ext}, purge, stdout, stderr); err != nil {
+		return err
 	}
 	// A version a live process still runs from (AgentK's session host, when its stop failed) keeps
 	// its release, which removing the app folder would pull out from under it.
 	if live := app.Live(); cat.Managed && len(live) > 0 {
-		return fail(stderr, fmt.Errorf("%s's uninstall ran, but something still runs from %s %s, so its releases "+
-			"and registration were kept: stop it, then run this again", title, title, strings.Join(live, ", ")))
+		return fmt.Errorf("%s's uninstall ran, but something still runs from %s %s, so its releases "+
+			"and registration were kept: stop it, then run this again", title, title, strings.Join(live, ", "))
 	}
 	if cat.Managed {
 		// A damaged extension's uninstall didn't run, so the links Meko made are removed here.
@@ -113,7 +134,7 @@ func runDeleteExtension(l paths.Layout, name string, o extDeleteOptions, in io.R
 	// Only a known extension's folders: a registered name Meko doesn't know is only forgotten.
 	removed := ""
 	switch {
-	case known && o.purge:
+	case known && purge:
 		removed = extensions.Dir(l.Root, name)
 	case cat.Managed:
 		removed = app.Root
@@ -121,25 +142,20 @@ func runDeleteExtension(l paths.Layout, name string, o extDeleteOptions, in io.R
 	if removed != "" {
 		// G703: a known extension's folder (extensions.Known), never a path from the command line.
 		if err := os.RemoveAll(removed); err != nil { //nolint:gosec
-			return fail(stderr, err)
+			return err
 		}
 	}
 	if ext.registered {
 		reg, err := extensions.Load(l.Root)
 		if err != nil {
-			return fail(stderr, err)
+			return err
 		}
 		delete(reg.Entries, name)
 		if err := reg.Save(); err != nil {
-			return fail(stderr, err)
+			return err
 		}
 	}
-	if o.purge || ext.dir == "" || !known {
-		fmt.Fprintf(stdout, "Deleted %s\n", title)
-	} else {
-		fmt.Fprintf(stdout, "Deleted %s. Its data stays in %s\n", title, ext.dir)
-	}
-	return exitOK
+	return nil
 }
 
 // deleteCommand is the command extension delete runs the uninstall of, as uninstallExtensions finds

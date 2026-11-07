@@ -10,8 +10,11 @@ working, its Meko features skipping or retrying.
 
 ```sh
 curl -fsSL https://mekodata.ai/install.sh | sh
-meko extension install agentk      # then, for AgentK
 ```
+
+A first install at a terminal ends by asking which extension to add (AgentK, Presenter, or none),
+and runs `meko extension install <name>` for the one picked; `meko extension install agentk` adds
+one at any time.
 
 `mekodata.ai/install.sh` is a 302 redirect, set on the website, to
 `https://github.com/yugabyte/meko/releases/latest/download/install.sh`. Meko's releases are the
@@ -20,24 +23,37 @@ Meko release's `install.sh` (`src/meko/scripts/install.sh`), and a release needs
 website. It's a 302, not a 301, so no cache keeps it for good. The link is `mekodata.ai`:
 `www.mekodata.ai` redirects elsewhere.
 
-The installer downloads with a signed-in `gh`, else with curl and `GITHUB_TOKEN`, else with curl
-and no token. With no token it reads the newest version from where
-`github.com/yugabyte/meko/releases/latest` redirects rather than from GitHub's API, which allows 60
-calls an hour per address without one. Everything runs from a `main` function called on the
-script's last line, so a download cut short runs nothing and `meko install` doesn't read the rest
-of the script as its input. It:
+The installer downloads with curl alone, with no sign-in: the repo is public. It reads the newest
+version from where `github.com/yugabyte/meko/releases/latest` redirects rather than from GitHub's
+API, which allows 60 calls an hour per address, and the assets from `releases/download`. It never
+runs `gh` (whose "new release" notice would open the run) and never sends a token. Everything runs
+from a `main` function called on the script's last line, so a download cut short runs nothing and
+`meko install` doesn't read the rest of the script as its input. It:
 
 1. Checks the platform: Linux x64 or arm64, or an Apple Silicon Mac on macOS 14 or newer.
-2. Finds the newest `meko-v*` release (or `--version`), downloads
-   `meko-<version>-<linux|darwin>-<x64|arm64>.tar.gz` and `SHA256SUMS`, and checks the checksum.
-3. Unpacks it to `~/.local/share/meko/app/<version>` (`$XDG_DATA_HOME/meko/app`), outside the data
+2. Finds the newest `meko-v*` release (or `--version`). If that version is the one installed
+   (`app/current`), it prints `✓ Meko <version> is up to date` and exits 0, unless `--reinstall`.
+3. Prints its header, `◆ meko  <version> · macOS · Apple Silicon` (on an upgrade, `<installed> →
+   <version>`; on a first install, a second line: "Installs into your home folder, no sudo").
+4. Downloads `meko-<version>-<linux|darwin>-<x64|arm64>.tar.gz` and `SHA256SUMS`, and checks the
+   checksum: one `Download` row, with the size and the time it took. On a terminal the row shows the
+   dots and the megabytes so far while curl runs in the background.
+5. Unpacks it to `~/.local/share/meko/app/<version>` (`$XDG_DATA_HOME/meko/app`), outside the data
    folder, clearing macOS's quarantine flag in
-   case the tarball came through a browser.
-4. Runs that version's `meko install`.
+   case the tarball came through a browser. That takes seconds (some 400 MB unpacked), so on a
+   terminal an `Install` row shows the dots meanwhile (`unpacking meko <version>`), which `meko
+   install`'s own `Install` row then replaces.
+6. Runs that version's `meko install`, which prints the rest of the run on the same grid, with
+   `MEKO_INSTALL_STARTED` (when the run began, for "installed in 14s"), `MEKO_INSTALL_FROM` (the
+   version it replaces, on an upgrade), `MEKO_INSTALL_FIRST=1` (nothing was installed before, so the
+   run ends with the extension picker) and `MEKO_INSTALL_ASK=0` with `--non-interactive` (no PATH
+   question, no picker).
 
 It takes only its own flags (`--version`, `--reinstall`, `--no-service`, `--non-interactive`) and
 refuses any other, naming `meko extension install agentk`. Run again where Meko is installed, it
-says so and changes nothing, unless given `--reinstall` or another version.
+upgrades it to the newest release, keeping the data, or says it's up to date. A failure is a `✗`
+line saying what failed; once the download began, it adds that running the installer again is
+safe.
 
 `meko install` (`internal/cli/install.go`):
 
@@ -50,26 +66,51 @@ says so and changes nothing, unless given `--reinstall` or another version.
   is done ([below](#updates-and-rollback)). A release rolled back after making it would leave
   `meko-cli` pointing at an older `meko` that doesn't know the name. Run as `mekosh`, the binary runs nothing
   and names the `meko-cli` command instead (exit 2), so a `~/.local/bin/mekosh` link stays.
+- When `~/.local/bin` isn't on the PATH, its `Install` row is a `!`. On a terminal (read through
+  `/dev/tty`, since the installer is piped to sh), for zsh or bash, it asks `Add ~/.local/bin to
+  your PATH in ~/.bashrc? [Y/n]` and appends a commented `export PATH="$HOME/.local/bin:$PATH"` to
+  `~/.zshrc`, or `~/.bashrc` (`~/.bash_profile` on macOS, whose Terminal opens login shells). For
+  other shells, with no terminal, with `--non-interactive` or on "n", it names the line to add.
+  `meko uninstall` removes the line.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
-  a server started by hand on the same data folder first. `--no-service` skips the service.
+  a server started by hand on the same data folder first. `--no-service` skips the service. Before
+  it writes anything (`app/current`, the commands, the data folder, the service), it runs the
+  service manager's checks and checks that no other program holds the API port (`[server] port`,
+  7778 by default): if one does, its `Server` row is `✗` with how to find the program or move Meko,
+  and nothing is written, so running the installer again is safe (it would otherwise find
+  `app/current` at the new version and stop as up to date). A Meko server on that port doesn't
+  count: this data folder's, or the one the installed service runs, which installing the service
+  moves to this folder. The web port isn't checked, since Meko takes it over from an AgentK on this
+  computer. The `Server` row shows the dots until the service's server
+  answers (`started in 0.9s`, or `restarted` over a running one or an upgrade).
 - It writes the web listener's access to `web.toml` when neither it nor `config.toml` sets one:
   `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no display,
   else local), unless AgentK is on this computer, whose access the handoff takes over instead
   ([web.md](web.md#settings)). Neither access has a login. `--no-ui` turns the web UI off there
-  too (`[web] enabled = false`; `meko ui start` turns it on). It prints the web UI's URL.
-- It installs Meko alone. AgentK is `meko extension install agentk`.
+  too (`[web] enabled = false`; `meko ui start` turns it on). The summary's `Web UI` link row
+  gives the URL and the access.
+- It installs Meko alone. On a first install from the installer (`MEKO_INSTALL_FIRST=1`) at a
+  terminal, it ends, after the links, with a picker of the known extensions not installed yet
+  (`extensions.Known`, AgentK first, each with its `Summary`) and "Skip for now": ↑ and ↓ then
+  Enter, or a number (`pickKey`, on `/dev/tty`). Picking one prints `→ meko extension install
+  <name>` and runs that install on the terminal, where it asks its own questions; one that fails is
+  a `✗` row, and Meko stays installed (exit 0). With no terminal it prints `Add an extension at any
+  time: meko extension install agentk` instead. The commands to run next start with opening the
+  extension just added, or the web UI.
 
-`meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/meko-cli`,
-`~/.local/bin/mekosh` (when they're links into the app folder) and the app folder,
-and keeps the data;
-`--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`; it
-takes `--with-extensions` too), with one difference: its one question removes the extensions and
-their data too, since with Meko gone nothing would run them, and only `--force` without
-`--with-extensions` keeps them. Extensions stay installed unless that destroy removed them, and it
-names the ones that stay. A purge then disconnects the agents that were connected to this Meko
+`meko uninstall` first removes every installed extension, asking nothing, since with Meko gone
+nothing would run them: each one as `meko extension delete <name>` does (its own uninstall, which
+stops it and removes its services, then the releases Meko installed and its command), keeping its
+data with Meko's. If one fails, nothing of Meko's is removed. Then it removes the service,
+`~/.local/bin/meko`, `~/.local/bin/meko-cli`, `~/.local/bin/mekosh` (when they're links into the
+app folder), the app folder and the PATH line `meko install` added to a shell's profile
+(`~/.zshrc`, `~/.bashrc`, `~/.bash_profile`), and keeps the data;
+`--purge` instead first destroys the data folder as `meko destroy` does, asking once unless
+`--force`, with one difference: the extensions and their data always go with Meko's, with no
+question of their own. A purge then disconnects the agents that were connected to this Meko
 (their `meko` MCP server sent its token, which the purge deleted), found before the destroy and
-removed after it, and says which. Its last line, after the extensions still installed and (without
-`--purge`) where the data stays, says how to install Meko again (`curl -fsSL
+removed after it, and says which. Its last line, after (without `--purge`) where the data stays,
+says how to install Meko again (`curl -fsSL
 https://mekodata.ai/install.sh | sh`). `meko destroy` stops the service before the server, so its
 manager doesn't start the server again mid-removal; removes the data folder and the client token
 (also when it's in the Keychain, outside the folder); and says the service is still installed,
@@ -294,7 +335,7 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
 line, a row of Meko's summary (`internal/cli/report.go`): two spaces, a mark (`✓` done, `!` a
 warning, `✗` failed), its title padded to 15 characters, a space, then what happened, such as
 `  ✓ AgentK          started; sessions resume in a few seconds`. The mark is colored (green,
-yellow, red) only when stdout is a terminal and `NO_COLOR` is unset. It leaves out hints Meko's own
+bold yellow, red) only when stdout is a terminal, `NO_COLOR` is unset and `TERM` isn't `dumb`. It leaves out hints Meko's own
 rows cover, such as `me_koder status` after a start (`meko start` ends with what to run next), but
 keeps what only it knows: AgentK's stop row says where its sessions resume, `meko start`, or
 `me_koder serve` when it runs without services. On a failure it prints its error
@@ -305,21 +346,67 @@ row in `src/server/summary.ts`.
 
 `meko update`, `meko extension update` and `meko extension install` print the rows of the steps that
 otherwise print nothing (`internal/spin`): `Release`, for the release they download, check and unpack
-(`  ✓ Release         AgentK 0.20261030.0 (agentk-v0.20261030.0), downloaded and checked`, or `meko
+(`  ✓ Release         AgentK 0.20261030.0, downloaded and checked`, or `meko
 <version> installed`), and for `meko update` under the service, `Server`, for the restart. While such a
-step runs on a terminal, its row shows rotating cyan dots (gh's spinner, which `install.sh`'s
+step runs on a terminal, its row shows rotating blue dots (gh's spinner, which `install.sh`'s
 download shows; AgentK's `install` steps show the same), and so does the listing of the releases, which leaves no row. Off a terminal, as in the
 Extensions page's jobs, a step prints what it's doing as a plain line when it starts (`Installing
-AgentK <version> (<tag>)`, `Restarting into meko <version>`), so the output isn't empty while it
+AgentK <version>`, `Restarting into meko <version>`), so the output isn't empty while it
 downloads, then its finished row. On a failure the row is `✗` with what it was doing, and the error
 follows on stderr.
+
+`meko install`, `meko start` and `meko status` end alike: the memory engine's row (start and install
+show the dots while it loads, for at most a minute, then `ready in 2.4s`, or `! still loading ·
+meko status says when it's ready`), a `● Meko <version> is running` headline (with `· installed in
+14s` or `· upgraded in 11s` after the installer, and the pid and uptime in status), then the links
+as plain aligned rows, each URL followed only by a dim note after ` · `, so it copies cleanly
+(`Web UI`, with its access; `Agents`, the MCP and API URL, `· MCP and API`; `Cloud`, the linked
+Meko Cloud or `not linked`), then the
+commands to run next. A `Web UI` row shows only when the web UI is off or not listening.
+
+### Colors
+
+Meko's rows and `install.sh` share one palette (`internal/spin`, repeated in the script), by role,
+so the output reads on a white terminal as on a black one. Blue is picked for the terminal's
+background; the rest are base ANSI colors, which every terminal theme tunes for its own background:
+
+| Role | Code | Used for |
+|---|---|---|
+| Mark, command, link | On a dark background `#79aeff` (256 colors: `111`; 16: `94`), on a light one `#1f5fd1` (`26`; `34`); links also `4` underlined and an OSC 8 link | `◆` `?` `❯` `→`, the dots, commands in hints and in Next, URLs |
+| Done | `32` green | `✓`, and the headline's `●` |
+| Warning | `1;33` bold yellow (bold, since some themes draw yellow pale on white) | `!` |
+| Failed | `31` red | `✗` |
+| Secondary | `2` faint | notes after a ` · `, link labels, the picker's descriptions and key hint |
+| Emphasis | `1` bold, in the terminal's own text color | `meko` in the header, the headline, a question, the picked choice |
+| Call to action | `1;97;44` white on blue | the first command under Next |
+
+White (`37`, `97`) and the bright colors (`90`–`97`) are never text on the terminal's own
+background, since a light theme draws them pale or not at all; only the call to action, which sets
+its own background, is white (`spin`'s `TestPaletteReadsOnWhiteTerminals` checks both files), and
+bright blue (`94`) is used only on a dark background with 16 colors.
+
+The background is `MEKO_TERM_BG` (`dark` or `light`) when it's set, else the last field of
+`COLORFGBG` (which some terminals set), else what the terminal answers when asked for its
+background color (OSC 11, sent with a DA1 query every terminal answers, so the read ends at once,
+within a quarter of a second), else dark (`spin.Background`). The query turns echo off and, when
+it puts it back, discards what the terminal sent and wasn't read; a reply later than that (over a
+slow SSH link) can still show up as typing, so `meko install` discards unread input before each
+question (`askTTY`), and Enter at the PATH question still means yes. The 24-bit blues are used when
+`COLORTERM` is `truecolor` or `24bit`; otherwise the 256-color ones, which nearly every terminal
+has whatever its `TERM` says (SSH usually drops `COLORTERM`); only the consoles and old terminals
+(`TERM` `linux`, `vt…`, `ansi`, `cons25`, `sun`) get the theme's own `94` or `34`, which some
+themes draw purple. `install.sh` finds the background once and exports `MEKO_TERM_BG`, so `meko
+install` doesn't ask again, and `meko` sets it for the commands it runs, so an extension's install
+(AgentK's `blueCode`, which reads only the variables) draws the same blue.
+Colors, links and dots are written only when the output is a terminal, `NO_COLOR` is unset and
+`TERM` isn't `dumb`; otherwise the same rows are plain.
 
 - An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's
   `app/current/bin`: its folder in the data folder, then its home from before it moved there
   (`Catalog.OldHomes`, `~/.agent-k-local`). When a registered command is gone, `meko start` and
   `stop` look for it again this way and save what they find in the registry.
-- `meko destroy` keeps the extensions' data unless told otherwise (`meko uninstall --purge` removes
-  it with Meko's, above). With some there (a registered
+- `meko destroy` keeps the extensions' data unless told otherwise (`meko uninstall` removes the
+  extensions, and with `--purge` their data, with Meko's, above). With some there (a registered
   extension, or a known one's folder), it lists each one's folder and size (Meko's own size leaves
   out `extensions/`) and asks a second question, whether to uninstall the extensions and delete
   their data too (AgentK's sessions and worktrees, with any uncommitted work). `--force` asks
@@ -575,9 +662,15 @@ Changing the store doesn't move secrets: the client token is made again.
   `logs` merging and following across rotation, `token --json`, `version --json`, and an update
   from the Status page's route ending `serve` with an exec of the new version, or under the
   service a clean exit.
-- `scripts/install_test.go`: the installer with a fake `gh`: unpacking and running `meko install`,
-  "already installed", `--reinstall`, a bad checksum, AgentK's flags refused, and Intel Macs and
-  macOS 13 refused.
+- `scripts/install_test.go`: the installer with a fake curl: unpacking and running `meko install`
+  with the `MEKO_INSTALL_*` variables, the header, "up to date", `--reinstall`, an upgrade, curl
+  alone (a signed-in `gh` never run, `GITHUB_TOKEN` never sent), failed downloads, plain output off
+  a terminal, a bad checksum, AgentK's flags refused, and Intel Macs and macOS 13 refused.
+- `internal/cli/install_run_test.go` and `pick_linux_test.go`: the PATH line added once and
+  removed, a held API port failing before the service is written, the headline's elapsed time and
+  the picker's line off a terminal, an upgrade's rows, the memory engine's wait and its timeout, and
+  the extension picker on a pseudo-terminal (skip, Ctrl+C, a failed install, an installed AgentK
+  left out).
 - The memory engine: offline loading never downloads, for the embedder and the reranker.
 - Each release build runs `scripts/smoke-release.sh` on its own platform.
 

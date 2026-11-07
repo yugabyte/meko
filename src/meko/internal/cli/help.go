@@ -190,10 +190,10 @@ var mekoCommands = []command{
 			{"meko destroy --with-extensions", "also uninstall the extensions and delete their data"},
 			{"meko destroy --force", "don't ask (keeps the extensions' data)"},
 		}},
-	{name: "uninstall", group: "Remove", summary: "Remove Meko, keeping its data",
+	{name: "uninstall", group: "Remove", summary: "Remove Meko and its extensions, keeping their data",
 		usage: "meko uninstall [flags]", examples: []example{
-			{"meko uninstall", "remove the service, the releases and the commands; your data stays"},
-			{"meko uninstall --purge", "also delete the data and its secrets, as destroy does"},
+			{"meko uninstall", "remove the extensions, then the service, the releases and the commands; the data stays"},
+			{"meko uninstall --purge", "also delete the data, the extensions' too, and its secrets, after asking"},
 		}},
 	{name: "serve", hidden: true, summary: "Run the server in the foreground",
 		usage: "meko serve [flags]", examples: []example{

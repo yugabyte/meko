@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, sta
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { opensBrowser, purgeHome, removeDb, serviceFailure, sessionWorktrees, welcomeTour } from '../../src/server/install.js';
+import { makePrompter, opensBrowser, reposFolder, purgeHome, removeDb, serviceFailure, sessionWorktrees, welcomeTour } from '../../src/server/install.js';
 import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { ensurePrivateDir, parseDfMountPoint, parseMountType } from '../../src/server/fstype.js';
 import { pad } from '../../src/server/tty.js';
@@ -207,5 +207,52 @@ describe('CLI labels', () => {
   it('always leave a space before the detail, even when the label is long', () => {
     expect(pad('Meko')).toBe('Meko'.padEnd(14));
     expect(pad('com.yugabyte.me_koder.host')).toBe('com.yugabyte.me_koder.host ');
+  });
+});
+
+// An open readline keeps the terminal raw, and the tools' check (deps.sh) runs before the first
+// question and reads /dev/tty itself: the prompter opens its readline only at the first question.
+describe('makePrompter', () => {
+  it('opens its readline at the first question, and again after closing it', async () => {
+    let opened = 0;
+    let closed = 0;
+    const p = makePrompter(true, true, () => {
+      opened++;
+      return { question: async () => ' answer ', close: () => { closed++; } };
+    });
+    expect(opened).toBe(0);
+    expect(await p.ask('Repos folder', '~/code')).toBe('answer');
+    expect(await p.ask('Continue?', 'n')).toBe('answer');
+    expect(opened).toBe(1);
+    p.close();
+    p.close();
+    expect(closed).toBe(1);
+    await p.ask('Again', 'x');
+    expect(opened).toBe(2);
+  });
+
+  it('asks nothing off a terminal or when not interactive', async () => {
+    const never = () => { throw new Error('opened a readline'); };
+    expect(await makePrompter(true, false, never).ask('Repos folder', '~/code')).toBe('~/code');
+    expect(await makePrompter(false, true, never).ask('Repos folder', '~/code')).toBe('~/code');
+  });
+});
+
+// The install makes the repos folder it was given when it isn't there, since AgentK clones into it.
+describe('reposFolder', () => {
+  it('makes a missing folder with its parents, and leaves one that exists', () => {
+    const base = mkdtempSync(join(tmpdir(), 'akl-repos-'));
+    try {
+      const dir = join(base, 'a', 'code');
+      expect(reposFolder(dir)).toEqual({ created: true });
+      expect(statSync(dir).isDirectory()).toBe(true);
+      expect(reposFolder(dir)).toEqual({ created: false });
+      writeFileSync(join(base, 'file'), '');
+      const r = reposFolder(join(base, 'file', 'code'));
+      expect(r.created).toBe(false);
+      expect(r.error).toMatch(/ENOTDIR|EEXIST/);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

@@ -40,15 +40,24 @@ type nextState struct {
 	// agentKOther says me_koder on PATH isn't this Meko's AgentK (another data folder's, which
 	// extension install leaves the ~/.local/bin link on), so it's opened with meko ui /ext/agentk/.
 	agentKOther bool
+	added       string // the extension install's picker just added, offered first
 }
 
 // nextSteps is the commands to run next, each with what it does, for the command that ends with it.
-// It offers Meko's uses in order: in an agent, learning from conversations, sharing through Meko
-// Cloud, and AgentK; meko status comes last.
+// The first is the one to run now (report.next shows it as the call to action): opening the
+// extension install's picker just added (after meko ui start while the web UI is off, since its page
+// needs it), or the web UI. Then it offers Meko's uses in order: in an
+// agent, learning from conversations, sharing through Meko Cloud, and AgentK; meko status comes
+// last, and after install names meko uninstall too.
 func nextSteps(s nextState, kind nextFor) [][2]string {
 	var out [][2]string
 	add := func(cmd, what string) { out = append(out, [2]string{cmd, what}) }
 	switch {
+	case s.added != "" && s.webOff: // its page needs the web UI
+		add("meko ui start", "turn the web UI on, when you want it")
+		add(openExtension(s.added, s.agentKOther))
+	case s.added != "":
+		add(openExtension(s.added, s.agentKOther))
 	case kind == nextConnect:
 		if !s.running {
 			add("meko start", "start Meko")
@@ -71,21 +80,30 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 		add("meko cloud_link", "share with your team through Meko Cloud")
 	}
 	switch {
-	case !s.agentKRead:
-	case s.agentK && s.agentKOther:
-		add("meko ui /ext/agentk/", "open AgentK, the agentic coder for ADLC")
+	case !s.agentKRead, s.added == "agentk": // just added: opening it came first
 	case s.agentK:
-		add("me_koder ui", "open AgentK, the agentic coder for ADLC")
+		add(openExtension("agentk", s.agentKOther))
 	default:
-		add("meko extension install agentk", "add AgentK, the agentic coder for ADLC")
+		add("meko extension install agentk", "add AgentK, which runs coding agents from task to merged PR")
 	}
-	if kind == nextStart {
-		add("meko-cli", "search and add to what Meko keeps")
-	}
-	if kind == nextInstall || kind == nextStart {
+	switch kind {
+	case nextInstall:
+		add("meko status", "check on Meko at any time · meko uninstall removes it")
+	case nextStart:
 		add("meko status", "check on Meko at any time")
 	}
 	return out
+}
+
+// openExtension is the command that opens extension name's own page, and what it does: AgentK's
+// me_koder ui, unless other says me_koder on PATH is another Meko's; the others' page in Meko's web
+// UI.
+func openExtension(name string, other bool) (string, string) {
+	what := "open " + extensionTitle(name)
+	if name == "agentk" && !other {
+		return "me_koder ui", what
+	}
+	return "meko ui /ext/" + name + "/", what
 }
 
 // otherAgents names the agents other than name, for "(or codex, kiro, opencode, cursor)".

@@ -41,7 +41,7 @@ func chooseSignIn(in io.Reader, prompt io.Writer) (bool, io.Reader, error) {
 		return false, in, nil
 	}
 	if f, ok := in.(*os.File); ok {
-		i, err := pickKey(f, prompt, "How do you want to link Meko Cloud?", signInChoices[:])
+		i, err := pickKey(f, prompt, "How do you want to link Meko Cloud?", signInChoices[:], nil)
 		if !errors.Is(err, errNoKeyMode) {
 			return i == 0, in, err
 		}
@@ -77,10 +77,11 @@ const enterWait uint8 = 5
 
 // pickKey asks question with choices on the terminal f, read a key at a time with echo off: ↑ and ↓
 // (or k and j) move the mark, Enter picks the marked choice, and a choice's number picks it at once.
-// Ctrl+C and Ctrl+D cancel. It returns the index picked, and leaves the choices on screen with the
-// picked one marked. Before it prints anything, a terminal whose settings can't be read or set is
-// errNoKeyMode, for the caller to ask another way.
-func pickKey(f *os.File, w io.Writer, question string, choices []string) (int, error) {
+// Ctrl+C and Ctrl+D cancel. details, when set, are a dim note after each choice, in a column. It
+// returns the index picked, and leaves the choices on screen with the picked one marked. Before it
+// prints anything, a terminal whose settings can't be read or set is errNoKeyMode, for the caller
+// to ask another way.
+func pickKey(f *os.File, w io.Writer, question string, choices, details []string) (int, error) {
 	fd := int(f.Fd())
 	old, err := unix.IoctlGetTermios(fd, ioctlGetTermios)
 	if err != nil {
@@ -93,25 +94,15 @@ func pickKey(f *os.File, w io.Writer, question string, choices []string) (int, e
 		return 0, fmt.Errorf("%w: %w", errNoKeyMode, err)
 	}
 	defer func() { _ = unix.IoctlSetTermios(fd, ioctlSetTermios, old) }()
-	color := spin.Color(w)
-	draw := func(at int, again bool) {
+	fmt.Fprint(w, pickLines(question, choices, details, -1, spin.Color(w)))
+	at := 0
+	draw := func(again bool) {
 		if again {
 			fmt.Fprintf(w, "\r\033[%dA", len(choices))
 		}
-		for i, c := range choices {
-			line := fmt.Sprintf("  %d) %s", i+1, c)
-			switch {
-			case i == at && color:
-				line = "\033[1m› " + line[2:] + "\033[0m"
-			case i == at:
-				line = "› " + line[2:]
-			}
-			fmt.Fprintf(w, "%s\033[K\n", line)
-		}
+		fmt.Fprint(w, pickLines("", choices, details, at, spin.Color(w)))
 	}
-	fmt.Fprintf(w, "%s (↑ and ↓, then Enter, or 1 to %d)\n", question, len(choices))
-	at := 0
-	draw(at, false)
+	draw(false)
 	buf := make([]byte, 16)
 	for {
 		n, rerr := f.Read(buf)
@@ -124,7 +115,7 @@ func pickKey(f *os.File, w io.Writer, question string, choices []string) (int, e
 		}
 		if next != at {
 			at = next
-			draw(at, true)
+			draw(true)
 		}
 		if picked {
 			if !bytes.ContainsAny(buf[:n], "\r\n") { // picked by its number, with no Enter yet
@@ -133,6 +124,38 @@ func pickKey(f *os.File, w io.Writer, question string, choices []string) (int, e
 			return at, nil
 		}
 	}
+}
+
+// pickLines are a picker's lines: with question, its line, "  ? How do you want to link Meko Cloud?
+// (↑ and ↓, then Enter, or 1 to 2)"; then, with at a choice's index, the choices, the one at marked
+// "❯" and bold, each with its detail (when details are set) dim in a column after them. Each line
+// ends by erasing what's left of a line drawn before.
+func pickLines(question string, choices, details []string, at int, color bool) string {
+	var b strings.Builder
+	if question != "" {
+		fmt.Fprintf(&b, "  %s %s %s\n", spin.Blue("?", color), spin.Bold(question, color),
+			spin.Dim(fmt.Sprintf("(↑ and ↓, then Enter, or 1 to %d)", len(choices)), color))
+	}
+	if at < 0 {
+		return b.String()
+	}
+	width := 0
+	for i, c := range choices {
+		width = max(width, len(fmt.Sprintf("%d) %s", i+1, c)))
+	}
+	for i, c := range choices {
+		label := fmt.Sprintf("%d) %s", i+1, c)
+		detail := ""
+		if i < len(details) && details[i] != "" {
+			detail = strings.Repeat(" ", width-len(label)+3) + spin.Dim(details[i], color)
+		}
+		if i == at {
+			fmt.Fprintf(&b, "  %s %s%s\033[K\n", spin.Blue("❯", color), spin.Bold(label, color), detail)
+		} else {
+			fmt.Fprintf(&b, "    %s%s\033[K\n", label, detail)
+		}
+	}
+	return b.String()
 }
 
 // swallowEnter reads, for up to enterWait, what's typed after a number picked a choice, and drops

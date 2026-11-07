@@ -6,15 +6,26 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/yugabyte/meko/src/meko/internal/extensions"
+	"github.com/yugabyte/meko/src/meko/internal/paths"
 )
 
 // openPTY opens a pseudo-terminal: what's written to the first file is typed at the second.
 func openPTY(t *testing.T) (typing, term *os.File) {
+	t.Helper()
+	return openPTYTo(t, io.Discard)
+}
+
+// openPTYTo is openPTY, with what the terminal shows (what's written to it, and its echo) copied
+// to shown.
+func openPTYTo(t *testing.T, shown io.Writer) (typing, term *os.File) {
 	t.Helper()
 	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
 	if err != nil {
@@ -33,8 +44,8 @@ func openPTY(t *testing.T) (typing, term *os.File) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	// What the terminal echoes back is read and dropped, so the echo never fills up.
-	go func() { _, _ = io.Copy(io.Discard, m) }()
+	// What the terminal shows is read (and dropped, unless shown is set), so it never fills up.
+	go func() { _, _ = io.Copy(shown, m) }()
 	return m, s
 }
 
@@ -62,7 +73,7 @@ func TestPickKeyOnATerminal(t *testing.T) {
 			got := make(chan int, 1)
 			errs := make(chan error, 1)
 			go func() {
-				i, perr := pickKey(term, io.Discard, "How?", signInChoices[:])
+				i, perr := pickKey(term, io.Discard, "How?", signInChoices[:], nil)
 				got <- i
 				errs <- perr
 			}()
@@ -102,10 +113,170 @@ func TestPickKeyNeedsATerminal(t *testing.T) {
 	}
 	defer func() { _ = r.Close(); _ = w.Close() }()
 	var out strings.Builder
-	if _, err = pickKey(r, &out, "How?", signInChoices[:]); err == nil || out.Len() != 0 {
+	if _, err = pickKey(r, &out, "How?", signInChoices[:], nil); err == nil || out.Len() != 0 {
 		t.Fatalf("pickKey on a pipe: %v, printed %q", err, out.String())
 	}
 	if !errors.Is(err, errNoKeyMode) {
 		t.Errorf("pickKey on a pipe: %v, want errNoKeyMode", err)
+	}
+}
+
+// A first install's picker asks on the terminal which extension to add: Skip and Ctrl+C add none,
+// and one whose install fails is a ✗ row, with Meko left as it is. AgentK, already added, isn't
+// offered again.
+func TestPickExtensionOnATerminal(t *testing.T) {
+	dir, _ := setup(t)
+	noRealExtensions(t)
+	l := paths.New(dir)
+	if err := l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name, typed string
+		shows       []string
+	}{
+		{"3 skips", "3", []string{"  ? Add an extension? (↑ and ↓, then Enter, or 1 to 3)\n",
+			"  ❯ 1) AgentK         runs coding agents across your projects, from task to merged PR",
+			"    2) Presenter      presentations that branch with the room",
+			"    3) Skip for now"}},
+		{"Ctrl+C adds none", "\x03", nil},
+		{"AgentK, whose install fails", "\r", []string{
+			"\n  → meko extension install agentk   · adds an extension at any time\n",
+			"  ✗ AgentK          not added: "}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var shown syncWriter
+			typing, term := openPTYTo(t, &shown)
+			old := openTTY
+			openTTY = func() (*os.File, error) { return os.OpenFile(term.Name(), os.O_RDWR, 0) }
+			defer func() { openTTY = old }()
+			t.Setenv("NO_COLOR", "1")
+			got := make(chan string, 1)
+			go func() { got <- pickExtension(l, true, term, term)(newReport(term)) }()
+			time.Sleep(100 * time.Millisecond)
+			if _, err := typing.WriteString(c.typed); err != nil {
+				t.Fatal(err)
+			}
+			if name := <-got; name != "" {
+				t.Errorf("added %q", name)
+			}
+			time.Sleep(50 * time.Millisecond)
+			out := strings.ReplaceAll(shown.String(), "\r\n", "\n")
+			for _, s := range c.shows {
+				if !strings.Contains(out, s) {
+					t.Errorf("no %q in:\n%s", s, out)
+				}
+			}
+		})
+	}
+
+	reg, err := extensions.Load(l.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.Entries["agentk"] = extensions.Entry{Command: "/bin/true"}
+	if err = reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var shown syncWriter
+	typing, term := openPTYTo(t, &shown)
+	openTTY = func() (*os.File, error) { return os.OpenFile(term.Name(), os.O_RDWR, 0) }
+	defer func() { openTTY = func() (*os.File, error) { return os.OpenFile("/dev/tty", os.O_RDWR, 0) } }()
+	got := make(chan string, 1)
+	go func() { got <- pickExtension(l, true, term, term)(newReport(term)) }()
+	time.Sleep(100 * time.Millisecond)
+	if _, err = typing.WriteString("2"); err != nil {
+		t.Fatal(err)
+	}
+	<-got
+	time.Sleep(50 * time.Millisecond)
+	if out := shown.String(); strings.Contains(out, "AgentK") || !strings.Contains(out, "1) Presenter") {
+		t.Errorf("with AgentK added:\n%s", out)
+	}
+}
+
+// syncWriter is a strings.Builder the pseudo-terminal's reader writes to while the test reads it.
+type syncWriter struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncWriter) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// When ~/.local/bin isn't on the PATH, install asks on the terminal whether to add it to the shell's
+// profile: yes or Enter adds the line and says how to use it now, no names the line to add. Off a
+// terminal, for a shell other than zsh or bash, or with --non-interactive (ask false), it asks
+// nothing and names the line.
+func TestInstallRowOffersThePath(t *testing.T) {
+	line := `export PATH="$HOME/.local/bin:$PATH"`
+	for _, c := range []struct {
+		name, shell, typed string
+		ask, added         bool
+		shows              []string
+	}{
+		{"yes", "/bin/bash", "y\n", true, true, []string{
+			"  ! Install         meko in ~/.local/bin · not on your PATH\n",
+			"  ? Add ~/.local/bin to your PATH in ~/.bashrc? [Y/n] ",
+			"  ✓ PATH            added to ~/.bashrc · open a new terminal, or run . ~/.bashrc\n"}},
+		{"Enter", "/bin/bash", "\n", true, true, []string{"  ✓ PATH            added to ~/.bashrc"}},
+		{"no", "/bin/bash", "n\n", true, false, []string{
+			"    Add " + line + " to your shell's profile to run meko by its name\n"}},
+		{"zsh", "/usr/bin/zsh", "Y\n", true, false, []string{"in ~/.zshrc? [Y/n] "}},
+		{"fish", "/usr/bin/fish", "", true, false, []string{
+			"  ! Install         meko in ~/.local/bin · not on your PATH: add " + line + " to your shell's profile\n"}},
+		{"--non-interactive", "/bin/bash", "", false, false, []string{"not on your PATH: add " + line}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("SHELL", c.shell)
+			t.Setenv("PATH", "/usr/bin:/bin")
+			t.Setenv("NO_COLOR", "1")
+			var shown syncWriter
+			typing, term := openPTYTo(t, &shown)
+			old := openTTY
+			openTTY = func() (*os.File, error) { return os.OpenFile(term.Name(), os.O_RDWR, 0) }
+			defer func() { openTTY = old }()
+			done := make(chan struct{})
+			go func() {
+				installRow(newReport(term), home+"/.local/bin", home, c.ask)
+				close(done)
+			}()
+			if c.typed != "" {
+				time.Sleep(100 * time.Millisecond)
+				if _, err := typing.WriteString(c.typed); err != nil {
+					t.Fatal(err)
+				}
+			}
+			<-done
+			time.Sleep(50 * time.Millisecond)
+			out := strings.ReplaceAll(shown.String(), "\r\n", "\n")
+			for _, s := range c.shows {
+				if !strings.Contains(out, s) {
+					t.Errorf("no %q in:\n%s", s, out)
+				}
+			}
+			profile := home + "/.bashrc"
+			if c.shell == "/usr/bin/zsh" {
+				profile = home + "/.zshrc"
+			}
+			b, _ := os.ReadFile(profile) //nolint:gosec // G304: the test's own file
+			if want := c.added || c.shell == "/usr/bin/zsh"; strings.Contains(string(b), line) != want {
+				t.Errorf("%s holds %q, want the line: %v", profile, b, want)
+			}
+			if !c.ask && strings.Contains(out, "[Y/n]") {
+				t.Errorf("asked with ask false:\n%s", out)
+			}
+		})
 	}
 }

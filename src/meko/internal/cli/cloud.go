@@ -206,20 +206,20 @@ func cloudStatusLine(l paths.Layout) string {
 	return "linked to " + cloudLine(cloudlink.StatusOf(st))
 }
 
-// cloudRow is the summary box's Cloud row: the linked Meko Cloud's web app, or for a link with
-// none (another Meko server, with no --web-url) its MCP URL and key hint; or "Not linked".
-func cloudRow(l paths.Layout) [2]string {
+// cloudRow is the summary's Cloud link row: the linked Meko Cloud's web app, or for a link with
+// none (another Meko server, with no --web-url) its MCP URL and key hint; or "not linked".
+func cloudRow(l paths.Layout) linkRow {
 	st, err := readCloudLink(l)
 	switch {
 	case err != nil:
-		return [2]string{"Cloud", "can't read the link: " + err.Error()}
+		return linkRow{label: "Cloud", note: "can't read the link: " + err.Error()}
 	case !st.Linked:
-		return [2]string{"Cloud", "Not linked"}
+		return linkRow{label: "Cloud", note: "not linked"}
 	}
 	if web := st.Link.EffectiveWebURL(); web != "" {
-		return [2]string{"Cloud", web}
+		return linkRow{label: "Cloud", url: web}
 	}
-	return [2]string{"Cloud", cloudLine(cloudlink.StatusOf(st))}
+	return linkRow{label: "Cloud", note: cloudLine(cloudlink.StatusOf(st))}
 }
 
 // cloudToken is meko token --json's cloud: whether the extensions' Meko is linked to Meko Cloud,

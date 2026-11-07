@@ -8,7 +8,7 @@ describe('summaryRow', () => {
   });
 
   it('colors only the mark', () => {
-    expect(summaryRow('!', 'AgentK', 'starting', true)).toBe('  \x1b[33m!\x1b[0m AgentK          starting');
+    expect(summaryRow('!', 'AgentK', 'starting', true)).toBe('  \x1b[1;33m!\x1b[0m AgentK          starting');
   });
 
   it('is asked for only by MEKO_SUMMARY=1', () => {

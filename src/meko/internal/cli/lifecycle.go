@@ -13,6 +13,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/server"
 	"github.com/yugabyte/meko/src/meko/internal/service"
+	"github.com/yugabyte/meko/src/meko/internal/spin"
 )
 
 // newManager is this OS's service manager for the user; tests replace it.
@@ -75,7 +76,7 @@ func runStart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 	code := startMeko(l, o, stdout, stderr)
 	if code == exitOK {
 		runExtensions(l, "start", stdout, stderr)
-		printRunning(l, "is running", nextStart, stdout)
+		printRunning(l, runningOptions{kind: nextStart}, stdout)
 	}
 	return code
 }
@@ -106,14 +107,39 @@ func waitWebListening(ctx context.Context, c *client) (server.StatusReply, error
 	return st, err
 }
 
-// printRunning is the end of start's and install's summary: the memory engine's and web listener's
-// rows, a box of links titled "Meko <version> <title>" (install's has no title after the version),
-// and the commands to run next (nextSteps).
-func printRunning(l paths.Layout, title string, kind nextFor, stdout io.Writer) {
+// engineWait is how long start and install wait for the memory engine to be ready (it loads its
+// models first) before its row says it's still loading.
+var engineWait = time.Minute
+
+// engineLoading reports whether the memory engine is on its way to ready: what start and install
+// wait through.
+func engineLoading(state string) bool {
+	return state == "starting" || state == "loading" || state == "restarting"
+}
+
+// runningOptions are what start's and install's summaries differ in.
+type runningOptions struct {
+	kind nextFor // which commands to offer next
+	// verb and since, when set, end the headline with how long the run took: "installed in 14s".
+	verb  string
+	since time.Time
+	// pick, when set, asks which extension to add after the links, and adds it: install's picker
+	// (pickExtension). It returns the extension added, or "".
+	pick func(r report) string
+}
+
+// printRunning is the end of start's and install's summary: the memory engine's row, which shows
+// the dots until it's ready (at most engineWait); the web listener's row, when it isn't listening;
+// a ● headline with the version, the links, and the commands to run next (nextSteps).
+func printRunning(l paths.Layout, o runningOptions, stdout io.Writer) {
 	r := newReport(stdout)
 	c, err := newClient(l)
 	if err != nil {
 		r.step(stepWarn, "Server", "can't ask it how it's doing: "+err.Error())
+		return
+	}
+	if err = waitEngine(c, stdout); err != nil {
+		r.step(stepWarn, "Server", "not answering: "+err.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), webWait)
@@ -123,27 +149,71 @@ func printRunning(l paths.Layout, title string, kind nextFor, stdout io.Writer) 
 		r.step(stepWarn, "Server", "not answering: "+err.Error())
 		return
 	}
-	k, text := memoryEngineStep(st.MemoryEngine)
-	r.step(k, "Memory engine", text)
 	if w := st.Web; w != nil {
 		switch {
 		case !w.Enabled:
 			r.step(stepWarn, "Web UI", webOffNote)
 		case w.Listening:
-			r.step(stepOK, "Web UI", "listening")
 		case w.Error != "":
 			r.step(stepFail, "Web UI", "not listening: "+w.Error)
 		default:
 			r.step(stepWarn, "Web UI", "starting (meko ui waits for it)")
 		}
 	}
-	r.box(strings.TrimSpace(fmt.Sprintf("Meko %s %s", st.Version, title)), linkRows(st, cloudRow(l)))
+	note := ""
+	if o.verb != "" && !o.since.IsZero() {
+		note = o.verb + " in " + time.Since(o.since).Round(time.Second).String()
+	}
+	r.running(fmt.Sprintf("Meko %s is running", st.Version), note)
+	r.links(linkRows(st, cloudRow(l)))
+	added := ""
+	if o.pick != nil {
+		added = o.pick(r)
+	}
 	s := readNextState(l, c)
 	if st.Web != nil {
 		s.webOff = !st.Web.Enabled
 	}
-	r.next(nextSteps(s, kind))
+	s.added = added
+	r.next(nextSteps(s, o.kind))
 }
+
+// waitEngine prints the memory engine's row: on a terminal it shows the dots while the engine
+// loads, for at most engineWait, then says how it ended ("ready in 2.4s"), or that it's still
+// loading. It fails only when the server doesn't answer.
+func waitEngine(c *client, stdout io.Writer) error {
+	began := time.Now()
+	step := spin.Quiet(stdout, "Memory engine", "loading")
+	st, err := statusWithin(c, 5*time.Second)
+	for err == nil && engineLoading(st.MemoryEngine.State) && time.Since(began) < engineWait {
+		time.Sleep(200 * time.Millisecond)
+		st, err = statusWithin(c, 5*time.Second)
+	}
+	if err != nil {
+		step.Clear()
+		return err
+	}
+	color := spin.Color(stdout)
+	switch e := st.MemoryEngine; {
+	case engineLoading(e.State):
+		step.End(stepWarn, spin.Note("still loading", "meko status says when it's ready", color))
+	case e.State == "ready" && time.Since(began) >= 100*time.Millisecond:
+		step.Done("ready in " + seconds(time.Since(began)))
+	default:
+		step.End(memoryEngineStep(e))
+	}
+	return nil
+}
+
+// statusWithin asks the server for its status, waiting at most d.
+func statusWithin(c *client, d time.Duration) (server.StatusReply, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	return c.status(ctx)
+}
+
+// seconds is d to a tenth of a second: "2.4s".
+func seconds(d time.Duration) string { return fmt.Sprintf("%.1fs", d.Seconds()) }
 
 // errServiceFlags: the service runs serve with only --data-dir, so it reads the port and log level
 // from config.toml; start and restart can't pass them on.
