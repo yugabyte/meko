@@ -934,15 +934,23 @@ function busyWithTurn(session: Session): boolean {
 }
 
 /**
+ * A session in Design whose first design isn't written yet (`ProjectView` opens the design panel
+ * for it, to show AgentK at work on it): its id, or null.
+ */
+export function designPending(s: Pick<Session, 'id' | 'stage' | 'desired' | 'hasDesign'> | null | undefined): string | null {
+  return s && s.stage === 'design' && s.desired === 'running' && !s.hasDesign ? s.id : null;
+}
+
+/**
  * Whether the design panel's header shows AgentK at work on the design (its edge loader), and how
  * it's worded: 'revising' for the turn of a Send for revision from this page (`rev`), 'working' for
  * any other turn, null when it doesn't show. It follows the session's status, so a reload or another
  * screen shows it too; `rev` covers the moment between the click and Claude reporting the turn, and
- * the wording. Never while Claude waits on the user, nor before there's a design (the panel has its
- * own line then).
+ * the wording. Before there's a design it shows AgentK writing the first one (the panel's body
+ * shows a placeholder page then). Never while Claude waits on the user.
  */
 export function designWorking(session: Session, rev: RevisionSent | null, now: number): 'revising' | 'working' | null {
-  if (session.stage !== 'design' || session.desired !== 'running' || !session.hasDesign || session.approvalQueued) return null;
+  if (session.stage !== 'design' || session.desired !== 'running' || session.approvalQueued) return null;
   const inGrace = rev !== null && !rev.started && now - rev.at < REVISION_GRACE_MS;
   if (busyWithTurn(session)) return rev?.started || inGrace ? 'revising' : 'working';
   return inGrace && canWork(session) ? 'revising' : null;

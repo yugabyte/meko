@@ -10,7 +10,7 @@ import { approveLabel, cx, designApprovalBlocker, designLanding, designWorking, 
 import { DesignQuestions } from './DesignQuestions';
 import { MarkdownView } from './MarkdownView';
 import { SidePanel } from './SidePanel';
-import { Busy, Dots, RunToMergeCheck } from './common';
+import { Busy, RunToMergeCheck } from './common';
 
 /**
  * The session's design: a published Artifact in a sandboxed frame, or markdown, and its open
@@ -134,11 +134,17 @@ export function DesignPanel({
               The design is an Artifact on claude.ai. Its page couldn’t be read here, so open it with{' '}
               <b>Open on claude.ai</b>.
             </p>
+          ) : working ? (
+            <>
+              <p className="muted" role="status">
+                AgentK is reading the code and writing the design. It shows up here as soon as it’s written, and is
+                saved to the project’s datapack.
+              </p>
+              <DesignSkeleton />
+            </>
           ) : (
             <p className="muted">
-              No design yet. AgentK is reading the code; the design shows up here as soon as it’s written, and is
-              saved to the project’s datapack.
-              {session.status === 'working' && <Dots />}
+              No design yet. It shows up here as soon as AgentK writes it, and is saved to the project’s datapack.
             </p>
           )}
         </div>
@@ -255,6 +261,24 @@ export function DesignPanel({
     <SidePanel name="design" label="Design doc" className="design-panel">
       {content}
     </SidePanel>
+  );
+}
+
+/**
+ * The page a design is about to fill, while AgentK writes the first one: a title, paragraphs and a
+ * diagram, in blocks that shimmer (still with reduced motion).
+ */
+function DesignSkeleton() {
+  return (
+    <div className="design-skel" aria-hidden="true">
+      <span className="design-skel-line title" />
+      <span className="design-skel-line" />
+      <span className="design-skel-line" />
+      <span className="design-skel-line short" />
+      <span className="design-skel-box" />
+      <span className="design-skel-line" />
+      <span className="design-skel-line short" />
+    </div>
   );
 }
 

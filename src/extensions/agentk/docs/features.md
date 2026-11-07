@@ -97,8 +97,8 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
-  AgentK to revise the design, or approve with them. The stage bar's **Design doc** opens the design
-  panel, and you approve from there (with **Run to merge** beside Approve). Beside them are the design's key design decisions: the questions you answered and the decisions
+  AgentK to revise the design, or approve with them. The design panel opens as Design starts, showing AgentK at work until the
+  design is written; the stage bar's **Design doc** opens it too, and you approve from there (with **Run to merge** beside Approve). Beside them are the design's key design decisions: the questions you answered and the decisions
   AgentK made itself, each saying who decided it, with **Change this** on AgentK's; a decision that rests on something
   AgentK found in Meko carries Meko's mark, the words it relied on and the item's id.
   Once it's approved, AgentK writes the key design decisions into the design and keeps it current
