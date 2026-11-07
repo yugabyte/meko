@@ -7,14 +7,14 @@
 //	  client.token     the token MCP and REST clients send, kept across restarts (0600)
 //	  run/             pid, port, lock, admin token, unix sockets
 //	    children/      each child's pid and process group, for stop
-//	  logs/            meko.log, start.log, memory_engine.log, service.log (the service's stderr)
+//	  logs/            meko.log, start.log, context-engine.log, service.log (the service's stderr)
 //	  secrets/         secrets kept in files ([secrets] store = "file"); the client token stays in client.token
 //	  extensions.json  the extensions meko start and stop run
 //	  extensions/      each extension's own folder (extensions/agentk is AgentK's home); meko destroy
 //	                   keeps it unless told to remove the extensions too
 //	  update.json      what the last update check found
 //	  models/          embedding model files, downloaded on first start
-//	  memory_engine/   the memory engine's own state (mem0's config folder)
+//	  context-engine/  the context engine's own state (mem0's config folder)
 package paths
 
 import (
@@ -29,25 +29,25 @@ import (
 
 // Layout is every path in one data folder.
 type Layout struct {
-	Root             string
-	Config           string
-	DB               string
-	RunDir           string
-	LogDir           string
-	Lock             string
-	Pid              string
-	Port             string
-	Token            string // the admin token, new at each start
-	ClientToken      string // the clients' token, kept across restarts
-	Log              string
-	StartLog         string
-	ServiceLog       string // the service's stderr: errors from before serve's own log opens
-	StoreSock        string // the store API the memory engine calls
-	MemoryEngineSock string // the memory engine's API
-	ChildrenDir      string
-	ModelsDir        string
-	MemoryEngineDir  string
-	MemoryEngineLog  string
+	Root              string
+	Config            string
+	DB                string
+	RunDir            string
+	LogDir            string
+	Lock              string
+	Pid               string
+	Port              string
+	Token             string // the admin token, new at each start
+	ClientToken       string // the clients' token, kept across restarts
+	Log               string
+	StartLog          string
+	ServiceLog        string // the service's stderr: errors from before serve's own log opens
+	StoreSock         string // the store API the context engine calls
+	ContextEngineSock string // the context engine's API
+	ChildrenDir       string
+	ModelsDir         string
+	ContextEngineDir  string
+	ContextEngineLog  string
 	// KnowledgeFiles holds knowledge files' bytes, beside the database.
 	KnowledgeFiles string
 	// Extensions holds each extension's own folder (extensions.Dir); it's the extensions' data, not Meko's.
@@ -61,25 +61,25 @@ func New(root string) Layout {
 	run := filepath.Join(root, "run")
 	logs := filepath.Join(root, "logs")
 	return Layout{
-		Root:             root,
-		Config:           filepath.Join(root, "config.toml"),
-		DB:               filepath.Join(root, "meko.db"),
-		RunDir:           run,
-		LogDir:           logs,
-		Lock:             filepath.Join(run, "meko.lock"),
-		Pid:              filepath.Join(run, "meko.pid"),
-		Port:             filepath.Join(run, "meko.port"),
-		Token:            filepath.Join(run, "admin.token"),
-		ClientToken:      filepath.Join(root, "client.token"),
-		Log:              filepath.Join(logs, "meko.log"),
-		StartLog:         filepath.Join(logs, "start.log"),
-		ServiceLog:       filepath.Join(logs, "service.log"),
-		StoreSock:        filepath.Join(run, "store.sock"),
-		MemoryEngineSock: filepath.Join(run, "mem_eng.sock"),
-		ChildrenDir:      filepath.Join(run, "children"),
-		ModelsDir:        filepath.Join(root, "models"),
-		MemoryEngineDir:  filepath.Join(root, "memory_engine"),
-		MemoryEngineLog:  filepath.Join(logs, "memory_engine.log"),
+		Root:              root,
+		Config:            filepath.Join(root, "config.toml"),
+		DB:                filepath.Join(root, "meko.db"),
+		RunDir:            run,
+		LogDir:            logs,
+		Lock:              filepath.Join(run, "meko.lock"),
+		Pid:               filepath.Join(run, "meko.pid"),
+		Port:              filepath.Join(run, "meko.port"),
+		Token:             filepath.Join(run, "admin.token"),
+		ClientToken:       filepath.Join(root, "client.token"),
+		Log:               filepath.Join(logs, "meko.log"),
+		StartLog:          filepath.Join(logs, "start.log"),
+		ServiceLog:        filepath.Join(logs, "service.log"),
+		StoreSock:         filepath.Join(run, "store.sock"),
+		ContextEngineSock: filepath.Join(run, "ctx_eng.sock"),
+		ChildrenDir:       filepath.Join(run, "children"),
+		ModelsDir:         filepath.Join(root, "models"),
+		ContextEngineDir:  filepath.Join(root, "context-engine"),
+		ContextEngineLog:  filepath.Join(logs, "context-engine.log"),
 
 		KnowledgeFiles: filepath.Join(root, "knowledgebase-files"),
 		Extensions:     filepath.Join(root, "extensions"),
@@ -94,11 +94,11 @@ const MaxSocketPath = 103
 // Ensure creates the folders, readable only by this user. A data folder whose sockets would be too
 // long a path for the OS is refused.
 func (l Layout) Ensure() error {
-	if len(l.MemoryEngineSock) > MaxSocketPath {
+	if len(l.ContextEngineSock) > MaxSocketPath {
 		return fmt.Errorf("the data folder %s is too deep: its sockets' paths would be longer than %d bytes. "+
 			"Choose a shorter path with --data-dir or %s", l.Root, MaxSocketPath, HomeEnv)
 	}
-	for _, d := range []string{l.Root, l.RunDir, l.ChildrenDir, l.LogDir, l.ModelsDir, l.MemoryEngineDir,
+	for _, d := range []string{l.Root, l.RunDir, l.ChildrenDir, l.LogDir, l.ModelsDir, l.ContextEngineDir,
 		l.KnowledgeFiles} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
@@ -108,6 +108,31 @@ func (l Layout) Ensure() error {
 		}
 	}
 	return nil
+}
+
+// MoveRenamed gives the files a release from before the context engine's rename (when it was the
+// memory engine) left in the data folder their new names, so meko logs keeps the engine's history.
+// Each moves once: only while the new name is free (an empty folder, as Ensure makes, counts as
+// free). serve runs it only once its release is past probation, with the data folder locked: a Meko
+// rolled back before then must still find its files under their old names. A failed move isn't an
+// error, since the context engine just starts a new log and state folder.
+func (l Layout) MoveRenamed() {
+	for _, m := range [][2]string{
+		{filepath.Join(l.LogDir, "memory_engine.log"), l.ContextEngineLog},
+		{filepath.Join(l.Root, "memory_engine"), l.ContextEngineDir},
+	} {
+		if _, err := os.Lstat(m[0]); err != nil {
+			continue
+		}
+		if fi, err := os.Lstat(m[1]); err == nil {
+			if !fi.IsDir() || os.Remove(m[1]) != nil { // Remove takes only an empty folder
+				continue
+			}
+		} else if !os.IsNotExist(err) {
+			continue
+		}
+		_ = os.Rename(m[0], m[1])
+	}
 }
 
 // HomeEnv names the environment variable that sets the data folder.

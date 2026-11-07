@@ -139,7 +139,7 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 		t.Errorf("spec %+v", f.spec)
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Service:       fake, running")
+	want(t, "status", code, 0, out, "Service:        fake, running")
 
 	// An extension registered with this data folder starts and stops with Meko.
 	ext := filepath.Join(t.TempDir(), "ext")
@@ -385,7 +385,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 		t.Errorf("registry %+v", reg.Entries)
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Extension:     agentk, running (ext status)")
+	want(t, "status", code, 0, out, "Extension:      agentk, running (ext status)")
 	// It isn't Meko's release, so delete runs its uninstall and forgets it, and Meko leaves the
 	// command (the fake's uninstall leaves it too; AgentK's own removes its ~/.local/bin links).
 	code, out, _ = run("extension", "delete", "agentk", "--force", "--data-dir", dir)
@@ -438,18 +438,18 @@ func TestLogsMergesAndFormats(t *testing.T) {
 	write(l.Log, `{"time":"2026-10-21T10:00:00Z","level":"INFO","msg":"Meko started","port":7778}
 {"time":"2026-10-21T10:00:02Z","level":"WARN","msg":"slow","path":"/mcp"}
 `)
-	write(l.MemoryEngineLog, `{"time":"2026-10-21T10:00:01Z","msg":"engine listening","embedder":{"dims":384}}
+	write(l.ContextEngineLog, `{"time":"2026-10-21T10:00:01Z","msg":"engine listening","embedder":{"dims":384}}
 a plain line
 `)
 	code, out, _ := run("logs", "--data-dir", dir, "-n", "3")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if code != 0 || len(lines) != 3 || !strings.HasPrefix(lines[0], "memory | ") ||
+	if code != 0 || len(lines) != 3 || !strings.HasPrefix(lines[0], "context | ") ||
 		!strings.Contains(lines[0], `INFO  engine listening embedder={"dims":384}`) ||
-		lines[1] != "memory | a plain line" || !strings.Contains(lines[2], "WARN  slow path=/mcp") {
+		lines[1] != "context | a plain line" || !strings.Contains(lines[2], "WARN  slow path=/mcp") {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	code, out, _ = run("logs", "--data-dir", dir, "--server", "--json")
-	if code != 0 || !strings.HasPrefix(out, `{"time":"2026-10-21T10:00:00Z"`) || strings.Contains(out, "memory |") {
+	if code != 0 || !strings.HasPrefix(out, `{"time":"2026-10-21T10:00:00Z"`) || strings.Contains(out, "context |") {
 		t.Fatalf("--server --json:\n%s", out)
 	}
 }

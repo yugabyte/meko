@@ -1,5 +1,5 @@
-// The memory engine's client for the Go server's store API on run/store.sock: HTTP/JSON over a unix
-// socket, with the per-start internal token. Every database call the memory engine makes goes through it.
+// The context engine's client for the Go server's store API on run/store.sock: HTTP/JSON over a unix
+// socket, with the per-start internal token. Every database call the context engine makes goes through it.
 import http from "node:http";
 
 /** A failure the store API reported, with its code (NOT_FOUND, MODEL_CHANGED, ...). */

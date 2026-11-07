@@ -30,6 +30,8 @@ const ROWS = [
 
 let root: Root;
 let urls: string[];
+// What /api/v1/server answers, when a test sets it; otherwise it's a 404 like anything else.
+let serverReply: object | null = null;
 
 // Meko's replies: the link's state, a create's (made where createdURL says), and a 404 for anything
 // else the sidebar asks.
@@ -40,6 +42,7 @@ function serve(linked: boolean, createdURL: string | null = null) {
     vi.fn(async (url: string, init?: RequestInit) => {
       urls.push(url);
       if (url === "/api/v1/settings/meko-cloud") return Response.json({ data: { linked }, error: null });
+      if (url === "/api/v1/server" && serverReply) return Response.json({ data: serverReply, error: null });
       if (url === "/api/v1/datapacks" && init?.method === "POST") {
         return Response.json({ data: { datapack_id: CLOUD, name: "research", web_url: createdURL }, error: null },
           { status: 201 });
@@ -88,10 +91,29 @@ function link(name: string): HTMLElement {
 }
 
 afterEach(() => {
+  serverReply = null;
   act(() => root.unmount());
   document.body.innerHTML = "";
   history.replaceState(null, "", "/");
   vi.unstubAllGlobals();
+});
+
+// The Status link's dot: the context engine's state, or grey when the server doesn't say, as one of
+// another version doesn't (an older one called it memory_engine), without taking the sidebar down.
+test("the Status dot shows the context engine's state, and grey when the server has none", async () => {
+  const server = { version: "1.0", pid: 7, port: 7778, data_dir: "~/.meko", started_at: "", uptime_seconds: 1,
+    auth: "token", children: [] };
+  serverReply = { ...server, context_engine: { state: "ready" } };
+  await render();
+  const dot = () =>
+    [...document.querySelectorAll("a")].find((a) => a.textContent === "Status")?.querySelector("span[title]")
+      ?.getAttribute("title");
+  expect(dot()).toBe("Context engine: ready");
+  act(() => root.unmount());
+  serverReply = { ...server, memory_engine: { state: "ready" } };
+  await render();
+  expect(dot()).toBe("Status unknown");
+  expect(link("alpha").getAttribute("href")).toBe(`/datapacks/${HERE}/overview`);
 });
 
 test("a row served here opens this UI's page", async () => {

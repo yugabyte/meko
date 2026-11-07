@@ -3,8 +3,8 @@ package wire
 import (
 	"testing"
 
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
 )
 
 // A memory is banded by its raw cosine, as Cloud bands it, and by its score only when it has no
@@ -12,7 +12,7 @@ import (
 func TestBands(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	r := memory.ContextResults{
-		Memory: []memoryengine.Memory{
+		Memory: []contextengine.Memory{
 			{Score: f(0.3), RawSimilarityScore: f(0.8)}, // fused low, cosine high: high
 			{Score: f(0.6)}, // no cosine: by score, mid
 			{Score: f(0.9), RawSimilarityScore: f(0.2)}, // low
@@ -32,7 +32,7 @@ func TestBands(t *testing.T) {
 // 1,600 and save 12,400.
 func TestSavings(t *testing.T) {
 	kb := []memory.KBResult{{Distance: 0.2}}
-	mems := make([]memoryengine.Memory, 3)
+	mems := make([]contextengine.Memory, 3)
 	s := Savings(memory.ContextResults{KnowledgeBase: kb, Memory: mems, KnowledgeChunks: 14})
 	if s.Sent() != 1600 || s.Baseline != 14000 || s.Saved() != 12400 {
 		t.Errorf("sent %d, baseline %d, saved %d; want 1600, 14000, 12400", s.Sent(), s.Baseline, s.Saved())
@@ -41,7 +41,7 @@ func TestSavings(t *testing.T) {
 	if s.TotalTokens != 1000 || s.Memory.TokensSaved != 400 {
 		t.Errorf("per source: total %d, memory saved %d", s.TotalTokens, s.Memory.TokensSaved)
 	}
-	s = Savings(memory.ContextResults{Memory: make([]memoryengine.Memory, 2),
+	s = Savings(memory.ContextResults{Memory: make([]contextengine.Memory, 2),
 		Conversation: &memory.ConversationResults{Hits: []memory.ConversationHit{{}}}})
 	if s.Sent() != 1400 || s.Baseline != 10000 || s.Saved() != 8600 {
 		t.Errorf("no files: sent %d, baseline %d, saved %d", s.Sent(), s.Baseline, s.Saved())

@@ -107,11 +107,11 @@ func waitWebListening(ctx context.Context, c *client) (server.StatusReply, error
 	return st, err
 }
 
-// engineWait is how long start and install wait for the memory engine to be ready (it loads its
+// engineWait is how long start and install wait for the context engine to be ready (it loads its
 // models first) before its row says it's still loading.
 var engineWait = time.Minute
 
-// engineLoading reports whether the memory engine is on its way to ready: what start and install
+// engineLoading reports whether the context engine is on its way to ready: what start and install
 // wait through.
 func engineLoading(state string) bool {
 	return state == "starting" || state == "loading" || state == "restarting"
@@ -128,7 +128,7 @@ type runningOptions struct {
 	pick func(r report) string
 }
 
-// printRunning is the end of start's and install's summary: the memory engine's row, which shows
+// printRunning is the end of start's and install's summary: the context engine's row, which shows
 // the dots until it's ready (at most engineWait); the web listener's row, when it isn't listening;
 // a ● headline with the version, the links, and the commands to run next (nextSteps).
 func printRunning(l paths.Layout, o runningOptions, stdout io.Writer) {
@@ -178,14 +178,14 @@ func printRunning(l paths.Layout, o runningOptions, stdout io.Writer) {
 	r.next(nextSteps(s, o.kind))
 }
 
-// waitEngine prints the memory engine's row: on a terminal it shows the dots while the engine
+// waitEngine prints the context engine's row: on a terminal it shows the dots while the engine
 // loads, for at most engineWait, then says how it ended ("ready in 2.4s"), or that it's still
 // loading. It fails only when the server doesn't answer.
 func waitEngine(c *client, stdout io.Writer) error {
 	began := time.Now()
-	step := spin.Quiet(stdout, "Memory engine", "loading")
+	step := spin.Quiet(stdout, "Context engine", "loading")
 	st, err := statusWithin(c, 5*time.Second)
-	for err == nil && engineLoading(st.MemoryEngine.State) && time.Since(began) < engineWait {
+	for err == nil && engineLoading(st.ContextEngine.State) && time.Since(began) < engineWait {
 		time.Sleep(200 * time.Millisecond)
 		st, err = statusWithin(c, 5*time.Second)
 	}
@@ -194,13 +194,13 @@ func waitEngine(c *client, stdout io.Writer) error {
 		return err
 	}
 	color := spin.Color(stdout)
-	switch e := st.MemoryEngine; {
+	switch e := st.ContextEngine; {
 	case engineLoading(e.State):
 		step.End(stepWarn, spin.Note("still loading", "meko status says when it's ready", color))
 	case e.State == "ready" && time.Since(began) >= 100*time.Millisecond:
 		step.Done("ready in " + seconds(time.Since(began)))
 	default:
-		step.End(memoryEngineStep(e))
+		step.End(contextEngineStep(e))
 	}
 	return nil
 }

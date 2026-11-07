@@ -16,10 +16,10 @@ import (
 )
 
 type logsOptions struct {
-	follow                        bool
-	lines                         int
-	server, memoryEngine, service bool
-	json                          bool
+	follow                         bool
+	lines                          int
+	server, contextEngine, service bool
+	json                           bool
 }
 
 // logSource is one log file and the label its lines get.
@@ -28,21 +28,21 @@ type logSource struct{ label, path string }
 // followPoll is how often logs -f looks for new lines.
 var followPoll = 500 * time.Millisecond
 
-// runLogs prints the last lines of the server's and the memory engine's logs, merged by time, and with -f
+// runLogs prints the last lines of the server's and the context engine's logs, merged by time, and with -f
 // keeps printing new ones, following a file across its rotation.
 func runLogs(l paths.Layout, o logsOptions, stdout io.Writer) int {
 	var srcs []logSource
 	if o.server {
 		srcs = append(srcs, logSource{"meko", l.Log})
 	}
-	if o.memoryEngine {
-		srcs = append(srcs, logSource{"memory", l.MemoryEngineLog})
+	if o.contextEngine {
+		srcs = append(srcs, logSource{"context", l.ContextEngineLog})
 	}
 	if o.service {
 		srcs = append(srcs, logSource{"service", l.ServiceLog})
 	}
 	if len(srcs) == 0 {
-		srcs = []logSource{{"meko", l.Log}, {"memory", l.MemoryEngineLog}}
+		srcs = []logSource{{"meko", l.Log}, {"context", l.ContextEngineLog}}
 	}
 	if o.lines < 0 {
 		o.lines = 0
@@ -122,7 +122,7 @@ func parseLine(source, raw string) logLine {
 func (ln logLine) format(label, raw bool) string {
 	prefix := ""
 	if label {
-		prefix = fmt.Sprintf("%-7s| ", ln.source)
+		prefix = fmt.Sprintf("%-8s| ", ln.source)
 	}
 	if raw || ln.fields == nil {
 		return prefix + ln.raw

@@ -51,7 +51,7 @@ lands without a release. Use exactly one of these nine types:
 | `feat` | yes | New user-visible behavior |
 | `fix` | yes | Bug fixes, including build or packaging fixes that change what ships |
 | `perf` | yes | Faster, same behavior |
-| `deps` | yes | Dependency bumps that ship (Dependabot's npm and Go PRs use it too: `deps(agentk)`, `deps(meko)`, `deps(meko/memory-engine)`, `deps(meko/web-ui)`; their dev-only bumps in src/meko use `chore`) |
+| `deps` | yes | Dependency bumps that ship (Dependabot's npm and Go PRs use it too: `deps(agentk)`, `deps(meko)`, `deps(meko/context-engine)`, `deps(meko/web-ui)`; their dev-only bumps in src/meko use `chore`) |
 | `ci` | no | Workflows, Dependabot config, GitHub Actions bumps |
 | `test` | no | Tests only |
 | `docs` | no | Markdown docs: README, CONTRIBUTING, AGENTS, REVIEW, `docs/` |

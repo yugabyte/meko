@@ -46,7 +46,7 @@ func TestContentUsageFollowsWrites(t *testing.T) {
 		t.Fatalf("empty: %+v", u)
 	}
 
-	// Memories: added by the memory engine through the store API, updated, promoted, deleted.
+	// Memories: added by the context engine through the store API, updated, promoted, deleted.
 	insert(t, s, Memories, "a", "m1", unit(1, 0, 0), map[string]any{"data": "naïve text", "user_id": "u", "tag": "t"})
 	insert(t, s, Memories, "a", "m2", unit(0, 1, 0), map[string]any{"data": "second", "user_id": "u"})
 	insert(t, s, Memories, "b", "m3", unit(0, 0, 1), map[string]any{"data": "in b", "user_id": "u"})

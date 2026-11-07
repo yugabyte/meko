@@ -1,6 +1,6 @@
 // Package testenv runs a whole Meko server for tests: the store, its API on a unix socket, the
-// memory engine (with the hashing embedder: no model download) under a supervisor, the service, and
-// the HTTP server on a free port. Tests that need no memory engine use the packages directly.
+// context engine (with the hashing embedder: no model download) under a supervisor, the service, and
+// the HTTP server on a free port. Tests that need no context engine use the packages directly.
 package testenv
 
 import (
@@ -21,9 +21,9 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
 	"github.com/yugabyte/meko/src/meko/internal/config"
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/mcp"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/rest"
 	"github.com/yugabyte/meko/src/meko/internal/server"
@@ -79,21 +79,21 @@ func backendDir() string {
 	return filepath.Join(filepath.Dir(file), "..", "..")
 }
 
-// Start runs a server and the memory engine, and waits until the memory engine is ready. Without a
-// built memory engine (or Node) the test is skipped, except in CI, where make test builds it first.
+// Start runs a server and the context engine, and waits until the context engine is ready. Without a
+// built context engine (or Node) the test is skipped, except in CI, where make test builds it first.
 func Start(t *testing.T, o Options) *Env {
 	t.Helper()
 	missing := func(err error) {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
-		t.Skipf("%v (make test builds the memory engine)", err)
+		t.Skipf("%v (make test builds the context engine)", err)
 	}
-	dir, err := memoryengine.FindDir(memoryengine.Options{Dir: filepath.Join(backendDir(), "memory_engine")})
+	dir, err := contextengine.FindDir(contextengine.Options{Dir: filepath.Join(backendDir(), "context_engine")})
 	if err != nil {
 		missing(err)
 	}
-	node, err := memoryengine.FindNode(memoryengine.Options{})
+	node, err := contextengine.FindNode(contextengine.Options{})
 	if err != nil {
 		missing(err)
 	}
@@ -137,7 +137,7 @@ func Start(t *testing.T, o Options) *Env {
 	t.Cleanup(func() { _ = api.Shutdown(context.Background()) })
 
 	sup := supervisor.New(log)
-	sp := memoryengine.Spec(node, dir, l, internal, memoryengine.Options{TestEmbedder: "hash"})
+	sp := contextengine.Spec(node, dir, l, internal, contextengine.Options{TestEmbedder: "hash"})
 	sp.MinBackoff, sp.MaxBackoff = 50*time.Millisecond, 100*time.Millisecond
 	sup.Start(sp)
 	t.Cleanup(func() { _ = sup.Stop(context.Background()) })
@@ -151,7 +151,7 @@ func Start(t *testing.T, o Options) *Env {
 	}
 	port := addr.Port
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	svc := memory.New(st, memoryengine.NewClient(l.MemoryEngineSock, internal), memory.Options{UserID: userID, Log: log,
+	svc := memory.New(st, contextengine.NewClient(l.ContextEngineSock, internal), memory.Options{UserID: userID, Log: log,
 		FilesDir: l.KnowledgeFiles, BaseURL: url, ExtractorHarness: o.ExtractorHarness,
 		Answerer: o.Answerer, MaxContentBytes: o.MaxContentBytes, CloudLinked: func() bool {
 			if o.MCPCloud == nil {
@@ -196,7 +196,7 @@ func Start(t *testing.T, o Options) *Env {
 	srv := server.New(server.Options{
 		Info: server.Info{Version: "test", DataDir: root, PID: os.Getpid(), StartedAt: time.Now()},
 		Port: port, Token: AdminToken, ClientToken: ClientToken, Auth: o.Auth, Logger: log,
-		MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
+		ContextEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
 		MCP:    mcp.NewHandler(mcpOpts),
 		REST:   func(g *echo.Group) { rest.Register(g, restOpts) },
 		Upload: upload, Download: download,
@@ -206,12 +206,12 @@ func Start(t *testing.T, o Options) *Env {
 
 	e := &Env{T: t, Layout: l, Store: st, Service: svc, Server: srv, URL: url, DatapackID: dp, UserID: userID,
 		UsageStats: usage}
-	e.waitMemoryEngine()
+	e.waitContextEngine()
 	return e
 }
 
-// waitMemoryEngine waits until the memory engine is ready.
-func (e *Env) waitMemoryEngine() {
+// waitContextEngine waits until the context engine is ready.
+func (e *Env) waitContextEngine() {
 	e.T.Helper()
 	var st memory.EngineStatus
 	for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
@@ -219,6 +219,6 @@ func (e *Env) waitMemoryEngine() {
 			return
 		}
 	}
-	log, _ := os.ReadFile(e.Layout.MemoryEngineLog)
-	e.T.Fatalf("the memory engine never got ready: %+v\nmemory_engine.log:\n%s", st, log)
+	log, _ := os.ReadFile(e.Layout.ContextEngineLog)
+	e.T.Fatalf("the context engine never got ready: %+v\ncontext-engine.log:\n%s", st, log)
 }

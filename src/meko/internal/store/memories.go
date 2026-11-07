@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Kind is the table a mem0 collection maps to. The memory engine's collection "<datapack id>" holds
+// Kind is the table a mem0 collection maps to. The context engine's collection "<datapack id>" holds
 // memories, and "<datapack id>_entities" the entities mem0 links them to.
 type Kind int
 
@@ -46,7 +46,7 @@ const (
 	overFetch        = 10    // KNN candidates per wanted result when a filter runs after the scan
 )
 
-// jsTime is how times go back to the memory engine: what JavaScript's Date.toISOString writes.
+// jsTime is how times go back to the context engine: what JavaScript's Date.toISOString writes.
 const jsTime = "2006-01-02T15:04:05.000Z07:00"
 
 type colKind int

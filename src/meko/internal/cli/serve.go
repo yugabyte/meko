@@ -22,11 +22,11 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
 	"github.com/yugabyte/meko/src/meko/internal/config"
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/logging"
 	"github.com/yugabyte/meko/src/meko/internal/mcp"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/rest"
 	"github.com/yugabyte/meko/src/meko/internal/secrets"
@@ -48,7 +48,7 @@ const (
 	jobsWait = 10 * time.Second
 )
 
-// testEmbedder, if set, makes the memory engine use a deterministic hashing embedder instead of
+// testEmbedder, if set, makes the context engine use a deterministic hashing embedder instead of
 // downloading its model. Only this package's tests set it (cli_test.go's TestMain), so no
 // environment can switch the shipped binary's model.
 var testEmbedder string
@@ -160,9 +160,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		} else {
 			makeMekoCLI(app, log)
 			renameExtensions(l, log)
+			l.MoveRenamed()
 		}
 	} else {
 		renameExtensions(l, log) // a build from source is never on probation
+		l.MoveRenamed()
 	}
 	refreshLaunchAgent(l, log)
 
@@ -216,7 +218,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 
-	// The store API the memory engine calls, on its unix socket with a per-start token of its own.
+	// The store API the context engine calls, on its unix socket with a per-start token of its own.
 	internalToken, err := auth.NewToken()
 	if err != nil {
 		return err
@@ -237,10 +239,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		log.Warn("killed children a previous server left running", "count", n, "error", err)
 	}
 	sup := supervisor.New(log)
-	noMemoryEngine := startMemoryEngine(sup, l, cfg, internalToken, log)
+	noContextEngine := startContextEngine(sup, l, cfg, internalToken, log)
 	var cloud *cloudlink.Service // set below, before anything serves
-	svc := memory.New(st, memoryengine.NewClient(l.MemoryEngineSock, internalToken), memory.Options{
-		UserID: userID, Log: log, NoMemoryEngine: noMemoryEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
+	svc := memory.New(st, contextengine.NewClient(l.ContextEngineSock, internalToken), memory.Options{
+		UserID: userID, Log: log, NoContextEngine: noContextEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
 		KBMaxDistance: cfg.KnowledgeBase.MaxDistance, FilesDir: l.KnowledgeFiles,
 		MaxContentBytes: cfg.Storage.MaxContentBytes(), BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
 		CloudLinked: func() bool {
@@ -255,9 +257,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			p, _ := app.ReadPending()
 			return p != nil && p.To == release
 		},
-		MemoryEngineChild: func() (supervisor.Status, bool) {
+		ContextEngineChild: func() (supervisor.Status, bool) {
 			for _, c := range sup.Statuses() {
-				if c.Name == memoryengine.Name {
+				if c.Name == contextengine.Name {
 					return c, true
 				}
 			}
@@ -266,7 +268,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	})
 	// Knowledge files a stopped server was indexing go back in the queue, and files no document
 	// names (a crash between storing a file and its row) are removed. Both are quick, and finish
-	// even when a stop arrives during start. Neither failing stops the server (the memory engine is
+	// even when a stop arrives during start. Neither failing stops the server (the context engine is
 	// already running, and returning here would skip stopping it): the files wait for the next start.
 	boot := context.WithoutCancel(ctx)
 	if n, err := svc.RequeueInterrupted(boot); err != nil {
@@ -283,7 +285,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	usage := callhome.New(callhome.Options{Store: st, Config: cfg.CallHome, Release: isRelease,
 		Facts: installFacts(l, cfg, svc), Tools: mcp.ToolNames(), Log: log, FirstCheck: testCallHomeFirstCheck})
 	// Embeds turns for conversation search and knowledge-base chunks as they arrive, and any the
-	// memory engine missed while down; indexes knowledge files; keeps the call log to its retention;
+	// context engine missed while down; indexes knowledge files; keeps the call log to its retention;
 	// and sends the usage stats.
 	embedCtx, stopEmbedder := context.WithCancel(context.Background())
 	embedderDone := make(chan struct{})
@@ -369,7 +371,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	mcpHandler := mcp.NewHandler(mcpOpts)
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
-			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
+			Children: sup.Statuses, ContextEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
 			MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, UI: ui, Cloud: cloud,
 			Agents: agentsMgr, Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
 				Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates, CheckExtensions: web.CheckExtensions,
@@ -377,7 +379,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
-		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
+		Children: sup.Statuses, ContextEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
 		MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, Cloud: cloud, Agents: agentsMgr,
 		WebStatus: web.Status, ReloadWeb: web.Reload,
 	})
@@ -496,27 +498,27 @@ func installFacts(l paths.Layout, cfg config.Config, svc *memory.Service) func(c
 		}
 		return callhome.Install{Version: version.Version, Commit: version.Commit, Platform: runtime.GOOS,
 			Arch: runtime.GOARCH, Go: runtime.Version(), Service: service, Auth: cfg.Server.Auth, Secrets: secretsKind,
-			Update:       callhome.Update{Channel: cfg.Update.Channel, Auto: cfg.Update.Auto},
-			MemoryEngine: svc.EngineStatus(ctx).State, Extensions: installed}
+			Update:        callhome.Update{Channel: cfg.Update.Channel, Auto: cfg.Update.Auto},
+			ContextEngine: svc.EngineStatus(ctx).State, Extensions: installed}
 	}
 }
 
-// startMemoryEngine starts the memory engine under sup, or says why it can't (no Node, or the memory engine
+// startContextEngine starts the context engine under sup, or says why it can't (no Node, or the context engine
 // isn't built): the server then runs without it, and memory features say why.
-func startMemoryEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, token string,
+func startContextEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, token string,
 	log *slog.Logger) string {
-	o := memoryengine.Options{Node: cfg.MemoryEngine.Node, Dir: cfg.MemoryEngine.Dir, TestEmbedder: testEmbedder,
-		Models: memoryengine.FindModels()}
-	node, err := memoryengine.FindNode(o)
+	o := contextengine.Options{Node: cfg.ContextEngine.Node, Dir: cfg.ContextEngine.Dir, TestEmbedder: testEmbedder,
+		Models: contextengine.FindModels()}
+	node, err := contextengine.FindNode(o)
 	if err == nil {
 		var dir string
-		if dir, err = memoryengine.FindDir(o); err == nil {
-			sup.Start(memoryengine.Spec(node, dir, l, token, o))
-			log.Info("memory engine starting", "node", node, "dir", dir, "bundled_models", o.Models != "")
+		if dir, err = contextengine.FindDir(o); err == nil {
+			sup.Start(contextengine.Spec(node, dir, l, token, o))
+			log.Info("context engine starting", "node", node, "dir", dir, "bundled_models", o.Models != "")
 			return ""
 		}
 	}
-	log.Warn("the memory engine can't start; memory features are off", "reason", err)
+	log.Warn("the context engine can't start; memory features are off", "reason", err)
 	return err.Error()
 }
 
@@ -722,7 +724,7 @@ func clientTokens(l paths.Layout, cfg config.Config) (auth.ClientTokens, error) 
 }
 
 func removeRunFiles(l paths.Layout) {
-	for _, p := range []string{l.Pid, l.Port, l.Token, l.StoreSock, l.MemoryEngineSock} {
+	for _, p := range []string{l.Pid, l.Port, l.Token, l.StoreSock, l.ContextEngineSock} {
 		_ = paths.RemoveIfExists(p)
 	}
 }

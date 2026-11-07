@@ -47,7 +47,7 @@ func TestStorageStep(t *testing.T) {
 // [storage] max_content_mb in config.toml is the running server's limit: status says it, and a
 // write past it is refused with what to do.
 func TestStorageLimitFromConfig(t *testing.T) {
-	withMemoryEngine(t)
+	withContextEngine(t)
 	dir, port := setup(t)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

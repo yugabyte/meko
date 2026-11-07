@@ -106,11 +106,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: src/meko/memory_engine/package-lock.json
+          cache-dependency-path: src/meko/context_engine/package-lock.json
       - name: Cache the embedding model
         uses: actions/cache@v6
         with:
-          path: src/meko/memory_engine/.models
+          path: src/meko/context_engine/.models
           key: embedding-model-all-MiniLM-L6-v2-751bff3-q8
       # Normally 2 minutes, npm installs included.
       - run: make test
@@ -187,9 +187,9 @@ jobs:
           set -eu
           make build VERSION="$VERSION"
           # npm's registry fetches can time out on a runner: try twice.
-          make memory_engine || { rm -rf memory_engine/node_modules; make memory_engine; }
+          make context_engine || { rm -rf context_engine/node_modules; make context_engine; }
           make web_ui || { rm -rf web_ui/node_modules; make web_ui; }
-          (cd memory_engine && npm prune --omit=dev)
+          (cd context_engine && npm prune --omit=dev)
 
       - name: Package
         run: sh scripts/package-release.sh "$VERSION" "$ARCH" "$NODE_DIR" out
@@ -251,9 +251,9 @@ jobs:
         run: |
           set -eu
           make build VERSION="$VERSION"
-          make memory_engine || { rm -rf memory_engine/node_modules; make memory_engine; }
+          make context_engine || { rm -rf context_engine/node_modules; make context_engine; }
           make web_ui || { rm -rf web_ui/node_modules; make web_ui; }
-          (cd memory_engine && npm prune --omit=dev)
+          (cd context_engine && npm prune --omit=dev)
 
       - name: Package
         run: sh scripts/package-release.sh "$VERSION" "$ARCH" "$NODE_DIR" out

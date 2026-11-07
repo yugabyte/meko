@@ -14,7 +14,7 @@ import (
 )
 
 // FindDir picks the built web UI: dir if set, else <bin>/../web_ui/dist (the source tree's
-// layout, as the memory engine's). It must hold index.html.
+// layout, as the context engine's). It must hold index.html.
 func FindDir(dir string) (string, error) {
 	if dir == "" {
 		exe, err := os.Executable()

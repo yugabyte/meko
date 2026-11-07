@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/store"
 )
 
@@ -29,9 +29,9 @@ type ContextSearch struct {
 }
 
 // ContextResults is each source's results. A nil source wasn't searched: it wasn't asked for, or
-// it couldn't be (the memory engine isn't ready). An empty one was, and found nothing.
+// it couldn't be (the context engine isn't ready). An empty one was, and found nothing.
 type ContextResults struct {
-	Memory        []memoryengine.Memory
+	Memory        []contextengine.Memory
 	Conversation  *ConversationResults
 	KnowledgeBase []KBResult
 	// KnowledgeChunks is the datapack's knowledge-base chunks, the savings estimate's baseline.
@@ -40,7 +40,7 @@ type ContextResults struct {
 }
 
 // ContextSearch searches the sources asked for at the same time, so it takes as long as the
-// slowest. A source that fails is logged and left empty (or nil when the memory engine can't embed), as
+// slowest. A source that fails is logged and left empty (or nil when the context engine can't embed), as
 // Meko Cloud does: the caller still gets the others.
 func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextResults, error) {
 	if err := s.needDatapack(ctx, r.DatapackID); err != nil {
@@ -120,27 +120,27 @@ func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextRe
 }
 
 // failedSource logs a source that failed and returns what it reports: nil (not searched) when the
-// memory engine couldn't take the query, else empty.
-func (s *Service) failedSource(source string, err error) []memoryengine.Memory {
+// context engine couldn't take the query, else empty.
+func (s *Service) failedSource(source string, err error) []contextengine.Memory {
 	if s.sourceUnavailable(source, err) {
 		return nil
 	}
-	return []memoryengine.Memory{}
+	return []contextengine.Memory{}
 }
 
 // sourceUnavailable logs a source that failed and says whether it couldn't be searched at all (the
-// memory engine couldn't take the query), which context_search reports as null rather than empty.
+// context engine couldn't take the query), which context_search reports as null rather than empty.
 func (s *Service) sourceUnavailable(source string, err error) bool {
 	if s.log != nil {
 		s.log.Warn("a context_search source failed", "source", source, "error", err)
 	}
-	var notReady *memoryengine.NotReadyError
-	return errors.Is(err, memoryengine.ErrUnavailable) || errors.As(err, &notReady)
+	var notReady *contextengine.NotReadyError
+	return errors.Is(err, contextengine.ErrUnavailable) || errors.As(err, &notReady)
 }
 
 // aboveRaw keeps the memories whose cosine (or, without one, score) reaches min.
-func aboveRaw(ms []memoryengine.Memory, minimum float64) []memoryengine.Memory {
-	out := []memoryengine.Memory{}
+func aboveRaw(ms []contextengine.Memory, minimum float64) []contextengine.Memory {
+	out := []contextengine.Memory{}
 	for _, m := range ms {
 		v := m.RawSimilarityScore
 		if v == nil {
@@ -154,7 +154,9 @@ func aboveRaw(ms []memoryengine.Memory, minimum float64) []memoryengine.Memory {
 }
 
 // FilterRaw keeps the memories whose cosine reaches MinRawSimilarity, as memory_search does.
-func FilterRaw(ms []memoryengine.Memory) []memoryengine.Memory { return aboveRaw(ms, MinRawSimilarity) }
+func FilterRaw(ms []contextengine.Memory) []contextengine.Memory {
+	return aboveRaw(ms, MinRawSimilarity)
+}
 
 // keptKB is the knowledge-base results context_search returns: those within maxDistance of the
 // query, and those the query's own words found (keyword or hybrid) however far their meaning is,
@@ -172,7 +174,7 @@ func keptKB(res []KBResult, maxDistance float64) []KBResult {
 }
 
 // IDsOf is the ids of memories, in order.
-func IDsOf(ms []memoryengine.Memory) []string {
+func IDsOf(ms []contextengine.Memory) []string {
 	out := make([]string, len(ms))
 	for i, m := range ms {
 		out[i] = m.ID

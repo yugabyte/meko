@@ -73,7 +73,7 @@ function Section({
         {n !== null && <Badge>{badge ?? n}</Badge>}
       </h3>
       {n === null ? (
-        <p className="text-sm text-muted-foreground">Not searched: Meko's memory engine isn't ready yet.</p>
+        <p className="text-sm text-muted-foreground">Not searched: Meko's context engine isn't ready yet.</p>
       ) : n === 0 ? (
         <p className="text-sm text-muted-foreground">Nothing close enough.</p>
       ) : (

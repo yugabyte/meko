@@ -312,11 +312,11 @@ func TestKillRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	records := map[string]string{
-		"memory_engine": rec,
-		"reused":        fmt.Sprintf("%d %d 0:0\n", other.Process.Pid, other.Process.Pid),
-		"group":         fmt.Sprintf("%d %d %s\n", os.Getpid(), os.Getpid()+100000, "x"),
-		"old":           fmt.Sprintf("%d %d\n", other.Process.Pid, other.Process.Pid),
-		"junk":          "not a pid\n",
+		"context-engine": rec,
+		"reused":         fmt.Sprintf("%d %d 0:0\n", other.Process.Pid, other.Process.Pid),
+		"group":          fmt.Sprintf("%d %d %s\n", os.Getpid(), os.Getpid()+100000, "x"),
+		"old":            fmt.Sprintf("%d %d\n", other.Process.Pid, other.Process.Pid),
+		"junk":           "not a pid\n",
 	}
 	for name, rec := range records {
 		if err = os.WriteFile(filepath.Join(dir, name), []byte(rec), 0o600); err != nil {

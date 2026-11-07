@@ -5,9 +5,9 @@
 # Every AgentK npm bump is `deps(agentk): ...`, so it cuts a release once merged to main: the web
 # UI's libraries (react, xterm, marked, dompurify) are devDependencies that Vite bundles into the
 # release. Action bumps are `ci(repo): ...` and ship with the next release. Meko's bumps are
-# `deps(meko): ...` (Go modules) and `deps(meko/memory-engine): ...` (the memory engine's
+# `deps(meko): ...` (Go modules) and `deps(meko/context-engine): ...` (the context engine's
 # production npm packages, which its tarballs bundle), so they cut a Meko release
-# (meko-release.yml); the memory engine's dev-only bumps are `chore(meko/memory-engine): ...`.
+# (meko-release.yml); the context engine's dev-only bumps are `chore(meko/context-engine): ...`.
 # The web UI's (src/meko/web_ui) are `deps(meko/web-ui): ...` for its dependencies (react,
 # react-dom, lucide-react), which Vite bundles into the web_ui/dist that Meko's release
 # serves, so they cut a Meko release; and `chore(meko/web-ui): ...` for its devDependencies (the
@@ -82,23 +82,23 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
 
-  # Meko's memory engine (Node). Its dependencies are pinned exactly, and Dependabot keeps them so.
+  # Meko's context engine (Node). Its dependencies are pinned exactly, and Dependabot keeps them so.
   - package-ecosystem: npm
-    directory: /src/meko/memory_engine
+    directory: /src/meko/context_engine
     schedule:
       interval: weekly
       day: monday
     assignees:
       - hari90
     commit-message:
-      prefix: deps(meko/memory-engine)
-      prefix-development: chore(meko/memory-engine)
+      prefix: deps(meko/context-engine)
+      prefix-development: chore(meko/context-engine)
     ignore:
-      # Types track the Node major the memory engine runs on (engines: >=22.13).
+      # Types track the Node major the context engine runs on (engines: >=22.13).
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
     groups:
-      # The memory engine registers its providers by wrapping mem0's internal factories, so mem0ai comes
+      # The context engine registers its providers by wrapping mem0's internal factories, so mem0ai comes
       # alone: a bump that breaks that seam doesn't hold back the others.
       mem0ai:
         patterns: ["mem0ai"]

@@ -17,7 +17,7 @@ import (
 
 // The search budget at Meko's 200 MB target, in one datapack: make bench. Memories and turns
 // are loaded straight into the store with random vectors (loading 200 MB through the model would
-// take an hour and time the same searches); the searches then run through the real memory engine, model
+// take an hour and time the same searches); the searches then run through the real context engine, model
 // included. Each conversation search's query has a chunk planted near it in threadConversations
 // conversations, so it gets hits and assembles a full thread.
 const (

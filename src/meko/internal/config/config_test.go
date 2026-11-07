@@ -96,20 +96,28 @@ func TestLoadErrors(t *testing.T) {
 	}
 }
 
-func TestMemoryEngineSettings(t *testing.T) {
+func TestContextEngineSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	toml := "[memory_engine]\nnode = \"/file/node\"\ndir = \"/file/memory_engine\"\n"
+	toml := "[context_engine]\nnode = \"/file/node\"\ndir = \"/file/context_engine\"\n"
 	if err := os.WriteFile(path, []byte(toml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.MemoryEngine.Node != "/file/node" || c.MemoryEngine.Dir != "/file/memory_engine" {
-		t.Fatalf("from the file: %+v %v", c.MemoryEngine, err)
+	if err != nil || c.ContextEngine.Node != "/file/node" || c.ContextEngine.Dir != "/file/context_engine" {
+		t.Fatalf("from the file: %+v %v", c.ContextEngine, err)
 	}
-	env := map[string]string{"MEKO_NODE": "/env/node", "MEKO_MEMORY_ENGINE_DIR": "/env/memory_engine"}
+	env := map[string]string{"MEKO_NODE": "/env/node", "MEKO_CONTEXT_ENGINE_DIR": "/env/context_engine"}
 	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
-	if err != nil || c.MemoryEngine.Node != "/env/node" || c.MemoryEngine.Dir != "/env/memory_engine" {
-		t.Fatalf("env over the file: %+v %v", c.MemoryEngine, err)
+	if err != nil || c.ContextEngine.Node != "/env/node" || c.ContextEngine.Dir != "/env/context_engine" {
+		t.Fatalf("env over the file: %+v %v", c.ContextEngine, err)
+	}
+	// The table's name from before the rename is an unknown setting like any other.
+	if err = os.WriteFile(path, []byte("[memory_engine]\nnode = \"/file/node\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Load(path, func(string) string { return "" }, Overrides{}); err == nil ||
+		!strings.Contains(err.Error(), "unknown setting memory_engine") {
+		t.Fatalf("[memory_engine]: %v", err)
 	}
 }
 
