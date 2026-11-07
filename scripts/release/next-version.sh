@@ -1,6 +1,7 @@
 #!/bin/sh
-# Prints a product's next release version: 0.<UTC date YYYYMMDD>.<n>, where n counts the
-# product's releases already tagged today (0 for the first release of the day). The tag is the
+# Prints a product's next release version: <major>.<UTC date YYYYMMDD>.<n>, where major is the
+# product's (product.sh: 1 for Kode and Meko, 0 for Present) and n counts the product's releases
+# of that major already tagged today (0 for the first release of the day). The tag is the
 # product's prefix plus this version (see product.sh).
 #
 #   scripts/release/next-version.sh [--product agentk|meko|present]   # default agentk
@@ -18,7 +19,7 @@ esac
 
 n=0
 for p in $tag_prefixes; do
-  for t in $(git tag -l "${p}0.$day.*"); do
+  for t in $(git tag -l "${p}$major.$day.*"); do
     i=${t##*.}
     case $i in
       ''|*[!0-9]*) continue ;;
@@ -26,4 +27,4 @@ for p in $tag_prefixes; do
     [ "$i" -ge "$n" ] && n=$((i + 1))
   done
 done
-echo "0.$day.$n"
+echo "$major.$day.$n"

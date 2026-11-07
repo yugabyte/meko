@@ -7,13 +7,13 @@ import (
 	"strings"
 )
 
-// TagPrefix is Meko's release tags' prefix: meko-v0.YYYYMMDD.N.
+// TagPrefix is Meko's release tags' prefix: meko-v1.YYYYMMDD.N.
 const TagPrefix = "meko-v"
 
 // Sums is the checksum file every release carries.
 const Sums = "SHA256SUMS"
 
-// Version is a release version: three numbers, as 0.20261021.5.
+// Version is a release version: three numbers, as 1.20261108.5.
 type Version [3]int
 
 // ParseVersion reads a bare version (no prefix, no prerelease part).

@@ -1,6 +1,6 @@
 name: Kode release
 
-# Versions are 0.<UTC date YYYYMMDD>.<n>, n counting from 0 for each release that day, tagged
+# Versions are 1.<UTC date YYYYMMDD>.<n> (0.… before 1.x), n counting from 0 for each release that day, tagged
 # kode-v<version> (agentk-v<version> before Meko called it Kode, v<version> before releases were
 # tagged by product).
 # A push to main cuts a release when it contains Kode's feat/fix/perf/deps commits (component

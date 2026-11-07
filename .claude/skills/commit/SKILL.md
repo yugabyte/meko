@@ -38,8 +38,8 @@ the diff itself: check the staged files for secrets and personal data before com
 ```
 
 The release workflows read commit subjects. The repo releases three products, each on its own train:
-Meko (`meko-release.yml`, tags `meko-v0.YYYYMMDD.N`), Kode (`agentk-release.yml`, tags
-`kode-v0.YYYYMMDD.N`, `agentk-v…` before Meko called it Kode) and Present (`present-release.yml`, tags `present-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
+Meko (`meko-release.yml`, tags `meko-v1.YYYYMMDD.N`), Kode (`agentk-release.yml`, tags
+`kode-v1.YYYYMMDD.N`, `agentk-v…` before Meko called it Kode) and Present (`present-release.yml`, tags `present-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
 product's last release cuts its next version, and those subjects become its release notes (and
 Kode's **What's new**). Subjects naming `meko` release Meko; `present` releases Present;
 subjects naming any other component (`agentk`, `repo`) release Kode

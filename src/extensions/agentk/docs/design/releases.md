@@ -16,8 +16,10 @@ Part of the [Kode design](../design.md).
   every component's jobs, run or skipped), the title check and CLA Assistant's `license/cla` check
   (the author has signed the CLA) pass and the `meko-maintainers` team approves (the `approvals`
   ruleset).
-- **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
-  from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
+- **Versioning (on push to main).** Versions are `1.YYYYMMDD.N`: the major version, the UTC date,
+  and `N` counting from 0 for each release that day. Kode's and Meko's releases were `0.YYYYMMDD.N`
+  before 1.x, and Present's still are: each product's major is in `scripts/release/product.sh`, and
+  `next-version.sh` counts only that major's tags of the day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
   with one of nine types and one of the repo's components (`agentk`, `meko`, `present`, `repo`:
   `scripts/check-title.sh`), or several comma-separated for a change that ships in more than one
   (`feat(agentk,meko): …`), and PRs are squash-merged with the PR title
@@ -140,7 +142,7 @@ Kode's releases once `meko update` has updated Meko itself, which it does before
 an install still on AgentK's own updater from before Meko served it (reading `agentk-v`) needs
 `meko extension install kode`; Meko's are `meko-v<version>`, and
 Present's `present-v<version>` (`present-release.yml`; Meko installs and updates them). Versions stay
-bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and Meko's `bad-versions` use them, and on the day of
+bare (`1.YYYYMMDD.N`): tarball names, `app/<version>` and Meko's `bad-versions` use them, and on the day of
 the switch `next-version.sh` counted both prefixes so no version was used twice. AgentKs installed
 before the switch read only `v…` tags; the last `v…` release (the bridge) reads both, so they reach
 the `agentk-v…` releases through it, and pruning never deletes the newest `v…` release (the old

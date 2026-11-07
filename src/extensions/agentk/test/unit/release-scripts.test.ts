@@ -26,13 +26,17 @@ const run = (script: string, args: string[], env: Record<string, string> = {}) =
 
 describe('next-version.sh', () => {
   it.each([
-    [['--product', 'agentk'], '0.20260924.3'],
-    [[], '0.20260924.3'],
-    [['--product=meko'], '0.20260924.1'],
-    [['--product', 'present'], '0.20260924.0'],
-  ])('counts only the product’s own tags that day, Kode’s of both prefixes (%j)', (args, want) => {
-    // The day Kode switched from v… to agentk-v… tags: a version is never used twice.
-    for (const t of ['v0.20260923.7', 'v0.20260924.0', 'v0.20260924.1', 'agentk-v0.20260924.2', 'meko-v0.20260924.0', 'present-v0.20260923.0']) git('tag', t);
+    [['--product', 'agentk'], '1.20260924.3'],
+    [[], '1.20260924.3'],
+    [['--product=meko'], '1.20260924.1'],
+    [['--product', 'present'], '0.20260924.1'],
+  ])('counts only the product’s own tags of its major that day, Kode’s of every prefix (%j)', (args, want) => {
+    // Kode's and Meko's major is 1 and Present's 0; a version is never used twice, even on a day
+    // Kode's tags changed prefix.
+    for (const t of [
+      'v1.20260923.7', 'v1.20260924.0', 'agentk-v1.20260924.1', 'kode-v1.20260924.2', 'kode-v0.20260924.9',
+      'meko-v1.20260924.0', 'meko-v0.20260924.4', 'present-v0.20260924.0', 'present-v1.20260924.6',
+    ]) git('tag', t);
     const r = run('next-version.sh', args, { RELEASE_DATE: '20260924' });
     expect(r.stderr).toBe('');
     expect(r.stdout.trim()).toBe(want);
@@ -98,6 +102,18 @@ describe('release-notes.sh', () => {
     // Present's subjects stay out of Kode's notes; the one naming meko is Meko's too.
     expect(run('release-notes.sh', ['--product', 'agentk']).stdout).not.toMatch(/Present page|its releases/);
     expect(run('release-notes.sh', ['--product', 'meko']).stdout).toContain('- present,meko: install Present from its releases');
+  });
+
+  it('counts from the product’s newest tag of any major, a 1.x one above any 0.x', () => {
+    commit('fix(meko): last 0.x');
+    git('tag', 'meko-v0.20260105.3');
+    commit('fix(meko): first 1.x');
+    git('tag', 'meko-v1.20260102.0');
+    commit('fix(meko): after 1.x');
+    const r = run('release-notes.sh', ['--product', 'meko']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('- meko: after 1.x');
+    expect(r.stdout).not.toMatch(/last 0\.x|first 1\.x/);
   });
 
   it('releases a subject that names both components on both trains', () => {

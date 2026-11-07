@@ -26,7 +26,7 @@ body:
     attributes:
       label: Version
       description: "`meko status` lists Meko's version and each extension's. Paste those lines, not its links."
-      placeholder: Meko 0.20261028.1, Kode 0.20261028.3
+      placeholder: Meko 1.20261108.1, Kode 1.20261108.3
     validations:
       required: true
   - type: textarea
