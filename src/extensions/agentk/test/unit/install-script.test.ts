@@ -12,7 +12,7 @@ import { tempDir } from '../helpers.js';
 // curl, gh and friends.
 const SCRIPT = fileURLToPath(new URL('../../scripts/deps.sh', import.meta.url));
 const STUB = fileURLToPath(new URL('../../scripts/install.sh', import.meta.url));
-const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname', 'ln', 'readlink', 'awk', 'tty'];
+const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname', 'ln', 'readlink', 'awk', 'tty', 'ps'];
 const GH_VERSION = '2.60.0';
 
 let root: string;

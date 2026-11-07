@@ -173,8 +173,8 @@ OpenCode 1) or Kiro's (`cli.kiro.dev/install`, which needs `unzip` on Linux), an
 declined or fails. It checks each agent's sign-in (`claude auth status`, `opencode auth list
 --standalone`: "No authenticated integrations", neither a stored credential nor a provider key in the
 environment, `kiro-cli whoami`) and offers `claude auth login`, `opencode auth login --standalone` or
-`kiro-cli login`, each reading the terminal's own device (`tty` of stderr, such as `/dev/ttys003`),
-not `/dev/tty`: on macOS Bun, which Claude Code and OpenCode run on, stops with "EINVAL: invalid
+`kiro-cli login`, each reading the device `/dev/tty` stands for (the script's controlling terminal as
+`ps -o tty=` names it, such as `/dev/ttys003`, where its questions are asked), not `/dev/tty` itself: on macOS Bun, which Claude Code and OpenCode run on, stops with "EINVAL: invalid
 argument, kqueue" when its input is `/dev/tty`, which kqueue can't watch, and Meko's first install
 hands `me_koder install` the terminal as `/dev/tty`. `me_koder install` then reads each
 agent's version (`settleAgents`): with none it stops, saying what to install (and, for OpenCode,

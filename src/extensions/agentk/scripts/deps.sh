@@ -77,12 +77,14 @@ esac
 # ---- prerequisites ----
 # Questions go to the terminal.
 { [ -t 2 ] && (: </dev/tty) 2>/dev/null; } || interactive=false
-# The sign-ins read the keyboard from the terminal's own device (/dev/ttys003, /dev/pts/1), named
-# from stderr, rather than from /dev/tty: Claude Code and OpenCode run on Bun, which on macOS stops
-# with "EINVAL: invalid argument, kqueue" when its input is /dev/tty, since kqueue can't watch it.
+# The sign-ins read the keyboard from the device /dev/tty stands for (/dev/ttys003, /dev/pts/1:
+# this shell's controlling terminal, as ps names it), the terminal the questions are asked on,
+# rather than from /dev/tty itself: Claude Code and OpenCode run on Bun, which on macOS stops with
+# "EINVAL: invalid argument, kqueue" when its input is /dev/tty, since kqueue can't watch it.
 term=/dev/tty
 if $interactive; then
-  dev=$(tty <&2 2>/dev/null) && [ -r "$dev" ] && term=$dev
+  dev=/dev/$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
+  [ -c "$dev" ] && [ -r "$dev" ] && term=$dev
 fi
 ask() {
   printf '%s %s[Y/n]%s ' "$1" "$d" "$n" >&2
