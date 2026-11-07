@@ -82,6 +82,34 @@ const enterWait uint8 = 5
 // prints anything, a terminal whose settings can't be read or set is errNoKeyMode, for the caller
 // to ask another way.
 func pickKey(f *os.File, w io.Writer, question string, choices, details []string) (int, error) {
+	rows := make([]pickRow, len(choices))
+	for i, c := range choices {
+		rows[i].label = c
+		if i < len(details) {
+			rows[i].detail = details[i]
+		}
+	}
+	return pickRows(f, w, question, rows, true)
+}
+
+// pickRow is one of a picker's rows: its label, and a detail dim in a column after it. A soon row
+// is dim as a whole, with " · coming soon" after its detail: the mark skips it, and it can't be
+// picked.
+type pickRow struct {
+	label, detail string
+	soon          bool
+}
+
+// comingSoon ends a soon row's detail.
+const comingSoon = " · coming soon"
+
+// pickRows is pickKey over rows. numbered rows start with their number, which picks them, and the
+// question says so; unnumbered ones are picked with the arrows and Enter alone. The mark starts on
+// the first row that isn't soon. Each row is cut to one line of the terminal's width, read again
+// for every drawing, so the redraw, which moves up a line a row, lands where the rows start. A
+// terminal that rewraps lines already drawn when it's narrowed mid-pick can still leave one
+// drawing out of place.
+func pickRows(f *os.File, w io.Writer, question string, rows []pickRow, numbered bool) (int, error) {
 	fd := int(f.Fd())
 	old, err := unix.IoctlGetTermios(fd, ioctlGetTermios)
 	if err != nil {
@@ -94,13 +122,17 @@ func pickKey(f *os.File, w io.Writer, question string, choices, details []string
 		return 0, fmt.Errorf("%w: %w", errNoKeyMode, err)
 	}
 	defer func() { _ = unix.IoctlSetTermios(fd, ioctlSetTermios, old) }()
-	fmt.Fprint(w, pickLines(question, choices, details, -1, spin.Color(w)))
+	color := spin.Color(w)
+	fmt.Fprint(w, pickLines(question, rows, numbered, -1, color, termWidth(w)))
 	at := 0
+	for at < len(rows)-1 && rows[at].soon {
+		at++
+	}
 	draw := func(again bool) {
 		if again {
-			fmt.Fprintf(w, "\r\033[%dA", len(choices))
+			fmt.Fprintf(w, "\r\033[%dA", len(rows))
 		}
-		fmt.Fprint(w, pickLines("", choices, details, at, spin.Color(w)))
+		fmt.Fprint(w, pickLines("", rows, numbered, at, color, termWidth(w)))
 	}
 	draw(false)
 	buf := make([]byte, 16)
@@ -109,7 +141,7 @@ func pickKey(f *os.File, w io.Writer, question string, choices, details []string
 		if rerr != nil {
 			return 0, rerr
 		}
-		next, picked, kerr := pickKeyPress(at, len(choices), buf[:n])
+		next, picked, kerr := pickKeyPress(at, rows, numbered, buf[:n])
 		if kerr != nil {
 			return 0, kerr
 		}
@@ -127,32 +159,62 @@ func pickKey(f *os.File, w io.Writer, question string, choices, details []string
 }
 
 // pickLines are a picker's lines: with question, its line, "  ? How do you want to link Meko Cloud?
-// (↑ and ↓, then Enter, or 1 to 2)"; then, with at a choice's index, the choices, the one at marked
-// "❯" and bold, each with its detail (when details are set) dim in a column after them. Each line
-// ends by erasing what's left of a line drawn before.
-func pickLines(question string, choices, details []string, at int, color bool) string {
+// (↑ and ↓, then Enter, or 1 to 2)" (the part in brackets only when numbered); then, with at a
+// row's index, the rows, the one at marked "❯" and bold, each with its detail (when set) dim in a
+// column after them, and a soon row dim as a whole. With width, the terminal's (0 when it's not
+// known), each row is cut to fit on a line: its detail first, then " · coming soon" with the
+// detail, and last its label. Each line ends by erasing what's left of a line drawn before.
+func pickLines(question string, rows []pickRow, numbered bool, at int, color bool, width int) string {
 	var b strings.Builder
 	if question != "" {
-		fmt.Fprintf(&b, "  %s %s %s\n", spin.Blue("?", color), spin.Bold(question, color),
-			spin.Dim(fmt.Sprintf("(↑ and ↓, then Enter, or 1 to %d)", len(choices)), color))
+		hint := ""
+		if numbered {
+			hint = " " + spin.Dim(fmt.Sprintf("(↑ and ↓, then Enter, or 1 to %d)", len(rows)), color)
+		}
+		fmt.Fprintf(&b, "  %s %s%s\n", spin.Blue("?", color), spin.Bold(question, color), hint)
 	}
 	if at < 0 {
 		return b.String()
 	}
-	width := 0
-	for i, c := range choices {
-		width = max(width, len(fmt.Sprintf("%d) %s", i+1, c)))
-	}
-	for i, c := range choices {
-		label := fmt.Sprintf("%d) %s", i+1, c)
-		detail := ""
-		if i < len(details) && details[i] != "" {
-			detail = strings.Repeat(" ", width-len(label)+3) + spin.Dim(details[i], color)
+	label := func(i int) string {
+		if numbered {
+			return fmt.Sprintf("%d) %s", i+1, rows[i].label)
 		}
-		if i == at {
-			fmt.Fprintf(&b, "  %s %s%s\033[K\n", spin.Blue("❯", color), spin.Bold(label, color), detail)
-		} else {
-			fmt.Fprintf(&b, "    %s%s\033[K\n", label, detail)
+		return rows[i].label
+	}
+	col := 0
+	for i := range rows {
+		col = max(col, cells(label(i)))
+	}
+	col += 3
+	for i, r := range rows {
+		l := label(i)
+		end := ""
+		if r.soon {
+			end = comingSoon
+		}
+		detail := r.detail
+		if width > 0 {
+			// 4 for the mark's column; and one short of the edge, which some terminals wrap at.
+			room := width - 1 - 4
+			l = fitCells(l, room)
+			if room-col < cells(end) { // no room for " · coming soon": the detail goes with it
+				end, detail = "", ""
+			}
+			detail = fitCells(detail, room-col-cells(end))
+		}
+		pad := ""
+		if detail != "" || end != "" {
+			pad = strings.Repeat(" ", col-cells(l))
+		}
+		switch {
+		case i == at:
+			fmt.Fprintf(&b, "  %s %s%s%s\033[K\n", spin.Blue("❯", color), spin.Bold(l, color), pad,
+				spin.Dim(detail+end, color))
+		case r.soon:
+			fmt.Fprintf(&b, "    %s\033[K\n", spin.Dim(l+pad+detail+end, color))
+		default:
+			fmt.Fprintf(&b, "    %s%s%s\033[K\n", l, pad, spin.Dim(detail, color))
 		}
 	}
 	return b.String()
@@ -169,20 +231,30 @@ func swallowEnter(f *os.File, fd int, keys unix.Termios) {
 	_, _ = f.Read(make([]byte, 16))
 }
 
-// pickKeyPress is what one read of keys k does to a picker marking choice at of n: ↑ (an arrow's
-// escape sequence, or k) and ↓ (or j) move the mark, wrapping around; Enter picks the marked
-// choice; a choice's number marks and picks it; Ctrl+C and Ctrl+D cancel; anything else does nothing.
-func pickKeyPress(at, n int, k []byte) (next int, picked bool, err error) {
+// pickKeyPress is what one read of keys k does to a picker marking row at of rows: ↑ (an arrow's
+// escape sequence, or k) and ↓ (or j) move the mark to the next row that isn't soon, wrapping
+// around; Enter picks the marked row; when numbered, a row's number marks and picks it; Ctrl+C and
+// Ctrl+D cancel; anything else does nothing. A soon row is never picked.
+func pickKeyPress(at int, rows []pickRow, numbered bool, k []byte) (next int, picked bool, err error) {
+	n := len(rows)
 	arrow := func(c byte) bool { return len(k) >= 3 && k[0] == 0x1b && (k[1] == '[' || k[1] == 'O') && k[2] == c }
+	move := func(by int) int {
+		for i := 1; i <= n; i++ {
+			if j := ((at+by*i)%n + n) % n; !rows[j].soon {
+				return j
+			}
+		}
+		return at
+	}
 	switch {
 	case len(k) == 0:
 	case arrow('A') || k[0] == 'k':
-		return (at + n - 1) % n, false, nil
+		return move(-1), false, nil
 	case arrow('B') || k[0] == 'j':
-		return (at + 1) % n, false, nil
+		return move(1), false, nil
 	case k[0] == '\r' || k[0] == '\n':
-		return at, true, nil
-	case k[0] >= '1' && int(k[0]-'1') < n:
+		return at, !rows[at].soon, nil
+	case numbered && k[0] >= '1' && int(k[0]-'1') < n && !rows[k[0]-'1'].soon:
 		return int(k[0] - '1'), true, nil
 	case k[0] == 0x03 || k[0] == 0x04:
 		return at, false, errCanceled

@@ -144,9 +144,14 @@ safe.
   too (`[web] enabled = false`; `meko ui start` turns it on). The summary's `Web UI` link row
   gives the URL and the access.
 - It installs Meko alone. On a first install from the installer (`MEKO_INSTALL_FIRST=1`) at a
-  terminal, it ends, after the links, with a picker of the known extensions not installed yet
-  (`extensions.Known`, AgentK first, each with its `Summary`) and "Skip for now": ↑ and ↓ then
-  Enter, or a number (`pickKey`, on `/dev/tty`). Picking one prints `→ meko extension install
+  terminal, it ends, after the links, with "Choose your agentic experience": a picker of the
+  known extensions not installed yet (`extensions.Known`, AgentK first), each by the `meko`
+  command that runs it (`kode`, `present`) with its `Summary`; then the experiences still to come
+  (`migrate`, `scribe`), dim and ending " · coming soon"; then "skip for now". ↑ and ↓ (or k and
+  j) move the mark, skipping the ones to come, and Enter picks; the rows have no numbers
+  (`pickRows`, on `/dev/tty`). A row wider than the terminal is cut with "…" to fit (its
+  description first, then " · coming soon" with it, and last its label, at the width read for each
+  drawing), since the redraw moves up one line a row. Picking one prints `→ meko extension install
   <name>` and runs that install on the terminal, where it asks its own questions; one that fails is
   a `✗` row, and Meko stays installed (exit 0). With no terminal it prints `Add an extension at any
   time: meko extension install agentk` instead. The commands to run next start with opening the
@@ -459,7 +464,7 @@ background; the rest are base ANSI colors, which every terminal theme tunes for 
 | Done | `32` green | `✓`, and the headline's `●` |
 | Warning | `1;33` bold yellow (bold, since some themes draw yellow pale on white) | `!` |
 | Failed | `31` red | `✗` |
-| Secondary | `2` faint | notes after a ` · `, link labels, the picker's descriptions and key hint |
+| Secondary | `2` faint | notes after a ` · `, link labels, the picker's descriptions, key hint and coming-soon rows |
 | Emphasis | `1` bold, in the terminal's own text color | `meko` in the header, the headline, a question, the picked choice |
 | Call to action | `1;97;44` white on blue | the first command under Next |
 
@@ -765,8 +770,9 @@ Changing the store doesn't move secrets: the client token is made again.
 - `internal/cli/install_run_test.go` and `pick_linux_test.go`: the PATH line added once and
   removed, a port the user chose failing before the service is written, the headline's elapsed time and
   the picker's line off a terminal, an upgrade's rows, the context engine's wait and its timeout, and
-  the extension picker on a pseudo-terminal (skip, Ctrl+C, a failed install, an installed AgentK
-  left out).
+  the extension picker on a pseudo-terminal (the coming-soon rows skipped, skip, Ctrl+C, a number
+  ignored, a failed install, a detail cut at 80 columns, an installed AgentK left out);
+  `cloud_test.go`: the picker's keys and rows (`pickKeyPress`, `pickLines`).
 - `internal/cli/install_fail_test.go`: a taken port moved to the next free one in `config.toml`, a
   server that can't start (its error and log, the service stopped, the setup left to finish, call
   home's report without the error's text), an upgrade on probation rolled back, a finished setup,
