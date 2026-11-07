@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatStatus, upFor, type StatusFacts } from '../../src/server/statusview.js';
+import { formatStatus, headline, upFor, type Paint, type StatusFacts } from '../../src/server/statusview.js';
 
 const NOW = Date.parse('2026-11-03T12:00:00.000Z');
 
@@ -22,22 +22,23 @@ function facts(o: Partial<StatusFacts> = {}): StatusFacts {
   };
 }
 
-describe("meko kode status, shaped like meko status", () => {
-  it('opens with a marked headline, then a row per part, then the links in a box like Meko\'s', () => {
+describe("meko kode status, laid out as meko status", () => {
+  it('prints a row per part, the headline, the links as plain rows, then what to run next', () => {
     expect(formatStatus(facts())).toEqual([
-      '✓ AgentK 0.20261103.13 is running (pid 39527, up 2h4m0s)',
       '  ✓ Server          healthy',
       '  ✓ Session host    running (pid 39531), 0 sessions',
       '  ✓ Service         launchd',
       '',
-      '┌──────────────────────────────────────────────────────────────┐',
-      '│ AgentK 0.20261103.13                                         │',
-      '├──────────────────────────────────────────────────────────────┤',
-      '│ Web UI   http://127.0.0.1:7777/ext/agentk/                   │',
-      '│ Home     /home/alice/.meko/extensions/agentk                 │',
-      '│ Logs     /home/alice/.meko/extensions/agentk/logs/server.log │',
-      '└──────────────────────────────────────────────────────────────┘',
+      '  ● AgentK 0.20261103.13 is running · pid 39527, up 2h4m0s',
+      '',
+      '  Web UI  http://127.0.0.1:7777/ext/agentk/',
+      '  Home    /home/alice/.meko/extensions/agentk',
+      '  Logs    /home/alice/.meko/extensions/agentk/logs/server.log',
+      '',
+      'Next:',
+      '  meko kode ui    open AgentK',
     ]);
+    expect(formatStatus(facts()).some((l) => /[│┌└]/.test(l))).toBe(false);
   });
 
   it('says when it is stopped, with the sessions the host keeps, and how to start it', () => {
@@ -50,19 +51,31 @@ describe("meko kode status, shaped like meko status", () => {
         { id: 'me_kode-host.service', installed: true, running: false, text: 'inactive' },
       ] },
     }));
-    expect(lines[0]).toBe("✗ AgentK 0.20261103.13 isn't running");
-    expect(lines).toContain('  ✓ Session host    running (pid 39531), 2 sessions (1 running)');
-    expect(lines).toContain('  ! Service         systemd, stopped');
+    expect(lines.slice(0, 4)).toEqual([
+      '  ✓ Session host    running (pid 39531), 2 sessions (1 running)',
+      '  ! Service         systemd, stopped',
+      '',
+      "  ✗ AgentK 0.20261103.13 isn't running",
+    ]);
     expect(lines.some((l) => l.includes('Server'))).toBe(false);
-    expect(lines.at(-1)).toBe('  Start it: meko kode start');
+    expect(lines.slice(-2)).toEqual(['Next:', '  meko kode start    start AgentK']);
+  });
+
+  it('opens with the headline when there are no rows', () => {
+    const lines = formatStatus(facts({ probe: { ok: false, error: 'connect ENOENT' }, leasePid: null, host: { up: false }, services: null }));
+    expect(lines[0]).toBe("  ✗ AgentK 0.20261103.13 isn't running");
   });
 
   it('warns about a server that holds the lease but is slow to answer, and a host that is down', () => {
     const lines = formatStatus(facts({ probe: { ok: false, error: 'timed out' }, host: { up: false } }));
-    expect(lines[0]).toBe("! AgentK 0.20261103.13 is running (pid 39527), but isn't answering");
     expect(lines).toContain('  ! Server          not answering (timed out)');
     expect(lines).toContain('  ! Session host    not running');
-    expect(lines).not.toContain('  Start it: meko kode start');
+    expect(lines).toContain("  ! AgentK 0.20261103.13 isn't answering · pid 39527");
+    expect(lines.slice(-3)).toEqual([
+      'Next:',
+      "  meko kode logs       see why it isn't answering",
+      '  meko kode restart    restart its server',
+    ]);
   });
 
   it('goes without the uptime from a server before it, and says what is wrong with the services', () => {
@@ -76,20 +89,37 @@ describe("meko kode status, shaped like meko status", () => {
       webUrl: null,
       webWhy: "Meko isn't running: start it with meko start",
     }));
-    expect(lines[0]).toBe('✓ AgentK 0.20261103.13 is running (pid 39527)');
+    expect(lines).toContain('  ● AgentK 0.20261103.13 is running · pid 39527');
     expect(lines).toContain('  ! Session host    not answering (EACCES)');
     expect(lines).toContain('  ! Service         launchd: com.yugabyte.me_kode.host not installed');
-    expect(lines.some((l) => l.startsWith("│ Web UI   none (Meko isn't running: start it with meko start)"))).toBe(true);
+    expect(lines).toContain("  Web UI  none (Meko isn't running: start it with meko start)");
     expect(formatStatus(facts({ services: 'other' }))).toContain('  ! Service         none for this home (the installed services run another one)');
     expect(formatStatus(facts({ services: null })).some((l) => l.includes('Service'))).toBe(false);
   });
 
-  it("colors the rows' marks, never the headline's, which Meko reads", () => {
-    const lines = formatStatus(facts(), (_k, m) => `<${m}>`);
-    expect(lines[0].startsWith('✓ AgentK')).toBe(true);
-    expect(lines[1]).toBe('  <✓> Server          healthy');
+  it("colors by Meko's roles: marks, a bold headline with a dim note, dim labels, the link, and the call to action", () => {
+    const tag = (t: string) => (s: string) => `<${t}>${s}</${t}>`;
+    const paint: Paint = { color: true, mark: (k, m) => `<${k}>${m}</${k}>`, bold: tag('b'), dim: tag('d'), link: tag('a'), cta: tag('cta'), blue: tag('blue') };
+    const lines = formatStatus(facts(), paint);
+    expect(lines[0]).toBe('  <ok>✓</ok> Server          healthy');
+    expect(lines).toContain('  <ok>●</ok> <b>AgentK 0.20261103.13 is running</b><d> · pid 39527, up 2h4m0s</d>');
+    expect(lines).toContain('  <d>Web UI</d>  <a>http://127.0.0.1:7777/ext/agentk/</a>');
+    expect(lines).toContain('  <d>Home</d>    /home/alice/.meko/extensions/agentk');
+    // The call to action starts a column early, so its text lines up as without color.
+    expect(lines.at(-1)).toBe(' <cta>meko kode ui</cta>   open AgentK');
   });
+});
 
+describe("the headline meko status shows in its AgentK row (MEKO_SUMMARY=1)", () => {
+  it('is one marked line, never colored, as before', () => {
+    expect(headline(facts())).toBe('✓ AgentK 0.20261103.13 is running (pid 39527, up 2h4m0s)');
+    expect(headline(facts({ probe: { ok: false, error: 'timed out' } }))).toBe("! AgentK 0.20261103.13 is running (pid 39527), but isn't answering");
+    expect(headline(facts({ probe: { ok: false, error: 'connect ENOENT' }, leasePid: null }))).toBe("✗ AgentK 0.20261103.13 isn't running");
+    expect(headline(facts({ probe: { ok: true, version: '0.20261103.12' } }))).toBe('✓ AgentK 0.20261103.13 is running (pid 39527)');
+  });
+});
+
+describe('upFor', () => {
   it('writes the uptime as Go writes a duration, as meko status does', () => {
     expect(upFor(33_000)).toBe('33s');
     expect(upFor(243_000)).toBe('4m3s');

@@ -11,7 +11,7 @@ what to type next, after the commands, in bold on a terminal, for the state Meko
 on a computer without it, `meko start` when it's set up but stopped, and when it's running a `Next:`
 list of `meko ui` and the steps not set up yet. `install`, `start`, `stop` and `status` print a
 short summary: a row per step marked ✓, ! or ✗, a `● Meko <version> is running` headline, plain
-link rows for people (`Web UI`) and for agents (`Agents`: MCP and the REST API), both on Meko's one port (7777), and
+link rows for people (`Web UI`) and for agents (`Agents`: MCP at `/mcp`, and under it the REST API at `/api/v1`), both on Meko's one port (7777), and
 the Meko Cloud it's linked to (`Cloud`: its web app, or "not linked"), and what to run next, the
 first command as the call to action. A first install from the installer ends, before that, by
 offering the extensions to add. What to run next (`meko install`, `meko start`, `meko --help`, `meko status`, `meko cloud-link`

@@ -420,8 +420,9 @@ func (e Entry) Run(root, action string, stdout, stderr io.Writer) error {
 }
 
 // SummaryEnv, set to 1 for the start and stop meko start and meko stop run, asks the extension to
-// print one row in Meko's summary format instead of its usual lines (docs/install.md, "The summary
-// rows").
+// print one row in Meko's summary format instead of its usual lines; for the status meko status
+// runs (StatusWithin), its one headline line, which meko status shows in the extension's row
+// (docs/install.md, "The summary rows").
 const SummaryEnv = "MEKO_SUMMARY"
 
 // RunSummary runs `<command> <action>` as Run does, with SummaryEnv set: for meko start and stop.
@@ -508,13 +509,14 @@ func (e Entry) Status(root string) (bool, string) {
 // status started that still holds its output after the status exits (the launchers exec Node, so
 // it's one Node started) isn't killed, and isn't waited for more than statusPipeWait: a status
 // prints a few lines, and has printed them by the time it exits. What the exit code says stands
-// when the status exited by itself, even if waiting for its output ran past d.
+// when the status exited by itself, even if waiting for its output ran past d. It runs with
+// SummaryEnv set, so the extension prints only its headline, the line that's returned.
 func (e Entry) StatusWithin(ctx context.Context, root string, d time.Duration) StatusResult {
 	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, e.Command, "status") //nolint:gosec // G204: see run
-	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &out, CommandEnv(root, e.Command)
+	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &out, append(CommandEnv(root, e.Command), SummaryEnv+"=1")
 	cmd.WaitDelay = min(PipeWait, statusPipeWait)
 	_ = cmd.Run()
 	first, _, _ := bytes.Cut(bytes.TrimSpace(out.Bytes()), []byte("\n"))

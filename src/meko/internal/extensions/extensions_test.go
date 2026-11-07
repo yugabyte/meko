@@ -355,6 +355,15 @@ func TestStatusWithinReportsRunningAndStopped(t *testing.T) {
 	}
 }
 
+// A status runs with SummaryEnv set, which asks the extension for its headline alone.
+func TestStatusWithinAsksForTheHeadline(t *testing.T) {
+	dir := t.TempDir()
+	e := Entry{Command: writeScript(t, dir, "ext", "echo \"summary=$MEKO_SUMMARY\"\n")}
+	if r := e.StatusWithin(context.Background(), dir, time.Second); r.Line != "summary=1" {
+		t.Errorf("status's env: %+v", r)
+	}
+}
+
 // A status that doesn't answer in time is reported as such, without waiting for the process it
 // started that still holds its output (the timeout kills the status, not what it started).
 func TestStatusWithinTimesOutPastAHungChild(t *testing.T) {

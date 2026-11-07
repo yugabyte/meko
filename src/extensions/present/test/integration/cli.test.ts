@@ -68,7 +68,9 @@ describe('the commands Meko runs', () => {
     expect(statSync(getPaths(home).webSock).isSocket()).toBe(true);
     expect(statSync(join(home, 'run')).mode & 0o077).toBe(0);
     const status = present('status');
-    expect([status.code, status.out]).toEqual([0, expect.stringMatching(/^✓ Presenter \S+ is running \(pid \d+, up \d+s\)\n {2}✓ Server {10}healthy\n/)]);
+    expect([status.code, status.out]).toEqual([0, expect.stringMatching(/^ {2}✓ Server {10}healthy\n[^]*\n {2}● Presenter \S+ is running · pid \d+, up \d+s\n/)]);
+    // Run by meko status, the one headline line its Presenter row shows.
+    expect(presentWith({ MEKO_SUMMARY: '1' }, 'status').out).toMatch(/^✓ Presenter \S+ is running \(pid \d+, up \d+s\)\n$/);
     expect(present('stop').out).toContain('Presenter stopped');
     expect(existsSync(join(home, 'run', 'server.pid'))).toBe(false);
   });

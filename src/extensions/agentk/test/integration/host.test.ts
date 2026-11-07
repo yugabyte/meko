@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Socket } from 'node:net';
 import { hostname } from 'node:os';
@@ -421,6 +421,10 @@ describe('meko kode host, attach, stop and start (the commands)', () => {
     expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('AgentK is not running.');
     // Run by meko stop, one row of Meko's summary.
     expect(execFileSync(tsx, [cli, 'stop'], { env: { ...env, MEKO_SUMMARY: '1' }, encoding: 'utf8' })).toBe("  ✓ AgentK          wasn't running\n");
+    // Run by meko status, the one headline line its AgentK row shows, and exit 3: no server runs.
+    const st = spawnSync(tsx, [cli, 'status'], { env: { ...env, MEKO_SUMMARY: '1' }, encoding: 'utf8' });
+    expect(st.status).toBe(3);
+    expect(st.stdout).toMatch(/^✗ AgentK \S+ isn't running\n$/);
 
     // Without services there is nothing for `start` to start.
     refused = '';

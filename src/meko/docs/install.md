@@ -395,7 +395,9 @@ each one. The contract is the extension's own CLI: `<command> start`, `stop` and
 its uninstall (`Catalog.UninstallArgs`; AgentK's is `uninstall --purge --delete-worktrees
 --non-interactive`) for `meko destroy --with-extensions`. `status` exits 0 only while the
 extension runs (AgentK and Presenter exit 3 when stopped), and its first line is shown in `meko
-status`'s row. A first line that starts with a mark (`✓`, `!` or `✗`), the extensions' own headline
+status`'s row. Meko runs it with `MEKO_SUMMARY=1`, which asks for that line alone (run by hand, the
+extension prints its rows first, its headline below them, as `meko status` does). A first line that
+starts with a mark (`✓`, `!` or `✗`), the extensions' own headline
 (`✓ AgentK 0.20261103.13 is running (pid 39527, up 2h4m0s)`), is shown without the mark and the
 extension's title (`✓ AgentK   0.20261103.13 is running (pid 39527, up 2h4m0s)`), and its mark is the
 row's: a server that runs but doesn't answer exits 0 and is a `!`. Any other line is shown after
@@ -414,7 +416,8 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
 ### The summary rows
 
 `meko start` and `meko stop` run each extension's `start` and `stop` with `MEKO_SUMMARY=1` too
-(`Entry.RunSummary`), and pass its output through. With it set, the extension prints exactly one
+(`Entry.RunSummary`), and pass its output through (`meko status` runs `status` with it as well,
+for the extension's headline alone: above). With it set, the extension prints exactly one
 line, a row of Meko's summary (`internal/cli/report.go`): two spaces, a mark (`✓` done, `!` a
 warning, `✗` failed), its title padded to 15 characters, a space, then what happened, such as
 `  ✓ AgentK          started; sessions resume in a few seconds`. The mark is colored (green,
@@ -443,7 +446,8 @@ show the dots while it loads, for at most a minute, then `ready in 2.4s`, or `! 
 meko status says when it's ready`), a `● Meko <version> is running` headline (with `· installed in
 14s` or `· upgraded in 11s` after the installer, and the pid and uptime in status), then the links
 as plain aligned rows, each URL followed only by a dim note after ` · `, so it copies cleanly
-(`Web UI`, with its access; `Agents`, the MCP and API URL, `· MCP and API`; `Cloud`, the linked
+(`Web UI`, with its access; `Agents`, the MCP URL, `· MCP`, with the REST API's under it, unlabeled,
+`· REST API`; `Cloud`, the linked
 Meko Cloud or `not linked`), then the
 commands to run next. A `Web UI` row shows only when the web UI is off or not listening.
 

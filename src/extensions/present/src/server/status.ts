@@ -1,7 +1,9 @@
 /**
- * `meko present status`'s output, shaped like `meko status`: a marked headline, a row per check, then
- * the links. Meko shows the headline in its own status row without the mark and "Presenter"
- * (src/meko/docs/install.md), so the headline's mark is never colored.
+ * `meko present status`'s output, laid out as `meko status` is (Meko's `internal/cli/report.go`): a
+ * row per check, a headline (`● Presenter <version> is running · pid, up`), the links as plain
+ * aligned rows, then the commands to run next. `meko status` runs it with MEKO_SUMMARY=1 and shows
+ * the one line `headline` gives in its Presenter row, without the mark and "Presenter"
+ * (src/meko/docs/install.md), so that line's mark is never colored.
  */
 import { summaryRow } from './summary.js';
 
@@ -35,29 +37,45 @@ export function runs(f: Pick<StatusFacts, 'pid' | 'answers'>): boolean {
   return f.pid !== null && f.answers;
 }
 
-export function statusLines(f: StatusFacts, color = process.stdout.isTTY === true && !process.env.NO_COLOR): string[] {
+/** The one line `meko status` shows in its Presenter row: "✓ Presenter 0.2 is running (pid 7, up 4m3s)". */
+export function headline(f: Pick<StatusFacts, 'version' | 'pid' | 'startedAt' | 'answers' | 'now'>): string {
+  if (runs(f)) return `✓ Presenter ${f.version} is running (pid ${f.pid}${f.startedAt === null ? '' : `, up ${upFor(f.now - f.startedAt)}`})`;
+  if (f.pid !== null) return `✗ Presenter ${f.version} isn't answering (pid ${f.pid})`;
+  return `✗ Presenter ${f.version} isn't running`;
+}
+
+const paint = (code: string, s: string, color: boolean) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
+
+export function statusLines(f: StatusFacts, color = process.stdout.isTTY === true && !process.env.NO_COLOR && process.env.TERM !== 'dumb'): string[] {
   const lines: string[] = [];
-  if (runs(f)) {
-    const up = f.startedAt === null ? '' : `, up ${upFor(f.now - f.startedAt)}`;
-    lines.push(`✓ Presenter ${f.version} is running (pid ${f.pid}${up})`);
-    lines.push(summaryRow('✓', 'Server', 'healthy', color));
-  } else if (f.pid !== null) {
-    lines.push(`✗ Presenter ${f.version} isn't answering (pid ${f.pid})`);
-    lines.push(summaryRow('✗', 'Server', 'not answering on its socket', color));
-  } else {
-    lines.push(`✗ Presenter ${f.version} isn't running`);
-  }
+  if (runs(f)) lines.push(summaryRow('✓', 'Server', 'healthy', color));
+  else if (f.pid !== null) lines.push(summaryRow('✗', 'Server', 'not answering on its socket', color));
   lines.push(f.claude ? summaryRow('✓', 'Claude Code', 'installed', color) : summaryRow('!', 'Claude Code', 'not found: install it to build decks', color));
+
+  // The headline, its text bold and its note dim, as Meko's "● Meko 1.2 is running · pid 7, up 2h".
+  const note = (text: string, n: string) => `${paint('1', text, color)}${n ? paint('2', ` · ${n}`, color) : ''}`;
   lines.push('');
-  lines.push(`  ${'Pages'.padEnd(9)}meko ui, then Presenter`);
-  lines.push(`  ${'Home'.padEnd(9)}${f.home}`);
-  if (f.pid === null) {
-    lines.push('');
-    lines.push('  Start it: meko present start');
-  } else if (!f.answers) {
-    // start does nothing while this pid runs: the server has to stop first.
-    lines.push('');
-    lines.push(`  Restart it: meko present stop, then meko present start (its log: ${f.home}/logs/server.log)`);
-  }
+  if (runs(f)) lines.push(`  ${paint('32', '●', color)} ${note(`Presenter ${f.version} is running`, `pid ${f.pid}${f.startedAt === null ? '' : `, up ${upFor(f.now - f.startedAt)}`}`)}`);
+  else if (f.pid !== null) lines.push(`  ${paint('31', '✗', color)} ${note(`Presenter ${f.version} isn't answering`, `pid ${f.pid}`)}`);
+  else lines.push(`  ${paint('31', '✗', color)} ${note(`Presenter ${f.version} isn't running`, '')}`);
+
+  // The links, their labels dim and aligned: Meko's link rows.
+  lines.push('');
+  lines.push(`  ${paint('2', 'Pages', color)}  meko ui, then Presenter`);
+  lines.push(`  ${paint('2', 'Home', color)}   ${f.home}`);
+  if (!runs(f) && f.pid !== null) lines.push(`  ${paint('2', 'Logs', color)}   ${f.home}/logs/server.log`);
+
+  // What to run next, the first as the call to action. start does nothing while a pid that doesn't
+  // answer runs: the server has to stop first.
+  const cmds: [string, string][] = runs(f) ? [['meko ui', 'open the web UI, then Presenter']]
+    : f.pid !== null ? [['meko present stop', "stop the server that isn't answering"], ['meko present start', 'then start it again']]
+      : [['meko present start', 'start Presenter']];
+  const w = Math.max(...cmds.map(([c]) => c.length));
+  lines.push('', 'Next:');
+  cmds.forEach(([c, what], i) => {
+    const pad = ' '.repeat(w - c.length + 4);
+    // The call to action's color starts a column early, so its text lines up with the commands below it.
+    lines.push(i === 0 && color ? ` ${paint('1;97;44', ` ${c} `, true)}${pad.slice(1)}${what}` : `  ${c}${pad}${what}`);
+  });
   return lines;
 }
