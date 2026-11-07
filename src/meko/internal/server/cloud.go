@@ -12,7 +12,7 @@ import (
 
 // registerCloud is the Meko Cloud link's route (docs/cloud.md): GET reads it, PUT links
 // (cloudlink.Update), DELETE unlinks. Browsers (local or remote access) and the admin token (meko
-// cloud_link) take it, never an agent's client token, which mustn't redirect the link (ownerOnly).
+// cloud-link) take it, never an agent's client token, which mustn't redirect the link (ownerOnly).
 // Replies never carry the key.
 func (s *Server) registerCloud(v1 *echo.Group) {
 	if s.opts.Cloud == nil {

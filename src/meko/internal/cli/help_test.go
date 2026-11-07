@@ -36,6 +36,9 @@ func TestEveryCommandHasHelp(t *testing.T) {
 			if listed == (c.hidden || c.subcommands) {
 				t.Errorf("%s %s: listed in --help %v, hidden %v", prog, c.name, listed, c.hidden)
 			}
+			if _, ok := extensionOfVerb(c.name); ok && prog == progMeko {
+				continue // meko kode --help is AgentK's own help: TestExtensionCommandRunsItsProgram
+			}
 			var out, errb bytes.Buffer
 			code := runProg(prog, append(strings.Fields(c.name), "--help"), &out, &errb)
 			if code != exitOK || !strings.Contains(out.String(), "Usage: "+c.usage) ||
@@ -79,6 +82,12 @@ func TestUsage(t *testing.T) {
 	want(t, "unknown command", code, exitUsage, errs, `meko: unknown command "frobnicate"`+"\nRun meko --help")
 	code, _, errs = run("statsu")
 	want(t, "a typo", code, exitUsage, errs, "Did you mean meko status?\n")
+	// cloud_link was renamed cloud-link: the old name runs nothing and points to the new one.
+	code, _, errs = run("cloud_link", "--off")
+	want(t, "cloud_link", code, exitUsage, errs, `meko: unknown command "cloud_link"`+"\nDid you mean meko cloud-link?\n")
+	code, out, _ = run("cloud-link", "-h")
+	want(t, "cloud-link -h", code, 0, out, "Usage: meko cloud-link [flags]")
+	want(t, "cloud-link -h", code, 0, out, "More: "+docsURL+"#cloud-link\n")
 	code, _, errs = run("start", "--nope")
 	want(t, "a bad flag", code, exitUsage, errs, "Run meko start --help for its flags\n")
 	code, _, errs = run("help", "frobnicate")
@@ -140,7 +149,7 @@ func TestExtensionCommands(t *testing.T) {
 		t.Errorf("meko help extension: exit %d, %q", code, help)
 	}
 	code, out, _ = run("extension", "delete", "-h")
-	want(t, "extension delete -h", code, 0, out, "Usage: meko extension delete agentk|presenter [flags]")
+	want(t, "extension delete -h", code, 0, out, "Usage: meko extension delete agentk|present [flags]")
 	want(t, "extension delete -h", code, 0, out, "--purge")
 	want(t, "extension delete -h", code, 0, out, "More: "+docsURL+"#extension-delete")
 	_, help, _ = run("help", "extension", "delete")
@@ -166,7 +175,7 @@ func TestExtensionCommands(t *testing.T) {
 	code, _, errs = run("extension list")
 	want(t, "one word with a space", code, exitUsage, errs, `unknown command "extension list"`)
 	code, _, errs = run("extension", "delete", "--data-dir", t.TempDir())
-	want(t, "extension delete with no name", code, exitUsage, errs, "name the extension (agentk, presenter)")
+	want(t, "extension delete with no name", code, exitUsage, errs, "name the extension (agentk, present)")
 	code, _, errs = run("extension", "delete", "frob", "--data-dir", t.TempDir())
 	want(t, "extension delete frob", code, exitUsage, errs, `no extension called "frob"`)
 }

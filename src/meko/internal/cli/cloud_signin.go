@@ -18,10 +18,10 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/spin"
 )
 
-// signInWait is how long meko cloud_link waits for the browser to come back from signing in.
+// signInWait is how long meko cloud-link waits for the browser to come back from signing in.
 var signInWait = 5 * time.Minute
 
-// terminalIn reports whether meko cloud_link's input is a person at a terminal, who's asked how to
+// terminalIn reports whether meko cloud-link's input is a person at a terminal, who's asked how to
 // link; piped input is a key. Tests replace it.
 var terminalIn = func(in io.Reader) bool {
 	f, ok := in.(*os.File)
@@ -270,7 +270,7 @@ func signInWithBrowser(mcpURL string, noBrowser bool, answers io.Reader, out io.
 	case got = <-came:
 	case <-timer.C:
 		fmt.Fprintln(out)
-		return cloudlink.Minted{}, fmt.Errorf("timed out after %s waiting for the sign-in. Run meko cloud_link "+
+		return cloudlink.Minted{}, fmt.Errorf("timed out after %s waiting for the sign-in. Run meko cloud-link "+
 			"again, or choose to enter an API key", signInWait)
 	}
 	fmt.Fprintln(out)

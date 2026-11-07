@@ -54,8 +54,8 @@ printf '%s\n' "$out" | grep -q 'blue herons' || { echo "search didn't find the m
 # The model came from the tarball: nothing was downloaded into the data folder.
 [ -z "$(ls -A "$data/models" 2>/dev/null)" ] || { echo "the memory engine downloaded a model instead of using the bundled one" >&2; exit 1; }
 # The web UI came from the tarball too. Meko serves it on the same port, at the address meko ui
-# prints.
-url=$("$meko" ui --no-open --data-dir "$data")
+# prints. As over SSH, it only prints it.
+url=$(SSH_CONNECTION=smoke "$meko" ui --data-dir "$data")
 curl -fsS "$url" | grep -q 'id="root"' || { echo "Meko at $url doesn't serve the web UI" >&2; exit 1; }
 "$meko" stop --data-dir "$data"
 echo "smoke test passed: meko $version"

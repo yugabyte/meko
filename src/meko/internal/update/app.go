@@ -18,10 +18,10 @@ import (
 )
 
 // App is a release install's app folder: Meko's, or an extension's that Meko installs from its
-// releases (Presenter's, in <data folder>/extensions/presenter/app). Name is the program, which
+// releases (Presenter's, in <data folder>/extensions/present/app). Name is the program, which
 // names its binary (<version>/bin/<name>) and its link in ~/.local/bin; empty is meko. Package
 // names its tarballs (<package>-<version>-<os>-<arch>.tar.gz, one folder <package>-<version>/);
-// empty is Name. Presenter's program is me_presenter, its package presenter. OldNames are names the
+// empty is Name. Presenter's program is me_present, its package present. OldNames are names the
 // program had before (AgentK's agentk): a version unpacked then has only bin/<old name>, and Adopt
 // gives it bin/<name> too, so app/current/bin/<name> and the links to it resolve whichever version is
 // current. Private unpacks
@@ -195,28 +195,6 @@ func (a App) LinkCommandAs(home, link string) (string, error) {
 		return "", err
 	}
 	return link, nil
-}
-
-// MayLink reports whether LinkCommand may make <home>/.local/bin/<name>: there's none, or it's a
-// link into this app folder, or a dangling one. A link into another app folder is another install's
-// (an extension's release for another of this user's Meko data folders), and stays.
-func (a App) MayLink(home string) bool {
-	return a.MayLinkAs(home, a.name())
-}
-
-// MayLinkAs is MayLink for <home>/.local/bin/<link>.
-func (a App) MayLinkAs(home, link string) bool {
-	link = filepath.Join(home, ".local", "bin", link)
-	t, err := os.Readlink(link)
-	if err != nil {
-		_, lerr := os.Lstat(link)
-		return errors.Is(lerr, fs.ErrNotExist)
-	}
-	if strings.HasPrefix(t, a.Root+string(filepath.Separator)) {
-		return true
-	}
-	_, serr := os.Stat(link)
-	return serr != nil
 }
 
 // UnlinkCommand removes <home>/.local/bin/<name> if it points into this app folder.

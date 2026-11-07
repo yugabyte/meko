@@ -88,7 +88,7 @@ type Options struct {
 	// stop: the listener reads its settings again, and lets browsers in or keeps them out.
 	ReloadWeb func()
 	// Cloud, if set, serves the Meko Cloud link's routes (/api/v1/settings/meko-cloud): to the web UI
-	// and to the CLI's admin token (meko cloud_link), never to the client token. The linked Meko
+	// and to the CLI's admin token (meko cloud-link), never to the client token. The linked Meko
 	// Cloud's datapacks go through the REST routes (internal/rest's cloud.go).
 	Cloud *cloudlink.Service
 	// Agents, if set, serves the agents' routes (/api/v1/agents, agents.go).

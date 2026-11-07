@@ -3,8 +3,6 @@ package cli
 import (
 	"context"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,7 +19,7 @@ type nextFor int
 const (
 	nextInstall nextFor = iota // meko install
 	nextStart                  // meko start
-	nextUse                    // meko --help (while Meko runs), meko status and meko cloud_link
+	nextUse                    // meko --help (while Meko runs), meko status and meko cloud-link
 	nextConnect                // meko agent connect <agent>
 )
 
@@ -37,9 +35,9 @@ type nextState struct {
 	linked     bool         // Meko Cloud is linked
 	agentK     bool         // AgentK is installed for this Meko
 	agentKRead bool         // the extensions' registry could be read, so agentK says which
-	// agentKOther says me_koder on PATH isn't this Meko's AgentK (another data folder's, which
-	// extension install leaves the ~/.local/bin link on), so it's opened with meko ui /ext/agentk/.
-	agentKOther bool
+	// agentKOther is this Meko's data folder when it isn't the one meko kode uses by default
+	// (MEKO_HOME, or ~/.meko), so meko kode is given it: "" for the default.
+	agentKOther string
 	added       string // the extension install's picker just added, offered first
 }
 
@@ -63,7 +61,7 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 			add("meko start", "start Meko")
 		}
 		add(s.agent.Command, "start a new "+s.agent.Title+" session, with Meko's tools (ones already running need a restart)")
-	case kind == nextUse && !s.running: // meko cloud_link with Meko stopped
+	case kind == nextUse && !s.running: // meko cloud-link with Meko stopped
 		add("meko start", "start Meko")
 	case s.webOff:
 		add("meko ui start", "turn the web UI on, when you want it")
@@ -77,7 +75,7 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 		add("meko memory-extractor use claude", "learn memories from your conversations, through Claude Code")
 	}
 	if !s.linked {
-		add("meko cloud_link", "share with your team through Meko Cloud")
+		add("meko cloud-link", "share with your team through Meko Cloud")
 	}
 	switch {
 	case !s.agentKRead, s.added == "agentk": // just added: opening it came first
@@ -96,14 +94,17 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 }
 
 // openExtension is the command that opens extension name's own page, and what it does: AgentK's
-// me_koder ui, unless other says me_koder on PATH is another Meko's; the others' page in Meko's web
-// UI.
-func openExtension(name string, other bool) (string, string) {
-	what := "open " + extensionTitle(name)
-	if name == "agentk" && !other {
-		return "me_koder ui", what
+// meko kode ui, given this Meko's data folder when other names one; the others' from Meko's web UI,
+// whose sidebar lists them.
+func openExtension(name, other string) (string, string) {
+	title := extensionTitle(name)
+	switch {
+	case name == "agentk" && other != "":
+		return "meko kode --data-dir " + shellQuote([]string{other}) + " ui", "open " + title
+	case name == "agentk":
+		return "meko kode ui", "open " + title
 	}
-	return "meko ui /ext/" + name + "/", what
+	return "meko ui", "open the web UI, then " + title + " in its sidebar"
 }
 
 // otherAgents names the agents other than name, for "(or codex, kiro, opencode, cursor)".
@@ -128,10 +129,11 @@ func readNextState(l paths.Layout, c *client) nextState {
 	s := nextState{running: c != nil, connected: true, extracting: true, linked: true}
 	s.agent, _ = agents.Lookup("claude")
 	if reg, err := extensions.Load(l.Root); err == nil {
-		var e extensions.Entry
-		e, s.agentK = reg.Entries["agentk"]
+		_, s.agentK = reg.Entries["agentk"]
 		s.agentKRead = true
-		s.agentKOther = s.agentK && !onPathAs(e.Command)
+		if s.agentK && !isDefaultDataDir(l.Root) {
+			s.agentKOther = l.Root
+		}
 	}
 	if m, _, _, err := agentManager(l); err == nil {
 		if list, err := m.List(); err == nil {
@@ -168,14 +170,8 @@ func readNextState(l paths.Layout, c *client) nextState {
 	return s
 }
 
-// onPathAs reports whether me_koder on PATH is the file at path, links followed
-// (~/.local/bin/me_koder is a link into a release's app/current).
-func onPathAs(path string) bool {
-	found, err := exec.LookPath("me_koder")
-	if err != nil || path == "" {
-		return false
-	}
-	a, aerr := filepath.EvalSymlinks(found)
-	b, berr := filepath.EvalSymlinks(path)
-	return aerr == nil && berr == nil && a == b
+// isDefaultDataDir reports whether root is the data folder Meko's commands use without --data-dir.
+func isDefaultDataDir(root string) bool {
+	d, err := paths.Resolve("")
+	return err == nil && paths.SameDir(d, root)
 }

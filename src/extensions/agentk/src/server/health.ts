@@ -60,11 +60,11 @@ function currentVersion(paths: Paths): string | null {
   }
 }
 
-/** How long `me_koder restart` waits for the server to answer: past three failed starts and Meko's rollback. */
+/** How long `meko kode restart` waits for the server to answer: past three failed starts and Meko's rollback. */
 export const RESTART_WAIT_MS = 100_000;
 
 /**
- * `me_koder restart`: restarts the server's service, and only it (the session host and its sessions
+ * `meko kode restart`: restarts the server's service, and only it (the session host and its sessions
  * keep running), then waits until the server answers as the version app/current names. Meko runs it
  * after switching app/current to an update; a version that keeps failing is rolled back by Meko's
  * launcher meanwhile, and then the old version answering ends the wait too. Returns the version that
@@ -76,7 +76,7 @@ export async function restartServer(
   o: { waitMs?: number; probe?: typeof probeLocal } = {},
 ): Promise<string> {
   if (!svc?.installed('server')) {
-    throw new Error('No background services run this home, so there is no server to restart: stop me_koder serve and start it again, or install the services with me_koder install.');
+    throw new Error('No background services run this home, so there is no server to restart: stop meko kode serve and start it again, or install the services with meko kode install.');
   }
   svc.restart('server');
   const waitMs = o.waitMs ?? RESTART_WAIT_MS;
@@ -86,7 +86,7 @@ export async function restartServer(
     const want = currentVersion(paths);
     if (p.ok && (!want || p.version === want)) return p.version;
     const last = p.ok ? `version ${p.version} answers, not ${want}` : p.error;
-    if (Date.now() >= end) throw new Error(`The server didn't answer within ${Math.round(waitMs / 1000)} s (${last}). See: me_koder logs`);
+    if (Date.now() >= end) throw new Error(`The server didn't answer within ${Math.round(waitMs / 1000)} s (${last}). See: meko kode logs`);
     await new Promise((r) => setTimeout(r, 500));
   }
 }

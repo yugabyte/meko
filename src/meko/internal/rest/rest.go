@@ -25,9 +25,9 @@ import (
 // Options configure the routes.
 type Options struct {
 	Service *memory.Service
-	// Port is the server's, for the MCP URL the Connect page shows.
+	// Port is the server's, for the MCP URL provision-status gives.
 	Port int
-	// ClientToken is what the Connect page shows clients to send.
+	// ClientToken is what provision-status gives clients to send.
 	ClientToken string
 	// Credential is the credential a request got in with (admin, client or none), set by the
 	// server's auth check.
@@ -57,7 +57,7 @@ type api struct {
 // browsers, with local access (every user of the computer) or remote (anyone who
 // reaches its port: there's no login), nor auth = "none": the token lets a caller do what neither
 // does (knowledgebase_upload_file reads a path as Meko's user), and keeps working when access or
-// auth changes. The Connect page then says to run meko token.
+// auth changes. Those callers run meko token for it.
 func (a *api) keyFor(c echo.Context) string {
 	switch a.Credential(c) {
 	case "admin", "client":

@@ -8,7 +8,7 @@ import { loaderFlags, skillPath, toolsMcpConfigPath, toolsPluginDir, toolsReady,
 import { tempDir } from '../helpers.js';
 
 describe("the session tools' files", () => {
-  it('names me_koder mcp for Claude Code, and puts the one skill in its plugin and where Kiro and OpenCode read it', () => {
+  it('names me_kode mcp for Claude Code, and puts the one skill in its plugin and where Kiro and OpenCode read it', () => {
     const paths = getPaths(join(tempDir('akl-tools-'), 'ak'));
     expect(toolsReady(paths, true)).toBe(false);
     expect(writeToolFiles(paths)).toBe(true);

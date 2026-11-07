@@ -1,9 +1,9 @@
-// The left rail: the Meko mark, the Status link, the Extensions group, Projects, the datapacks, and
-// the version (with a chip to the Status page's Updates card when a newer release is out), the
-// Settings gear and the theme toggle. Below md it's a drawer over the page, opened from the top bar. The datapacks
-// are one list, by name, each opened where its row's web_url says: this UI's pages, or Meko Cloud's
-// web app in a new tab. The Find a datapack box above them narrows it to the names that hold what's
-// typed, like Meko Cloud's.
+// The left rail: the Meko mark, the Status link, Agents, the Extensions group, Projects, the
+// datapacks, and the version (with a chip to the Status page's Updates card when a newer release is
+// out), the Settings gear and the theme toggle. Below md it's a drawer over the page, opened from the
+// top bar. The datapacks are one list, by name, each opened where its row's web_url says: this UI's
+// pages, or Meko Cloud's web app in a new tab. The Find a datapack box above them narrows it to the
+// names that hold what's typed, like Meko Cloud's.
 
 import { useState } from "react";
 import { Database, ExternalLink, Moon, Plus, RefreshCw, Search, Sun, Users, X } from "lucide-react";
@@ -13,6 +13,7 @@ import { href, navigate, type Route } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import { useUpdateAvailable } from "../lib/update";
 import type { Datapack } from "../lib/types";
+import { AgentsLink } from "./AgentsLink";
 import { DatapackDialog } from "./DatapackDialog";
 import { ExtensionsLink } from "./ExtensionsLink";
 import { ProjectsLink } from "./ProjectsLink";
@@ -89,6 +90,7 @@ export function Sidebar({
         </div>
         <div className="px-2 pb-2">
           <StatusLink active={view === "status"} />
+          <AgentsLink active={view === "agents"} />
           <ExtensionsLink active={view === "extensions"} />
           <ProjectsLink active={view === "projects" || view === "project"} />
         </div>

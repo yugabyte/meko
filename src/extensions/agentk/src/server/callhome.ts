@@ -5,6 +5,7 @@ import {
   type CallHomeKind, type FileTypeCount, type MekoUsage, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
   type CallHomeReport, type CallHomeTokens, type YbCallHome,
 } from '../shared/types.js';
+import { COMMAND, OLD_COMMANDS } from './cmdlink.js';
 import { mekoConfigured, type Config } from './config.js';
 import { openCodeCommand } from './opencode.js';
 import { all, get, kvGet, kvSet, type Db } from './db.js';
@@ -470,10 +471,15 @@ async function probeVersion(probe: Probe, cmd: string, args: string[], re: RegEx
   }
 }
 
+/** Whether a launchd job's label (`XPC_SERVICE_NAME`) is one of AgentK's, by any name the command has had (service.ts). */
+export function isAgentKJob(label: string): boolean {
+  return [COMMAND, ...OLD_COMMANDS].some((c) => label === `com.yugabyte.${c}` || label.startsWith(`com.yugabyte.${c}.`));
+}
+
 /** Which service manager runs this server, from what systemd and launchd put in its environment. */
 function serviceKind(): CallHomeInstall['service'] {
   if (process.platform === 'linux' && process.env.INVOCATION_ID) return 'systemd';
-  if (process.platform === 'darwin' && /com\.yugabyte\.(agentk|agent-k-local)\b/.test(process.env.XPC_SERVICE_NAME ?? '')) return 'launchd';
+  if (process.platform === 'darwin' && isAgentKJob(process.env.XPC_SERVICE_NAME ?? '')) return 'launchd';
   return 'none';
 }
 

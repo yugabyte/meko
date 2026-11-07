@@ -20,7 +20,6 @@ const LABELS: Record<Tab, string> = {
   artifacts: "Artifacts",
   search: "Search",
   gaps: "Context Gaps",
-  connect: "Connect",
 };
 
 export function DatapackHeader({

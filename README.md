@@ -74,7 +74,7 @@ Link Meko to [Meko Cloud](https://cloud.mekodata.ai/) by signing in with your br
 API key you make there:
 
 ```sh
-meko cloud_link          # sign in with your browser, or enter a key; reads a piped key; --off unlinks
+meko cloud-link          # sign in with your browser, or enter a key; reads a piped key; --off unlinks
 ```
 
 Or use the web UI's Settings › Meko Cloud.
@@ -113,7 +113,7 @@ merged PR, and keeps each project's designs and learnings in a Meko datapack.
 Install it with:
 ```sh
 meko extension install agentk     # -- --agent claude picks its coding agent
-me_koder ui                       # opens AgentK in your browser
+meko kode ui                      # opens AgentK in your browser
 ```
 
 ## How it works

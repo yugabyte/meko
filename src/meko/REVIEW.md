@@ -5,11 +5,11 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 **major** (wrong behavior users will hit), **minor** (clarity, style, small gaps).
 
 - [ ] `make test` and `make lint` pass in `src/meko`; new behavior has a test.
-- [ ] Tests never reach this machine's own extensions (an installed `me_koder`, or `agentk` and
-      `agent-k-local`, its old names): PATH stays
+- [ ] Tests never reach this machine's own extensions (an installed `me_kode`, or `me_koder`,
+      `agentk` and `agent-k-local`, its old names, or `me_present`): PATH stays
       `/usr/bin:/bin` (`noRealExtensions`) while anything can run one, and cleanups that run Meko
       commands leave the extensions alone (`setup`'s `stop --keep-extensions`), since cleanups run
-      last first and `t.Setenv` has restored PATH by then. A real `me_koder stop` ends every session.
+      last first and `t.Setenv` has restored PATH by then. A real `meko kode stop` ends every session.
 - [ ] Every database call goes through `internal/store`, the only package that imports the SQLite
       driver.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
@@ -92,8 +92,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] A release keeps working offline: the tarball bundles the models, the embedder and the reranker
       (`MEKO_MODELS_OFFLINE`), and
       `scripts/smoke-release.sh` passes on each platform.
-- [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `me_koder` (or its old
-      names, `agentk` and `agent-k-local`).
+- [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `me_kode` (or its old
+      names, `me_koder`, `agentk` and `agent-k-local`).
 - [ ] No internal hostnames, mount paths, tokens or personal data in the diff, the PR title or its
       description (the repo root's AGENTS.md): no real person's name, email, handle or IP
       address, no customer names, nothing a user wrote or stored (memories, turns, knowledge

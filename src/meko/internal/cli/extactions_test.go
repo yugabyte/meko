@@ -160,7 +160,7 @@ func TestRunExtensionInstallsWithoutATerminal(t *testing.T) {
 	_, tok, _ := run("token", "--data-dir", dir)
 	tok = strings.TrimSpace(tok)
 	home, _ := os.UserHomeDir()
-	ak := filepath.Join(home, ".local", "bin", "me_koder")
+	ak := filepath.Join(home, ".local", "bin", "me_kode")
 	sock := filepath.Join(shortDir(t), "web.sock")
 	webExtension(t, ak, sock)
 	listenAfter(t, sock, 0)

@@ -363,23 +363,23 @@ func TestLinkCommand(t *testing.T) {
 }
 
 // An extension's releases (Presenter's) go through the same App: its tarball and top folder named for
-// its package (presenter), its binary and its link in ~/.local/bin for its program (me_presenter).
+// its package (present), its binary and its link in ~/.local/bin for its program (me_present).
 func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	const next = "0.20261024.0"
 	goos, arch := Platform()
-	name := PackageTarball("presenter", next, goos, arch)
-	if want := "presenter-" + next + "-" + goos + "-" + arch + ".tar.gz"; name != want {
+	name := PackageTarball("present", next, goos, arch)
+	if want := "present-" + next + "-" + goos + "-" + arch + ".tar.gz"; name != want {
 		t.Fatalf("PackageTarball = %q, want %q", name, want)
 	}
-	tgz := tarballOf(t, "presenter", "me_presenter", next)
+	tgz := tarballOf(t, "present", "me_present", next)
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/o/r/releases":
 			_ = json.NewEncoder(w).Encode([]Release{
 				{Tag: TagPrefix + "0.20261030.0", Assets: []Asset{{Name: TarballName("0.20261030.0", goos, arch)}, {Name: Sums}}},
-				{Tag: "presenter-v0.20261025.0", Assets: []Asset{{Name: Sums}}}, // no tarball for this platform
-				{Tag: "presenter-v" + next, Assets: []Asset{
+				{Tag: "present-v0.20261025.0", Assets: []Asset{{Name: Sums}}}, // no tarball for this platform
+				{Tag: "present-v" + next, Assets: []Asset{
 					{Name: name, BrowserURL: srv.URL + "/tar"}, {Name: Sums, BrowserURL: srv.URL + "/sums"},
 					{Name: SumsSig, BrowserURL: srv.URL + "/sig"},
 				}},
@@ -400,26 +400,26 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, v, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, nil)
+	r, v, ok := PickPackage(rels, []string{"present-v"}, "present", goos, arch, nil)
 	if !ok || v != next {
 		t.Fatalf("picked %q %v", v, ok)
 	}
-	if _, _, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, map[string]bool{next: true}); ok {
+	if _, _, ok := PickPackage(rels, []string{"present-v"}, "present", goos, arch, map[string]bool{next: true}); ok {
 		t.Error("a bad version was picked")
 	}
-	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_presenter", Package: "presenter"}
+	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_present", Package: "present"}
 	if err = a.Stage(context.Background(), c, r, v); err != nil {
 		t.Fatal(err)
 	}
 	if err = a.Repoint(v); err != nil {
 		t.Fatal(err)
 	}
-	if a.Exe(v) != filepath.Join(a.Root, v, "bin", "me_presenter") {
+	if a.Exe(v) != filepath.Join(a.Root, v, "bin", "me_present") {
 		t.Errorf("Exe = %s", a.Exe(v))
 	}
 	home := t.TempDir()
 	link, err := a.LinkCommand(home)
-	if err != nil || link != filepath.Join(home, ".local", "bin", "me_presenter") {
+	if err != nil || link != filepath.Join(home, ".local", "bin", "me_present") {
 		t.Fatalf("link %q %v", link, err)
 	}
 	if got, ver, ok := Of(link); !ok || ver != next || got.Root != realPath(t, a.Root) {
@@ -427,26 +427,26 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	}
 }
 
-// A release from before its program's rename (only bin/me_presenter's old name, meko_presenter) gets the
+// A release from before its program's rename (only bin/me_kode's old name, me_koder) gets the
 // new name as a link when it's unpacked, and a version already installed gets it when app/current is
 // pointed at it, or when a failed update rolls back to it: Exe, CurrentExe and the link in
 // ~/.local/bin run it whichever version is current.
 func TestAppAdoptsAReleaseFromBeforeItsRename(t *testing.T) {
 	const old, older = "0.20261024.0", "0.20261023.0"
-	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_presenter", OldNames: []string{"meko_presenter"},
-		Package: "presenter", Private: true}
+	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_kode", OldNames: []string{"me_koder"},
+		Package: "agentk", Private: true}
 	if err := os.MkdirAll(a.Root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	f := filepath.Join(t.TempDir(), "x.tar.gz")
-	if err := os.WriteFile(f, tarballOf(t, "presenter", "meko_presenter", old), 0o600); err != nil {
+	if err := os.WriteFile(f, tarballOf(t, "agentk", "me_koder", old), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Unpack(f, old); err != nil {
 		t.Fatal(err)
 	}
-	if target, err := os.Readlink(a.Exe(old)); err != nil || target != "meko_presenter" {
-		t.Errorf("unpacked: bin/me_presenter -> %q (%v)", target, err)
+	if target, err := os.Readlink(a.Exe(old)); err != nil || target != "me_koder" {
+		t.Errorf("unpacked: bin/me_kode -> %q (%v)", target, err)
 	}
 	// Unpacked by a Meko from before the rename: only the old name.
 	bin := filepath.Join(a.Dir(older), "bin")
@@ -454,14 +454,14 @@ func TestAppAdoptsAReleaseFromBeforeItsRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	//nolint:gosec // G306: a test's program
-	if err := os.WriteFile(filepath.Join(bin, "meko_presenter"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "me_koder"), []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Repoint(older); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(a.CurrentExe()); err != nil {
-		t.Errorf("app/current/bin/me_presenter: %v", err)
+		t.Errorf("app/current/bin/me_kode: %v", err)
 	}
 	// Adopting again changes nothing, and a version with neither name is left alone.
 	if err := a.AdoptAll(); err != nil {
@@ -484,7 +484,7 @@ func TestAppAdoptsAReleaseFromBeforeItsRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	//nolint:gosec // G306: a test's program
-	if err := os.WriteFile(filepath.Join(ubin, "meko_presenter"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(ubin, "me_koder"), []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Switch(unadopted, old, 4); err != nil {
@@ -505,21 +505,21 @@ func TestAppAdoptsAReleaseFromBeforeItsRename(t *testing.T) {
 func TestPrivateAppUnpacksOwnerOnly(t *testing.T) {
 	const v = "0.20261024.0"
 	f := filepath.Join(t.TempDir(), "x.tar.gz")
-	if err := os.WriteFile(f, tarballOf(t, "presenter", "me_presenter", v), 0o600); err != nil {
+	if err := os.WriteFile(f, tarballOf(t, "agentk", "me_kode", v), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, private := range []bool{true, false} {
-		a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_presenter", Package: "presenter", Private: private}
+		a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_kode", Package: "agentk", Private: private}
 		if err := os.MkdirAll(a.Root, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := a.Unpack(f, v); err != nil {
 			t.Fatal(err)
 		}
-		want := map[string]os.FileMode{"bin": 0o755, "bin/me_presenter": 0o755, "VERSION": 0o644,
+		want := map[string]os.FileMode{"bin": 0o755, "bin/me_kode": 0o755, "VERSION": 0o644,
 			"memory_engine/dist/main.js": 0o644}
 		if private {
-			want = map[string]os.FileMode{"bin": 0o700, "bin/me_presenter": 0o700, "VERSION": 0o600,
+			want = map[string]os.FileMode{"bin": 0o700, "bin/me_kode": 0o700, "VERSION": 0o600,
 				"memory_engine/dist/main.js": 0o600}
 		}
 		for p, mode := range want {

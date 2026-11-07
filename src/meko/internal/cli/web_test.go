@@ -127,7 +127,7 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 }
 
 // Presenter is served like AgentK: registered, it names its socket at Meko's start, and the web
-// listener serves it at /ext/presenter/ and lists it for the sidebar.
+// listener serves it at /ext/present/ and lists it for the sidebar.
 func TestPresenterBesideMeko(t *testing.T) {
 	dir, port := setup(t)
 	webPort := os.Getenv("MEKO_PORT")
@@ -138,19 +138,19 @@ func TestPresenterBesideMeko(t *testing.T) {
 		t.Fatal(err)
 	}
 	echo := func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprintf(w, "presenter %s", r.URL.Path) //nolint:gosec // G705: a test server's plain-text reply
+		_, _ = fmt.Fprintf(w, "present %s", r.URL.Path) //nolint:gosec // G705: a test server's plain-text reply
 	}
 	ext := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(echo)}
 	go func() { _ = ext.Serve(ln) }()
 	t.Cleanup(func() { _ = ext.Close() })
-	cmd := filepath.Join(home, "me_presenter")
+	cmd := filepath.Join(home, "me_present")
 	reply := fmt.Sprintf(`{"socket":"%s","legacy":null}`, sock)
 	script := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = _handoff ] && { printf '%%s\\n' '%s'; exit 0; }\nexit 0\n", reply)
 	if err = os.WriteFile(cmd, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script
 		t.Fatal(err)
 	}
 	reg, _ := extensions.Load(dir)
-	reg.Entries["presenter"] = extensions.Entry{Command: cmd, InstalledByMeko: true}
+	reg.Entries["present"] = extensions.Entry{Command: cmd, InstalledByMeko: true}
 	if err = reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestPresenterBesideMeko(t *testing.T) {
 		return resp.StatusCode, string(b)
 	}
 	waitFor(t, "the web listener", func() bool { c, _ := get("/healthz"); return c == 200 })
-	if c, b := get("/ext/presenter/decks/x/map"); c != 200 || b != "presenter /decks/x/map" {
+	if c, b := get("/ext/present/decks/x/map"); c != 200 || b != "present /decks/x/map" {
 		t.Fatalf("Presenter through Meko: %d %q", c, b)
 	}
 	c, b := get("/api/v1/extensions")
@@ -184,8 +184,8 @@ func TestPresenterBesideMeko(t *testing.T) {
 	}
 	found := false
 	for _, e := range list.Data {
-		if e.Name == "presenter" {
-			found = e.Title == "Presenter" && e.Path == "/ext/presenter/" && e.Installed && e.Available
+		if e.Name == "present" {
+			found = e.Title == "Presenter" && e.Path == "/ext/present/" && e.Installed && e.Available
 		}
 	}
 	if !found {
@@ -234,6 +234,6 @@ func TestRemoteAccessWithoutItsCertificate(t *testing.T) {
 	}
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status", code, 0, out, "  ✗ Web UI          remote access is off")
-	code, _, errs = run("ui", "--data-dir", dir, "--no-open")
+	code, _, errs = run("ui", "--data-dir", dir)
 	want(t, "ui", code, exitError, errs, "can't be reached at https://")
 }

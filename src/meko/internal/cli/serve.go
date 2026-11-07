@@ -349,7 +349,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	local := agents.Target{Kind: agents.KindLocal, URL: fmt.Sprintf("http://127.0.0.1:%d/mcp", cfg.Server.Port),
 		Token: clientToken}
 	agentsMgr := &agents.Manager{Lock: agentsLock(l), Target: func() (agents.Target, error) { return local, nil }}
-	// The Meko Cloud link: the web UI and meko cloud_link change it; /mcp then offers its tools, the
+	// The Meko Cloud link: the web UI and meko cloud-link change it; /mcp then offers its tools, the
 	// agents an older Meko connected to it come back here, and the running extensions hear.
 	cloud = &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
 		List: cloudlink.ListDatapacks,
@@ -549,10 +549,11 @@ func makeMekoCLI(app update.App, log *slog.Logger) {
 	}
 }
 
-// renameExtensions moves this data folder's extensions installed under an older name of their
-// command onto the current one (extensions.Registry.Rename): AgentK's agentk becomes me_koder. Like
+// renameExtensions moves this data folder's release installs of extensions onto app/current's
+// program by its current name, with no command on PATH (extensions.Registry.Rename): AgentK's
+// ~/.local/bin/me_koder (or agentk) gives way to app/current/bin/me_kode, run as meko kode. Like
 // makeMekoCLI, serve runs it only once its release is past probation: a Meko rolled back after it
-// would have a registry naming links its catalog doesn't know, and old links it can't make again.
+// would have a registry naming a program its catalog doesn't know, and old links it can't make again.
 func renameExtensions(l paths.Layout, log *slog.Logger) {
 	home, err := os.UserHomeDir()
 	if err != nil {

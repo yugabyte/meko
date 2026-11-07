@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// The Connect page's Agents card and the Meko Cloud page's line about the agents a link change
+// The Agents page's card and the Meko Cloud page's line about the agents a link change
 // moved, against a faked /api/v1.
 
 import { act } from "react";
@@ -210,11 +210,22 @@ test("a failed connect shows Meko's message under the agent", async () => {
   expect(row("Codex").textContent).toContain("Not connected");
 });
 
-test("a server without the agents route shows no card", async () => {
+test("any other MCP client is pointed at the reply's target, with the token from meko token", async () => {
+  serve({
+    "GET /api/v1/agents": () => ({
+      data: { target: { kind: "local", url: LOCAL }, agents: [agent("kiro", "Kiro CLI", "none")] },
+    }),
+  });
+  await render(<AgentsCard />);
+  expect(text()).toContain("Any other MCP client: Streamable HTTP at this URL, with the token meko token prints");
+  expect(document.querySelector("pre")?.textContent).toBe(LOCAL);
+});
+
+test("a server without the agents route says what to run instead", async () => {
   serve({});
   await render(<AgentsCard />);
   expect(calls.map((c) => c.url)).toEqual(["/api/v1/agents"]);
-  expect(text()).toBe("");
+  expect(text()).toBe("This Meko is older than the Agents page: run meko agent connect <agent> on this computer, or update Meko.");
 });
 
 // Meko Cloud's settings, linked or not.

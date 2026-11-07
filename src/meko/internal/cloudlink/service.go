@@ -12,7 +12,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/agents"
 )
 
-// Service changes the link: the web UI's Settings › Meko Cloud and meko cloud_link go through it,
+// Service changes the link: the web UI's Settings › Meko Cloud and meko cloud-link go through it,
 // one change at a time.
 type Service struct {
 	Store Store

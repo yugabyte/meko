@@ -296,7 +296,7 @@ func TestAFailingExtensionGetsAFailRow(t *testing.T) {
 	}
 	reg, _ := extensions.Load(dir)
 	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
-	reg.Entries["presenter"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "me_presenter")}
+	reg.Entries["present"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "me_present")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 		t.Errorf("a command Meko didn't install was removed: %v", err)
 	}
 	code, _, errs = run("extension", "install", "frob", "--data-dir", dir)
-	want(t, "an unknown extension", code, 1, errs, "meko knows agentk, presenter")
+	want(t, "an unknown extension", code, 1, errs, "meko knows agentk, present")
 }
 
 // meko update on a Meko built from source updates no Meko, and goes on to the extensions.

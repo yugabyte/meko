@@ -57,7 +57,7 @@ export function AgentsCard({ usage }: { usage: Usage }) {
   const title = "Agents";
   const subtitle = "Who reads and writes this datapack";
   if (usage.agents.length === 0) {
-    return <MetricCard title={title} subtitle={subtitle} empty={["No agents yet", "Connect one from the Connect tab."]} />;
+    return <MetricCard title={title} subtitle={subtitle} empty={["No agents yet", "Connect one from the Agents page."]} />;
   }
   return (
     <MetricCard title={title} subtitle={subtitle}>

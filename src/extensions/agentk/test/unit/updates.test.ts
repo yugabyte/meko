@@ -163,7 +163,7 @@ describe('after an update', () => {
     expect(switchedAway(undefined)).toBe(false);
   });
 
-  describe('me_koder restart', () => {
+  describe('meko kode restart', () => {
     const services = (installed = true) => {
       const restarted: string[] = [];
       const svc = { installed: () => installed, restart: (s: string) => void restarted.push(s) } as unknown as ServiceManager;
@@ -189,7 +189,7 @@ describe('after an update', () => {
 });
 
 describe('the launcher', () => {
-  const launcher = resolve(__dirname, '../../packaging/me_koder');
+  const launcher = resolve(__dirname, '../../packaging/me_kode');
   let root: string;
   let bin: string;
   let log: string;
@@ -201,11 +201,11 @@ describe('the launcher', () => {
     log = join(root, 'meko.log');
     const dir = join(root, 'home', 'app', '0.2.0');
     for (const d of ['bin', 'node/bin', 'lib/dist/server']) mkdirSync(join(dir, d), { recursive: true });
-    copyFileSync(launcher, join(dir, 'bin', 'me_koder'));
-    chmodSync(join(dir, 'bin', 'me_koder'), 0o755);
+    copyFileSync(launcher, join(dir, 'bin', 'me_kode'));
+    chmodSync(join(dir, 'bin', 'me_kode'), 0o755);
     // Its names before, as a release carries them, which services installed then and older Mekos run.
-    symlinkSync('me_koder', join(dir, 'bin', 'agentk'));
-    symlinkSync(process.execPath, join(dir, 'node', 'bin', 'me_koder'));
+    symlinkSync('me_kode', join(dir, 'bin', 'agentk'));
+    symlinkSync(process.execPath, join(dir, 'node', 'bin', 'me_kode'));
     writeFileSync(join(dir, 'VERSION'), '0.2.0\n');
     writeFileSync(join(dir, 'lib', 'dist', 'server', 'cli.js'), 'console.log("node", process.argv.slice(2).join(" "))\n');
     symlinkSync('0.2.0', join(root, 'home', 'app', 'current'));
@@ -218,7 +218,7 @@ describe('the launcher', () => {
     writeFileSync(join(bin, 'meko'), `#!/bin/sh\necho "meko $*" >> "${log}"\n[ "$1 $2" = "_launch --supported" ] && exit ${supported ? 0 : 2}\necho launched\n`);
     chmodSync(join(bin, 'meko'), 0o755);
   };
-  const run = (args: string[], env: Record<string, string> = {}, command = 'me_koder') =>
+  const run = (args: string[], env: Record<string, string> = {}, command = 'me_kode') =>
     execFileSync(join(root, 'home', 'app', 'current', 'bin', command), args, {
       encoding: 'utf8',
       env: { PATH: `${bin}:/usr/bin:/bin`, HOME: join(root, 'h'), ...env },
@@ -230,7 +230,7 @@ describe('the launcher', () => {
     meko(true);
     expect(run([cmd])).toBe('launched');
     expect(run([cmd], {}, 'agentk')).toBe('launched');
-    const launch = `meko _launch agentk ${join(root, 'home', 'app', '0.2.0', 'bin', 'me_koder')} ${cmd}`;
+    const launch = `meko _launch agentk ${join(root, 'home', 'app', '0.2.0', 'bin', 'me_kode')} ${cmd}`;
     expect(calls()).toEqual(['meko _launch --supported', launch, 'meko _launch --supported', launch]);
   });
 

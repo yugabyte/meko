@@ -223,7 +223,7 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 	}
 	reg, _ := extensions.Load(dir)
 	reg.Entries["agentk"] = extensions.Entry{Command: script("agentk", "sleep 1\necho 'AgentK 1.0'\n")}
-	reg.Entries["presenter"] = extensions.Entry{Command: script("presenter", "echo 'Presenter 1.0'\nsleep 30\n")}
+	reg.Entries["present"] = extensions.Entry{Command: script("present", "echo 'Presenter 1.0'\nsleep 30\n")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -235,14 +235,14 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 		t.Errorf("status took %s", took)
 	}
 	want(t, "status", code, 0, out, "  ✓ AgentK          running, AgentK 1.0\n"+
-		"  ! Presenter       didn't answer in 2s (me_presenter status)\n")
+		"  ! Presenter       didn't answer in 2s (meko present status)\n")
 	want(t, "status's links", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
 	want(t, "status's Cloud", code, 0, out, "\n  Cloud   not linked\n")
 	want(t, "status's next steps", code, 0, out, "More detail: meko status --verbose\n\nNext:\n  meko ui ")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status --verbose", code, 0, out, "  Extension:     agentk, running (AgentK 1.0)\n"+
-		"  Extension:     presenter, didn't answer in 2s (me_presenter status)\n")
+		"  Extension:     present, didn't answer in 2s (meko present status)\n")
 }
 
 func TestStartStatusStop(t *testing.T) {
@@ -1205,7 +1205,11 @@ func TestDestroyOnlyExtensionData(t *testing.T) {
 
 func TestUI(t *testing.T) {
 	dir, port := setup(t)
-	code, _, errs := run("ui", "--data-dir", dir, "--no-open")
+	display := true
+	can := canOpenBrowser
+	canOpenBrowser = func() bool { return display }
+	t.Cleanup(func() { canOpenBrowser = can })
+	code, _, errs := run("ui", "--data-dir", dir)
 	want(t, "ui when stopped", code, exitNotRunning, errs, "isn't running")
 
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
@@ -1218,14 +1222,21 @@ func TestUI(t *testing.T) {
 	t.Cleanup(func() { openBrowser = open })
 
 	// With local access the link is Meko's own address: it carries no credential.
-	code, out, _ = run("ui", "--data-dir", dir, "--no-open")
-	if code != 0 || strings.TrimSpace(out) != web+"/" || len(opened) != 0 {
-		t.Errorf("ui --no-open: %d %q, opened %v", code, out, opened)
+	code, out, _ = run("ui", "--data-dir", dir)
+	if link := strings.TrimSpace(out); code != 0 || link != web+"/" || len(opened) != 1 || opened[0] != link {
+		t.Errorf("ui: %d %q, opened %v", code, out, opened)
 	}
-	code, out, _ = run("ui", "/ext/agentk/", "--data-dir", dir)
-	if link := strings.TrimSpace(out); code != 0 || link != web+"/ext/agentk/" || len(opened) != 1 || opened[0] != link {
-		t.Errorf("ui /ext/agentk/: %d %q, opened %v", code, out, opened)
+	// With no browser here (over SSH), it only prints the link.
+	display = false
+	code, out, _ = run("ui", "--data-dir", dir)
+	if code != 0 || strings.TrimSpace(out) != web+"/" || len(opened) != 1 {
+		t.Errorf("ui with no browser: %d %q, opened %v", code, out, opened)
 	}
+	// It opens Meko's web UI only: an extension's page is opened through Meko's, or its own command.
+	code, _, errs = run("ui", "/ext/agentk/", "--data-dir", dir)
+	want(t, "ui with a path", code, exitUsage, errs, `unexpected argument "/ext/agentk/"`)
+	code, _, errs = run("ui", "--no-open", "--data-dir", dir)
+	want(t, "ui --no-open", code, exitUsage, errs, "Run meko ui --help for its flags")
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status's web line", code, 0, out, "Humans:        "+web+" (web UI), local, from this computer")
 	code, out, _ = run("token", "--data-dir", dir, "--json")
@@ -1253,7 +1264,7 @@ func TestUI(t *testing.T) {
 	}
 	code, out, _ = run("ui", "stop", "--data-dir", dir)
 	want(t, "ui stop again", code, 0, out, "The web UI is already off")
-	code, _, errs = run("ui", "--data-dir", dir, "--no-open")
+	code, _, errs = run("ui", "--data-dir", dir)
 	want(t, "ui while off", code, exitError, errs, "the web UI is off. Turn it on with meko ui start")
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status while off", code, 0, out, "Web UI          off (meko ui start turns it on)")
@@ -1265,7 +1276,7 @@ func TestUI(t *testing.T) {
 	want(t, "start while off", code, 0, out+errs, "Web UI          off (meko ui start turns it on)")
 	code, out, _ = run("ui", "start", "--data-dir", dir)
 	want(t, "ui start", code, 0, out, "Started the web UI at "+web)
-	code, out, _ = run("ui", "--data-dir", dir, "--no-open")
+	code, out, _ = run("ui", "--data-dir", dir)
 	if code != 0 || strings.TrimSpace(out) != web+"/" {
 		t.Errorf("ui after ui start: %d %q", code, out)
 	}

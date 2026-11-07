@@ -1,0 +1,45 @@
+#!/bin/sh
+# Presenter's launcher, in a release as present-<version>/bin/me_present. Meko installs releases
+# as <Meko's data folder>/extensions/present/app/<version>, with app/current pointing at the one in
+# use (meko extension install, meko extension update), and runs it for `meko present <command>`.
+#
+# Runs the bundled Node (node/bin/me_present, so the kernel names the process me_present, not
+# node) on the bundled server, with PRESENT_APP_DIR naming this release's folder
+# and PRESENT_LAUNCHER this file (`meko present start` runs `serve` through it). It hands `serve`
+# to Meko (`meko _launch present`), which counts the starts of a version on probation after an
+# update, rolls back one that fails three times, takes a clean stop off the count, and finishes the
+# update once the version has served 5 minutes (src/meko/internal/update/pending.go, the rules Meko
+# follows for itself). Meko runs this file again with MEKO_LAUNCHED set, and then it runs Node. With
+# no meko that has `_launch`, it runs Node itself, and a failed update doesn't roll back.
+set -eu
+
+# Resolve our real location, following symlinks (~/.local/bin -> app/current -> app/<version>).
+self=$0
+while [ -h "$self" ]; do
+  dir=$(cd -P "$(dirname "$self")" && pwd)
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$dir/$link ;;
+  esac
+done
+bin_dir=$(cd -P "$(dirname "$self")" && pwd)
+PRESENT_APP_DIR=$(cd -P "$bin_dir/.." && pwd)
+PRESENT_LAUNCHER=$bin_dir/me_present
+export PRESENT_APP_DIR PRESENT_LAUNCHER
+
+node="$PRESENT_APP_DIR/node/bin/me_present"
+cli="$PRESENT_APP_DIR/lib/dist/server/cli.js"
+
+if [ -z "${MEKO_LAUNCHED:-}" ] && [ "${1:-}" = "serve" ]; then
+  # Meko's launcher, wherever the service's short PATH leaves it.
+  meko=$(command -v meko 2>/dev/null || true)
+  [ -n "$meko" ] || meko=$HOME/.local/bin/meko
+  [ -x "$meko" ] || meko=${XDG_DATA_HOME:-$HOME/.local/share}/meko/app/current/bin/meko
+  if [ -x "$meko" ] && "$meko" _launch --supported >/dev/null 2>&1; then
+    exec "$meko" _launch present "$PRESENT_LAUNCHER" "$@"
+  fi
+  echo "me_present: no meko with _launch was found, so a failed update won't roll back" >&2
+fi
+
+exec "$node" --disable-warning=ExperimentalWarning "$cli" "$@"

@@ -36,10 +36,10 @@ async function ghWithin(cwd: string, timeoutMs: number, ...args: string[]): Prom
  */
 function ghMissing(e: unknown, cwd: string): Error | null {
   if ((e as NodeJS.ErrnoException).code !== 'ENOENT' || !existsSync(cwd)) return null;
-  if (!loginPathMissing) return new Error("AgentK can't find gh, GitHub's command-line tool. Install gh, then run me_koder restart.");
+  if (!loginPathMissing) return new Error("AgentK can't find gh, GitHub's command-line tool. Install gh, then run meko kode restart.");
   const allow = process.platform === 'darwin'
-    ? ' If macOS asked whether meko may open a folder, allow it (System Settings › Privacy & Security › Files and Folders), then run me_koder restart.'
-    : ' Run me_koder restart.';
+    ? ' If macOS asked whether meko may open a folder, allow it (System Settings › Privacy & Security › Files and Folders), then run meko kode restart.'
+    : ' Run meko kode restart.';
   return new Error(`AgentK can't find gh, because it couldn't read PATH from your login shell when it started.${allow}`);
 }
 

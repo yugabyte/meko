@@ -47,7 +47,7 @@ func send(t *testing.T, method, url, payload string, header map[string]string) (
 	return code, b
 }
 
-// The link's routes take the admin token (meko cloud_link), never an agent's client token, which
+// The link's routes take the admin token (meko cloud-link), never an agent's client token, which
 // can't read it or point it elsewhere.
 func TestCloudRoutesWithTokens(t *testing.T) {
 	ln, err := Listen(0)

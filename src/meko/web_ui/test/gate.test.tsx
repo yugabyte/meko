@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-// The gate in a browser: there's no login, so a page load shows the app; the old sign-in and account
-// addresses lead into it; and a refused request shows its note in place. Against a faked /api/v1.
+// The gate in a browser: there's no login, so a page load shows the app; the old sign-in, account
+// and datapack Connect addresses lead into it; and a refused request shows its note in place. Against a faked /api/v1.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -64,8 +64,8 @@ test("an old sign-in link goes on to where it was headed", async () => {
 test("an old sign-in link to an extension's page loads that page, not the app", async () => {
   serve(remote);
   const replace = vi.spyOn(window.location, "replace").mockImplementation(() => {});
-  await open("/signin?next=%2Fext%2Fpresenter%2Fdeck%2F1");
-  expect(replace).toHaveBeenCalledWith("/ext/presenter/deck/1");
+  await open("/signin?next=%2Fext%2Fpresent%2Fdeck%2F1");
+  expect(replace).toHaveBeenCalledWith("/ext/present/deck/1");
 });
 
 test("an old sign-in link can't lead to another site", async () => {
@@ -81,6 +81,18 @@ test("an old setup link goes to the start, and the old account page to Settings"
   act(() => root.unmount());
   await open("/account");
   expect(here()).toBe("/settings");
+});
+
+test("a datapack's old Connect tab goes to the Agents page", async () => {
+  serve(remote);
+  await open("/datapacks/abc/connect");
+  expect(here()).toBe("/agents");
+  act(() => root.unmount());
+  await open("/datapacks/abc/connect/");
+  expect(here()).toBe("/agents");
+  act(() => root.unmount());
+  await open("/datapacks/abc/overview");
+  expect(here()).toBe("/datapacks/abc/overview");
 });
 
 test("local access that Meko refuses says the request wasn't local", async () => {

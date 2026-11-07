@@ -89,7 +89,7 @@ func notLinkedOr(c echo.Context, err error) error {
 		return err
 	}
 	return envelope.Fail(c, http.StatusConflict, cloudlink.CodeNotLinked,
-		"This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link.")
+		"This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud-link.")
 }
 
 // byID serves a route that takes a datapack in the path and that Meko Cloud's REST API has too: h for

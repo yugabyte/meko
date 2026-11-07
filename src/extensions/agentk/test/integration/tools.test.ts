@@ -32,7 +32,7 @@ type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-describe("AgentK's session tools through me_koder mcp (real session host + git, fake claude, GitHub mocked)", () => {
+describe("AgentK's session tools through me_kode mcp (real session host + git, fake claude, GitHub mocked)", () => {
   let env: TestEnv;
   let projectId: string;
   let lead: string;
@@ -43,7 +43,7 @@ describe("AgentK's session tools through me_koder mcp (real session host + git, 
   } as IssueOrPr);
   const idle = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.status === 'idle' || x.status === 'needs_input', 10000, 'first turn');
   /**
-   * The tools as an agent in `sessionId` sees them: `me_koder mcp` with that session's token, its
+   * The tools as an agent in `sessionId` sees them: `me_kode mcp` with that session's token, its
    * messages carried in memory from the MCP SDK's own client.
    */
   async function connect(sessionId: string | null, token?: string) {

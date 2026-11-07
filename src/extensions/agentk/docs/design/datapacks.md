@@ -109,7 +109,7 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > nothing else; it can't be turned off. It doesn't know or ask whether that Meko is linked to Meko
 > Cloud: Meko owns the link (the Meko Cloud, or other Meko server, its extensions use, and its API
 > key, in `cloud.toml` and Meko's secret store; Meko's `docs/cloud.md`), set in Meko's web UI
-> (**Settings › Meko Cloud**, `/settings/meko-cloud`) or with `meko cloud_link`. AgentK calls that
+> (**Settings › Meko Cloud**, `/settings/meko-cloud`) or with `meko cloud-link`. AgentK calls that
 > Meko's `/mcp` with its URL and client token, and its REST API at `/api/v1` on the same origin
 > (`mekoApiBase` in `mekolocal.ts`, `resolveMekoApiUrl`), for sharing, uploads, Context Gaps and the
 > agents' list. That Meko serves a datapack it has and, while it's linked, passes any other id on to
@@ -156,7 +156,7 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   them in the file (`oldMekoKeys`: a rollback to a release that read them restores only `state.db`,
 >   and one may be the only copy of a key never linked in Meko), and so are `MEKO_API_KEY`, `MEKO_MCP_URL`, `MEKO_WEB_URL`, `MEKO_API_URL` and Claude Code's
 >   settings' `env`. It hands nothing to Meko: a key that was never linked is linked in Meko's web UI
->   or with `meko cloud_link`.
+>   or with `meko cloud-link`.
 > - **At install:** the installer asks for no key, and uses the Meko on this computer, storing
 >   nothing of it. `--meko-url` and `--meko-key` are still taken, and unused: `meko extension install
 >   agentk` passes them with Meko's own URL and token, and refuses an AgentK whose files don't

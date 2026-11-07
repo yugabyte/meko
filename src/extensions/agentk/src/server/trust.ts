@@ -8,6 +8,34 @@ export function claudeConfigPath(): string {
   return process.env.CLAUDE_CONFIG_DIR ? join(process.env.CLAUDE_CONFIG_DIR, '.claude.json') : join(homedir(), '.claude.json');
 }
 
+let accountCache: { key: string; account: string | null } | null = null;
+
+/**
+ * The Claude account Claude Code is signed in to (`oauthAccount` in its global config, which a
+ * sign-in rewrites), as `accountUuid/organizationUuid`, or null when it has none. Read again
+ * only when the file changes.
+ */
+export function claudeAccount(): string | null {
+  const file = claudeConfigPath();
+  let key: string;
+  try {
+    const st = statSync(file);
+    key = `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return null;
+  }
+  if (accountCache?.key === key) return accountCache.account;
+  let account: string | null = null;
+  try {
+    const o = (JSON.parse(readFileSync(file, 'utf8')) as { oauthAccount?: { accountUuid?: unknown; organizationUuid?: unknown } }).oauthAccount;
+    if (typeof o?.accountUuid === 'string' && o.accountUuid) account = `${o.accountUuid}/${typeof o.organizationUuid === 'string' ? o.organizationUuid : ''}`;
+  } catch {
+    return accountCache?.account ?? null; // caught mid-write: keep what it said
+  }
+  accountCache = { key, account };
+  return account;
+}
+
 interface ClaudeJson {
   projects?: Record<string, { hasTrustDialogAccepted?: boolean } & Record<string, unknown>>;
   [k: string]: unknown;
