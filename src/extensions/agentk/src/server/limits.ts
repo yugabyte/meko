@@ -4,6 +4,8 @@ import { kvGet, kvSet, type Db } from './db.js';
 const KV_KEY = 'plan_limits';
 /** Each session's last reading of each window, so a server restart doesn't turn repeats into first readings. */
 const SEEN_KEY = 'plan_limits_seen';
+/** The Claude account the stored limits belong to (`ClaudeAccount`), so a sign-in to another one starts afresh. */
+const ACCOUNT_KEY = 'plan_limits_account';
 /**
  * How far below a session's own last reading a reading must be to count as new: two status
  * line runs can reach the server out of order (each is sent in the background), and the older
@@ -72,6 +74,9 @@ function newerWindow(a: LimitWindow | null, b: LimitWindow | null, fresh = false
 
 type Seen = Record<string, Pick<PlanLimits, 'fiveHour' | 'sevenDay'>>;
 
+/** Which Claude account is signed in (`accountUuid/organizationUuid`), or null when unknown (signed out, an API key). */
+export type ClaudeAccount = () => string | null;
+
 /**
  * The account's plan limits. Every session reports the same account, but an idle session can
  * re-run its status line with an old reading, or one without a window, so reports are merged
@@ -85,8 +90,15 @@ export class PlanLimitsStore {
   private last: PlanLimits | null = null;
   private savedAt = 0;
   private seen: Seen = {};
+  /** The account `last` belongs to; null until one is known. */
+  private account: string | null = null;
+  /**
+   * Each session's last reading from before a change of account: Claude keeps showing it until
+   * its next reply, so a repeat of it is the old account's and is ignored.
+   */
+  private before: Seen = {};
 
-  constructor(private db: Db, private changed: () => void) {
+  constructor(private db: Db, private changed: () => void, private signedIn: ClaudeAccount = () => null) {
     const read = <T>(key: string, empty: T): T => {
       try {
         return (JSON.parse(kvGet(db, key) ?? 'null') as T | null) ?? empty;
@@ -96,6 +108,27 @@ export class PlanLimitsStore {
     };
     this.last = read<PlanLimits | null>(KV_KEY, null);
     this.seen = read<Seen>(SEEN_KEY, {});
+    this.account = kvGet(db, ACCOUNT_KEY) || null;
+  }
+
+  /**
+   * Starts afresh when Claude is signed in to another account: the limits are the old account's.
+   * Returns whether it did. Being signed out (no account) isn't a change: the next sign-in is.
+   */
+  private checkAccount(): boolean {
+    const now = this.signedIn();
+    if (!now || now === this.account) return false;
+    const first = this.account === null;
+    this.account = now;
+    kvSet(this.db, ACCOUNT_KEY, now);
+    if (first) return false; // an upgrade: the limits AgentK has are this account's
+    this.before = this.seen;
+    this.seen = {};
+    this.last = null;
+    this.savedAt = 0;
+    kvSet(this.db, SEEN_KEY, '{}');
+    kvSet(this.db, KV_KEY, 'null');
+    return true;
   }
 
   /** Takes a session's status line input (see `take`). */
@@ -113,8 +146,15 @@ export class PlanLimitsStore {
    * confirms them and a minute has passed (so "as of" stays close).
    */
   private take(session: string, reading: PlanLimits | null, now: number): void {
+    if (this.checkAccount()) this.changed();
     const reported = currentLimits(reading, now);
     if (!reported) return; // nothing, or only windows that have already reset
+    const old = this.before[session];
+    if (old) {
+      // The session's first reading since the change of account: a repeat of its last is the old account's.
+      if (sameWindow(old.fiveHour, reported.fiveHour ?? old.fiveHour) && sameWindow(old.sevenDay, reported.sevenDay ?? old.sevenDay)) return;
+      delete this.before[session];
+    }
     const before = this.seen[session];
     const prev = currentLimits(this.last, now);
     const merged = (k: 'fiveHour' | 'sevenDay') => {
@@ -152,6 +192,7 @@ export class PlanLimitsStore {
   }
 
   current(now = Date.now()): PlanLimits | null {
+    this.checkAccount();
     return currentLimits(this.last, now);
   }
 }

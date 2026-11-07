@@ -160,6 +160,43 @@ describe('PlanLimitsStore', () => {
     expect(weekly(again)).toBe(7);
     db.close();
   });
+
+  it("starts afresh when Claude signs in to another account, ignoring the old account's repeats", () => {
+    const db = openDb(':memory:');
+    let account: string | null = 'alice/org';
+    let changes = 0;
+    const store = new PlanLimitsStore(db, () => changes++, () => account);
+    const s = NOW / 1000;
+    // Alice's week is nearly used and resets in three days.
+    store.report('idle', input({ used_percentage: 70, resets_at: s + 3600 }, { used_percentage: 80, resets_at: s + 3 * 86_400 }), NOW);
+    store.report('busy', input({ used_percentage: 70, resets_at: s + 3600 }, { used_percentage: 80, resets_at: s + 3 * 86_400 }), NOW);
+    expect(store.current(NOW)?.sevenDay?.usedPercent).toBe(80);
+
+    // Signed in as Bob, whose week resets sooner: Alice's numbers go at once.
+    account = 'bob/org';
+    expect(store.current(NOW + 1000)).toBeNull();
+    // The idle session's status line repeats Alice's reading until its next reply: ignored.
+    store.report('idle', input({ used_percentage: 70, resets_at: s + 3600 }, { used_percentage: 80, resets_at: s + 3 * 86_400 }), NOW + 2000);
+    expect(store.current(NOW + 2000)).toBeNull();
+    // Bob's first reading, lower and with an earlier reset, is taken.
+    store.report('busy', input({ used_percentage: 4, resets_at: s + 7200 }, { used_percentage: 10, resets_at: s + 2 * 86_400 }), NOW + 3000);
+    expect(store.current(NOW + 3000)).toMatchObject({ fiveHour: { usedPercent: 4 }, sevenDay: { usedPercent: 10 } });
+    // The idle session's next reply reads Bob's account too.
+    store.report('idle', input({ used_percentage: 5, resets_at: s + 7200 }, { used_percentage: 10, resets_at: s + 2 * 86_400 }), NOW + 4000);
+    expect(store.current(NOW + 4000)).toMatchObject({ fiveHour: { usedPercent: 5 }, sevenDay: { usedPercent: 10 } });
+
+    // Signed out: not a change of account. A restart keeps Bob's numbers.
+    account = null;
+    expect(new PlanLimitsStore(db, () => undefined, () => 'bob/org').current(NOW + 5000)?.sevenDay?.usedPercent).toBe(10);
+    db.close();
+  });
+
+  it('keeps the limits it has the first time it learns the account (an upgrade)', () => {
+    const db = openDb(':memory:');
+    new PlanLimitsStore(db, () => undefined).report('s1', input(null, { used_percentage: 30, resets_at: NOW / 1000 + 86_400 }), NOW);
+    expect(new PlanLimitsStore(db, () => undefined, () => 'alice/org').current(NOW)?.sevenDay?.usedPercent).toBe(30);
+    db.close();
+  });
 });
 
 describe("the user's own status line", () => {
