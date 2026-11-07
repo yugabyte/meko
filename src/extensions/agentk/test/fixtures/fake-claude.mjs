@@ -366,7 +366,12 @@ async function turn(text) {
   }
   if (text.includes('MEKO_SEARCH')) await mekoSearch();
   if (text.includes('ASK_USER') && modOn) await askUser();
-  if (text.includes('kode-review-')) await reviewSteps(text);
+  if (text.includes('kode-review-')) {
+    await reviewSteps(text).catch((e) => {
+      appendFileSync(join(dir, 'review-starts.jsonl'), JSON.stringify({ error: String(e?.stack ?? e) }) + '\n');
+      throw e;
+    });
+  }
   respond();
   // BACKGROUND: the turn ends with a shell and a subagent still running in the background, as
   // Claude Code's Stop reports them.
@@ -399,7 +404,14 @@ async function reviewSteps(text) {
   const skip = read('review-skip', []);
   const once = read('review-skip-once', []);
   for (const m of text.matchAll(/Read (\S+) and do what it says\./g)) {
-    const file = readFileSync(m[1], 'utf8');
+    appendFileSync(join(dir, 'review-starts.jsonl'), JSON.stringify({ file: m[1], at: Date.now() }) + '\n');
+    let file;
+    try {
+      file = readFileSync(m[1], 'utf8');
+    } catch (e) {
+      appendFileSync(join(dir, 'review-starts.jsonl'), JSON.stringify({ file: m[1], error: String(e) }) + '\n');
+      throw e;
+    }
     const step = /"step": "([^"]+)"/.exec(file)?.[1];
     const tool = /call `([^`]+)` once/.exec(file)?.[1]?.split('__').pop();
     if (!step || !tool || skip.includes(step)) continue;
