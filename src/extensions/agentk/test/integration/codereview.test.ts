@@ -667,7 +667,14 @@ describe('code review before the PR (real session host + git, fake claude runnin
 
   describe('findings that wait on you (check)', () => {
     const one = (line: number, severity: string, comment: string) => ({ file: 'src/a.ts', line, severity, comment, gotchas: [] });
-    const waiting = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.codeReview?.state === 'triage', 30000, 'the findings to wait on you');
+    // On a timeout, what the review's session was asked last and what it answered say where it stopped.
+    const waiting = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.codeReview?.state === 'triage', 30000, 'the findings to wait on you')
+      .catch((e: Error) => {
+        const child = all<{ claude_session_id: string }>(env.core.db, 'SELECT claude_session_id FROM sessions WHERE parent_id = ?', id).at(-1);
+        const asked = child ? prompts(child.claude_session_id).slice(-2) : [];
+        const calls = existsSync(join(env.fakeDir, 'review-calls.jsonl')) ? readFileSync(join(env.fakeDir, 'review-calls.jsonl'), 'utf8') : '';
+        throw new Error(`${e.message}\nthe review session was asked last: ${JSON.stringify(asked)}\nits tool calls: ${calls}`);
+      });
     const keyAt = (id: string, line: number) => env.core.reviews.detail(id).findings.find((f) => f.line === line)!.key;
 
     it("holds a round's findings for your notes and dismissals, through Open PR, then sends the rest with the notes", async () => {
