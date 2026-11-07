@@ -128,7 +128,7 @@ on Settings › General writes
 `YB_DISABLE_CALLHOME` set to a true word (`true`, `t`, `yes`, `y`, `1`) in the server's own environment,
 yugabyted's switch, turns it off too, and the checkbox then shows off and disabled, naming it
 (`Settings.callHomeOffBy`). Under the systemd or launchd service the server's environment is the
-unit's or the plist's, not the shell's that ran `me_koder start`, so a shell `export` doesn't reach it:
+unit's or the plist's, not the shell's that ran `meko kode start`, so a shell `export` doesn't reach it:
 use the checkbox or `[call_home] enabled` there.
 
 **Downloads** aren't sent from here: GitHub counts each release asset's downloads, and a pruned

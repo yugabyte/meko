@@ -111,7 +111,7 @@ and skips the rest.
 
 A build that fails leaves no project and answers 500 with the reason.
 
-**A fresh install.** `me_koder install` writes `[welcome] tour = "agentk-101"` into config.toml only
+**A fresh install.** `meko kode install` writes `[welcome] tour = "agentk-101"` into config.toml only
 when it made config.toml (`welcomeTour`), and an interactive install whose server answers opens
 AgentK in the browser (`opensBrowser`: not with `--non-interactive`, which Meko's Extensions page
 uses, and not over SSH or without a display). The server's start (`startOnFreshInstall`, after

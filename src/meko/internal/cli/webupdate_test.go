@@ -230,8 +230,8 @@ func TestServeRenamesExtensionsPastProbation(t *testing.T) {
 	if target, err := os.Readlink(old); err != nil || filepath.Base(target) != "agentk" {
 		t.Fatalf("on probation ~/.local/bin/agentk -> %q, %v", target, err)
 	}
-	if _, err := os.Lstat(filepath.Join(filepath.Dir(old), "me_koder")); !os.IsNotExist(err) {
-		t.Fatalf("~/.local/bin/me_koder on probation: %v", err)
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(old), "me_kode")); !os.IsNotExist(err) {
+		t.Fatalf("~/.local/bin/me_kode on probation: %v", err)
 	}
 	finishUpdate(context.Background(), app, release, 0, paths.New(dir), slog.New(slog.DiscardHandler))
 	wantRenamed(t, dir, old)

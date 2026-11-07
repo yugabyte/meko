@@ -17,11 +17,11 @@ set -eu
 TYPES='feat|fix|perf|deps|ci|test|docs|nit|chore'
 RELEASE='feat|fix|perf|deps'
 # The components a title names: agentk (src/extensions/agentk), meko (Meko, in src/meko),
-# presenter (src/extensions/presenter) and repo (the shared root), with an optional area after a
+# present (src/extensions/present) and repo (the shared root), with an optional area after a
 # slash. A change that ships in more than one names each, comma-separated (feat(agentk,meko): ...),
 # and releases every product it names (scripts/release/product.sh). Each but repo is a component of
 # scripts/ci-scope.sh too (test/unit/check-title.test.ts checks).
-COMPONENTS='agentk|meko|presenter|repo'
+COMPONENTS='agentk|meko|present|repo'
 MAX=72
 
 length=true

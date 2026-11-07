@@ -138,7 +138,7 @@ func TestExtensionsOnlyUpdater(t *testing.T) {
 	u := &Updater{ExtensionsOnly: true, Version: "0.0.0-dev", Client: c, DataDir: data, Log: slog.New(slog.DiscardHandler),
 		FirstCheck: time.Millisecond, Interval: time.Hour,
 		Extensions: func(rels []Release) map[string]ExtensionState {
-			return map[string]ExtensionState{"presenter": {Latest: "0.20261024.0"}}
+			return map[string]ExtensionState{"present": {Latest: "0.20261024.0"}}
 		},
 		AfterCheck: func(context.Context) { close(ran) }}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -150,7 +150,7 @@ func TestExtensionsOnlyUpdater(t *testing.T) {
 		t.Fatal("AfterCheck didn't run")
 	}
 	st, ok := ReadState(data)
-	if !ok || st.Latest != "" || st.Extensions["presenter"].Latest != "0.20261024.0" {
+	if !ok || st.Latest != "" || st.Extensions["present"].Latest != "0.20261024.0" {
 		t.Errorf("state %+v", st)
 	}
 }

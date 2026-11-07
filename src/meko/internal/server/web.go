@@ -202,7 +202,7 @@ func (s *Server) extensionInfo(name string, installed bool) ExtensionInfo {
 }
 
 // overtaken reports whether row's failed job no longer says how the extension is: something
-// outside the Extensions page (meko extension install, me_koder start) did what the job couldn't.
+// outside the Extensions page (meko extension install, me_kode start) did what the job couldn't.
 // The job is in memory until the next one, so without this a failed Install would stay on the card
 // of an extension installed from a terminal until Meko restarts. Only a running extension
 // overtakes one: an install can fail after registering it (it never answered on its socket, or a

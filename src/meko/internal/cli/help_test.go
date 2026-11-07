@@ -36,6 +36,9 @@ func TestEveryCommandHasHelp(t *testing.T) {
 			if listed == (c.hidden || c.subcommands) {
 				t.Errorf("%s %s: listed in --help %v, hidden %v", prog, c.name, listed, c.hidden)
 			}
+			if _, ok := extensionOfVerb(c.name); ok && prog == progMeko {
+				continue // meko kode --help is AgentK's own help: TestExtensionCommandRunsItsProgram
+			}
 			var out, errb bytes.Buffer
 			code := runProg(prog, append(strings.Fields(c.name), "--help"), &out, &errb)
 			if code != exitOK || !strings.Contains(out.String(), "Usage: "+c.usage) ||
@@ -146,7 +149,7 @@ func TestExtensionCommands(t *testing.T) {
 		t.Errorf("meko help extension: exit %d, %q", code, help)
 	}
 	code, out, _ = run("extension", "delete", "-h")
-	want(t, "extension delete -h", code, 0, out, "Usage: meko extension delete agentk|presenter [flags]")
+	want(t, "extension delete -h", code, 0, out, "Usage: meko extension delete agentk|present [flags]")
 	want(t, "extension delete -h", code, 0, out, "--purge")
 	want(t, "extension delete -h", code, 0, out, "More: "+docsURL+"#extension-delete")
 	_, help, _ = run("help", "extension", "delete")
@@ -172,7 +175,7 @@ func TestExtensionCommands(t *testing.T) {
 	code, _, errs = run("extension list")
 	want(t, "one word with a space", code, exitUsage, errs, `unknown command "extension list"`)
 	code, _, errs = run("extension", "delete", "--data-dir", t.TempDir())
-	want(t, "extension delete with no name", code, exitUsage, errs, "name the extension (agentk, presenter)")
+	want(t, "extension delete with no name", code, exitUsage, errs, "name the extension (agentk, present)")
 	code, _, errs = run("extension", "delete", "frob", "--data-dir", t.TempDir())
 	want(t, "extension delete frob", code, exitUsage, errs, `no extension called "frob"`)
 }

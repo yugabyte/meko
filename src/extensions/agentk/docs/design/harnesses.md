@@ -141,7 +141,7 @@ Kiro to Meko.", or Meko's error and "Connect it in Settings › Harness."). Why 
   which a connect would replace.
 - Once ever: several open pages connect it once, a user who later runs `meko agent disconnect`
   stays disconnected, and a failed try isn't retried (Connect to Meko is the retry).
-- Not in `me_koder install`: one way to do it, and the install opens the page.
+- Not in `meko kode install`: one way to do it, and the install opens the page.
 
 Until a page has opened, Ask AgentK and the session tools still refuse an unconnected one. Under
 `npm run dev` (no `<base>`) the page doesn't try, since Meko's route isn't on its origin.
@@ -164,7 +164,7 @@ gone keep their row: a relaunch exits at once and shows as exited, like a crash.
 only stops offering it for new sessions: Claude Code sessions still relaunch, resume and recover with
 AgentK's mod, whose version check (`supportsMod`) reads Claude Code's version even while it's off.
 
-The install needs one agent: `scripts/deps.sh`, which `me_koder install` runs first, takes Claude Code, OpenCode (on the PATH or in
+The install needs one agent: `scripts/deps.sh`, which `meko kode install` runs first, takes Claude Code, OpenCode (on the PATH or in
 `~/.opencode/bin`) or `kiro-cli`, and with none asks which to install (Claude Code first, OpenCode
 second, Kiro CLI third; `--agent claude|opencode|kiro` for unattended runs, and `--install-deps` takes
 Claude Code without asking unless `--agent` says otherwise), with Anthropic's installer, OpenCode's
@@ -173,7 +173,7 @@ OpenCode 1) or Kiro's (`cli.kiro.dev/install`, which needs `unzip` on Linux), an
 declined or fails. It checks each agent's sign-in (`claude auth status`, `opencode auth list
 --standalone`: "No authenticated integrations", neither a stored credential nor a provider key in the
 environment, `kiro-cli whoami`) and offers `claude auth login`, `opencode auth login --standalone` or
-`kiro-cli login`. `me_koder install` then reads each
+`kiro-cli login`. `meko kode install` then reads each
 agent's version (`settleAgents`): with none it stops, saying what to install (and, for OpenCode,
 `opencode upgrade --major` from 1.x); a default that isn't
 installed becomes the first agent that is; and Meko's setup is offered for each agent found whose

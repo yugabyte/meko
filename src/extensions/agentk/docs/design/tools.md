@@ -12,7 +12,7 @@ agent does it with the `agentk_sessions` MCP server's tools, following the `agen
 ```mermaid
 sequenceDiagram
   participant A as Agent (Claude Code, OpenCode or Kiro)
-  participant M as me_koder mcp (stdio, the CLI's child)
+  participant M as me_kode mcp (stdio, the CLI's child)
   participant H as Hook socket /tools
   participant S as Server (actions.ts)
   A->>M: tools/call start_sessions
@@ -39,13 +39,13 @@ sequenceDiagram
   isn't running.
 - **The command.** An install starts it as `app/current/node/bin/node
   app/current/lib/dist/server/mcpmain.js`. Through `current`, an MCP server started after an update
-  runs the new version. `mcpmain.js` is used instead of `me_koder mcp` because the CLI's static imports
-  load the whole server. `me_koder mcp` exists too, unlisted, for running the server by hand. A dev
+  runs the new version. `mcpmain.js` is used instead of `me_kode mcp` because the CLI's static imports
+  load the whole server. `me_kode mcp` exists too, unlisted, for running the server by hand. A dev
   server starts its own Node with its loader flags (tsx's) on `mcpmain.ts` (`toolsCommand`,
   `loaderFlags` in `tools.ts`).
 - **The route.** `/tools` on the hook socket is answered like the mod's routes (`onMod` in
   `sessions.ts`). The session's token names the caller, and an unknown token gets 403. The body
-  carries `v` (`TOOLS_VERSION`), so a later change can tell an older `me_koder mcp` apart. An older
+  carries `v` (`TOOLS_VERSION`), so a later change can tell an older `me_kode mcp` apart. An older
   server answers 404, and the tool says to update AgentK.
 - **The tools** (`src/server/tooldefs.ts`, which the MCP server and the server share):
 
