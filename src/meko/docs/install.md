@@ -359,8 +359,9 @@ follows on stderr.
 show the dots while it loads, for at most a minute, then `ready in 2.4s`, or `! still loading ·
 meko status says when it's ready`), a `● Meko <version> is running` headline (with `· installed in
 14s` or `· upgraded in 11s` after the installer, and the pid and uptime in status), then the links
-as plain aligned rows, each URL at the end of its line so it copies cleanly (`Web UI`, with its
-access; `Agents`, the MCP and API URL; `Cloud`, the linked Meko Cloud or `not linked`), then the
+as plain aligned rows, each URL followed only by a dim note after ` · `, so it copies cleanly
+(`Web UI`, with its access; `Agents`, the MCP and API URL, `· MCP and API`; `Cloud`, the linked
+Meko Cloud or `not linked`), then the
 commands to run next. A `Web UI` row shows only when the web UI is off or not listening.
 
 ### Colors
@@ -387,7 +388,10 @@ bright blue (`94`) is used only on a dark background with 16 colors.
 The background is `MEKO_TERM_BG` (`dark` or `light`) when it's set, else the last field of
 `COLORFGBG` (which some terminals set), else what the terminal answers when asked for its
 background color (OSC 11, sent with a DA1 query every terminal answers, so the read ends at once,
-within a quarter of a second), else dark (`spin.Background`). The 24-bit blues are used when
+within a quarter of a second), else dark (`spin.Background`). The query turns echo off and, when
+it puts it back, discards what the terminal sent and wasn't read; a reply later than that (over a
+slow SSH link) can still show up as typing, so `meko install` discards unread input before each
+question (`askTTY`), and Enter at the PATH question still means yes. The 24-bit blues are used when
 `COLORTERM` is `truecolor` or `24bit`; otherwise the 256-color ones, which nearly every terminal
 has whatever its `TERM` says (SSH usually drops `COLORTERM`); only the consoles and old terminals
 (`TERM` `linux`, `vt…`, `ansi`, `cons25`, `sun`) get the theme's own `94` or `34`, which some

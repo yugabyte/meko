@@ -20,8 +20,8 @@ import (
 
 // destroyOptions are destroy's flags: force asks nothing, withExtensions removes the extensions'
 // data too (each extension's own uninstall). uninstall is meko uninstall --purge's destroy: Meko's
-// commands and service go next, so the extensions' data goes with Meko's once it's asked (unless
-// force keeps it), and nothing is said of what destroy alone leaves.
+// commands and service go next, so the extensions' data always goes with Meko's (asked once, or not
+// with force), and nothing is said of what destroy alone leaves.
 type destroyOptions struct {
 	force, withExtensions, uninstall bool
 }
@@ -253,7 +253,7 @@ func listExtensionData(exts []extensionData, o destroyOptions, stdout io.Writer)
 		}
 	}
 	switch {
-	case o.uninstall && !o.force:
+	case o.uninstall:
 		fmt.Fprintln(stdout, "Destroying it uninstalls them too and deletes their data: AgentK's sessions and "+
 			"worktrees, with any uncommitted work in them")
 	case o.withExtensions:

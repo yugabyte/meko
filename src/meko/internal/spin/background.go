@@ -97,9 +97,10 @@ func backgroundFrom(env, colorfgbg string, query func() (string, bool)) string {
 }
 
 // queryBackground asks the terminal for its background color (OSC 11), then for its attributes
-// (DA1), which every terminal answers: so it reads until that answer, or a quarter of a second,
-// and never leaves a late reply to show up as typing. It asks only when stdout is a terminal, on
-// /dev/tty, with echo off. tests replace it.
+// (DA1), which every terminal answers: so it reads until that answer, or a quarter of a second. It
+// asks only when stdout is a terminal, on /dev/tty, with echo off, and puts echo back after
+// discarding what the terminal sent and it didn't read. A reply later still (a slow SSH link) shows
+// up as typing; install's questions discard it (askTTY). tests replace it.
 var queryBackground = func() (string, bool) {
 	if !IsTerminal(os.Stdout) || os.Getenv("TERM") == "dumb" {
 		return "", false
@@ -120,7 +121,7 @@ var queryBackground = func() (string, bool) {
 	if err = unix.IoctlSetTermios(fd, ioctlSetTermios, &raw); err != nil {
 		return "", false
 	}
-	defer func() { _ = unix.IoctlSetTermios(fd, ioctlSetTermios, old) }()
+	defer func() { _ = unix.IoctlSetTermios(fd, ioctlFlushTermios, old) }()
 	if _, err = f.WriteString("\033]11;?\033\\\033[c"); err != nil {
 		return "", false
 	}

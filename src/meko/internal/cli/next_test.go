@@ -49,6 +49,12 @@ func TestNextSteps(t *testing.T) {
 			return s
 		}(), nextInstall, [][2]string{{"meko ui /ext/presenter/", "open Presenter"}, connect, learn, share, addAgentK,
 			statusInstall}},
+		{"install --no-ui, AgentK just added: the web UI it needs first", func() nextState {
+			s := fresh
+			s.webOff, s.agentK, s.added = true, true, "agentk"
+			return s
+		}(), nextInstall, [][2]string{{"meko ui start", "turn the web UI on, when you want it"}, openAgentK, connect,
+			learn, share, statusInstall}},
 		{"start", done, nextStart, [][2]string{ui, openAgentK, status}},
 		{"help", fresh, nextUse, [][2]string{ui, connect, learn, share, addAgentK}},
 		{"web UI off", nextState{webOff: true, agent: claude, connected: true, claude: true, extracting: true,

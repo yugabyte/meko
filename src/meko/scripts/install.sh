@@ -38,6 +38,8 @@ started=$(date +%s)
 # The terminal's background, dark or light, as meko's rows find it (internal/spin/background.go):
 # MEKO_TERM_BG, else COLORFGBG's last field, else the terminal's answer when asked for its
 # background color (OSC 11, then DA1, which every terminal answers, so the read ends), else dark.
+# stty can't discard input, so a reply later than the read shows up as typing: meko install discards
+# it before its questions (askTTY).
 term_bg() {
   case ${MEKO_TERM_BG:-} in dark|light) echo "$MEKO_TERM_BG"; return ;; esac
   case ${COLORFGBG:-} in
@@ -243,7 +245,11 @@ unpack() {
   if [ "$platform" = darwin ]; then xattr -dr com.apple.quarantine "$staging" 2>/dev/null || true; fi
   rm -rf "$dest.old" || return 1
   if [ -e "$dest" ]; then mv "$dest" "$dest.old" || return 1; fi
-  mv "$staging/meko-$version" "$dest" || return 1
+  # --reinstall unpacks over the folder app/current points to: put it back if the new one fails.
+  if ! mv "$staging/meko-$version" "$dest"; then
+    if [ -e "$dest.old" ]; then { rm -rf "$dest" && mv "$dest.old" "$dest"; } || return 3; fi
+    return 1
+  fi
   rm -rf "$staging" "$dest.old"
 }
 if $tty; then
@@ -263,6 +269,7 @@ elif unpack; then unpacked=0; else unpacked=$?; fi
 case $unpacked in
   0) ;;
   2) die "unexpected tarball layout" ;;
+  3) safe=""; die "unpacking $tarball into $app failed and left $dest missing: run the installer again with --reinstall" ;;
   *) die "unpacking $tarball into $app failed" ;;
 esac
 

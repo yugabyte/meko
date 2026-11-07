@@ -54,9 +54,9 @@ func (r report) running(text, note string) {
 // a note ("Cloud    not linked").
 type linkRow struct{ label, url, note string }
 
-// links prints the link rows, after a blank line, their labels dim and aligned, and each URL at
-// the end of its line's value, where it copies cleanly: blue, underlined and an OSC 8 link on a
-// terminal.
+// links prints the link rows, after a blank line, their labels dim and aligned, and each URL
+// followed only by its dim note after " · ", so it copies cleanly: blue, underlined and an OSC 8
+// link on a terminal.
 func (r report) links(rows []linkRow) {
 	labelW := 0
 	for _, row := range rows {

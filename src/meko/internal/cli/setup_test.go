@@ -176,6 +176,44 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	if err := addPathLine(bashrc, `export PATH="$HOME/.local/bin:$PATH"`); err != nil {
 		t.Fatal(err)
 	}
+	// An extension that can't be removed stops it before anything of Meko's goes: the service, the
+	// meko command, the PATH line and the registration stay, for meko uninstall to run again.
+	bad := filepath.Join(t.TempDir(), "bad")
+	//nolint:gosec // G306: test script
+	if err := os.WriteFile(bad, []byte("#!/bin/sh\n[ \"$1\" = uninstall ] && exit 1\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reg.Entries["agentk"] = extensions.Entry{Command: bad, InstalledByMeko: true}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	mekoLink := filepath.Join(os.Getenv("HOME"), ".local", "bin", "meko")
+	_, linkErr := os.Lstat(mekoLink) //nolint:gosec // G703: the test's own HOME
+	code, out, errs = run("uninstall", "--data-dir", dir)
+	want(t, "uninstall, an extension failing", code, 1, errs,
+		"couldn't remove AgentK: ")
+	want(t, "uninstall, an extension failing", code, 1, errs,
+		"Meko is still installed: run meko uninstall again once that's fixed")
+	if strings.Contains(out, "Removed") {
+		t.Errorf("uninstall removed something though an extension failed:\n%s", out)
+	}
+	if _, err := os.Stat(f.file); err != nil {
+		t.Errorf("the service went though an extension failed: %v", err)
+	}
+	if _, err := os.Lstat(mekoLink); (err == nil) != (linkErr == nil) { //nolint:gosec // G703: the test's own HOME
+		t.Errorf("the meko command changed though an extension failed: %v", err)
+	}
+	if got := readFile(t, bashrc); !strings.Contains(got, pathMark) {
+		t.Errorf("the PATH line went though an extension failed: %q", got)
+	}
+	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Command != bad {
+		t.Errorf("the extension was unregistered though it failed: %v", reg.Entries)
+	}
+	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+
 	code, out, _ = run("uninstall", "--data-dir", dir)
 	want(t, "uninstall", code, 0, out, "Removed the fake service")
 	want(t, "uninstall's PATH line", code, 0, out, "Removed the PATH line meko install added to ~/.bashrc\n")
@@ -211,6 +249,9 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force")
 	want(t, "uninstall --purge --force", code, 0, out, "Removed "+dir)
 	want(t, "uninstall --purge --force", code, 0, out, "Removed the fake service")
+	if strings.Contains(out, "--with-extensions") {
+		t.Errorf("uninstall --purge --force names a flag it doesn't have:\n%s", out)
+	}
 	if strings.Contains(out, "still installed") || strings.Contains(out, "kept the extensions") {
 		t.Errorf("uninstall --purge kept the extensions:\n%s", out)
 	}

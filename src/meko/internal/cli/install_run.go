@@ -18,6 +18,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/service"
 	"github.com/yugabyte/meko/src/meko/internal/spin"
+	"golang.org/x/sys/unix"
 )
 
 // What install.sh tells the meko install it runs, which prints the rest of the same run
@@ -76,7 +77,17 @@ func askTTY(stdout io.Writer) *os.File {
 		_ = f.Close()
 		return nil
 	}
+	discardInput(f)
 	return f
+}
+
+// discardInput drops what the terminal sent that nobody read, so a question doesn't take it as its
+// answer: such as the terminal's late reply to the background query (spin.Background, or
+// install.sh's), which would make Enter at "Add it? [Y/n]" a no.
+func discardInput(f *os.File) {
+	if t, err := unix.IoctlGetTermios(int(f.Fd()), ioctlGetTermios); err == nil {
+		_ = unix.IoctlSetTermios(int(f.Fd()), ioctlFlushTermios, t)
+	}
 }
 
 // pathMark is the comment before the line meko install adds to a shell's profile, which meko
