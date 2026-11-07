@@ -228,12 +228,11 @@ func removePathLines(home string) ([]string, error) {
 	return changed, nil
 }
 
-// checkAPIPort fails install, before anything is written, when another program holds the API port:
-// the service would be written and then fail to start. A port a Meko server holds is fine: this
-// data folder's (install restarts it), or the installed service's other data folder's (installing
-// the service moves it to this one). The web port isn't checked, since Meko takes it over from an
-// AgentK on this computer.
-func checkAPIPort(l paths.Layout, m service.Manager, home string, r report, stderr io.Writer) int {
+// checkPort fails install, before anything is written, when another program holds Meko's port (an
+// AgentK from before Meko served it, on 7777, is one): the service would be written and then fail to
+// start. A port a Meko server holds is fine: this data folder's (install restarts it), or the
+// installed service's other data folder's (installing the service moves it to this one).
+func checkPort(l paths.Layout, m service.Manager, home string, r report, stderr io.Writer) int {
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil {
 		return fail(stderr, err)
@@ -280,7 +279,8 @@ var portFree = func(port int) error {
 // portInUse prints install's failed Server row for a port another program holds, how to find it
 // or move Meko, and that running the installer again is safe.
 func portInUse(r report, port int, config string) {
-	r.step(stepFail, "Server", fmt.Sprintf("port %d is in use by another program", port))
+	r.step(stepFail, "Server", fmt.Sprintf("port %d is in use by another program (an AgentK from before Meko "+
+		"served it, or another)", port))
 	find := fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port)
 	if runtime.GOOS == "linux" {
 		find = fmt.Sprintf("ss -ltnp 'sport = :%d'", port)

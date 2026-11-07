@@ -121,7 +121,7 @@ func newHarness(t *testing.T, embedder string) *harness {
 	h := &harness{t: t, l: l, st: st, dp: dp, userID: userID, token: token, node: node, dir: dir,
 		o: memoryengine.Options{TestEmbedder: embedder}}
 	h.svc = New(st, memoryengine.NewClient(l.MemoryEngineSock, token), Options{UserID: userID, Log: log,
-		FilesDir: l.KnowledgeFiles, BaseURL: "http://127.0.0.1:7778"})
+		FilesDir: l.KnowledgeFiles, BaseURL: "http://127.0.0.1:7777"})
 	h.startMemoryEngine()
 	return h
 }

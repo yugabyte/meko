@@ -8,11 +8,12 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	"github.com/yugabyte/meko/src/meko/internal/config"
@@ -25,45 +26,56 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/update"
 )
 
-// webRetry is how often serve tries again to take the web port while something else holds it (an
-// AgentK from before Meko served it), and to hand over from an extension that can't yet.
+// webRetry is how often serve tries again to hand over from an extension that can't yet, and to
+// take the port back after it lost it.
 var webRetry = 30 * time.Second
 
-// webURL is the web listener's address for links: 127.0.0.1 with local access, else [web] name or
-// this host's FQDN, over HTTPS.
-func webURL(w config.Web) string {
+// webURL is the web UI's address for links: 127.0.0.1 with local access, else [web] name or this
+// host's FQDN, over HTTPS.
+func webURL(w config.Web, port int) string {
 	if w.Access != config.AccessRemote {
-		return fmt.Sprintf("http://127.0.0.1:%d", w.Port)
+		return fmt.Sprintf("http://127.0.0.1:%d", port)
 	}
 	host := w.Name
 	if host == "" {
 		host = tlscert.FQDN()
 	}
-	return "https://" + net.JoinHostPort(host, strconv.Itoa(w.Port))
+	return "https://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
-// webBind is the address the web listener takes: loopback for local access, every address for remote.
-func webBind(w config.Web) string {
-	if w.Access == config.AccessRemote {
-		return net.JoinHostPort("", strconv.Itoa(w.Port))
+// bindHost is the address the port is taken on: every address with remote access while the web UI
+// is on (Sniff sorts TLS from plain HTTP), else loopback only, so meko ui stop takes it off the
+// network.
+func bindHost(w config.Web) string {
+	if w.Access == config.AccessRemote && w.Enabled {
+		return ""
 	}
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(w.Port))
+	return "127.0.0.1"
 }
 
-// webListener runs the web listener for serve: it hands over from the extensions that serve a web
-// UI (handoff), takes the port (waiting while it's held), and serves until ctx ends, while [web]
-// enabled is on; Reload has it read its settings again (meko ui start and stop). Status reads its
-// state; Shutdown drains it.
+// webListener is serve's one listener, on [server] port, for agents, the CLI and browsers. Bind
+// takes the port when serve starts, so a port another program holds stops serve. Run serves, hands
+// over from the extensions that serve a web UI (handoff), and takes up their settings and meko ui
+// start and stop (Reload): a new server.Server is swapped in under the same socket, which is taken
+// again only when the address it's bound to changes (remote access turned on or off). Status reads
+// its state; Close drains it.
 type webListener struct {
 	l       paths.Layout
 	st      *store.Store
 	log     *slog.Logger
+	port    int
 	reload  chan struct{}                          // Reload's, one waiting at most
-	newOpts func(cfg config.Config) server.Options // the web listener's server, for its settings
+	newOpts func(cfg config.Config) server.Options // the server for the settings, as serve builds it
+
+	cur  atomic.Pointer[server.Server]   // the server requests go to
+	cert atomic.Pointer[tls.Certificate] // what TLS serves, with remote access
 
 	mu      sync.Mutex
 	status  server.WebStatus
-	srv     *server.Server
+	cfg     config.Config              // the settings taken up
+	ln      net.Listener               // the port, from Bind until Run serves it
+	host    string                     // the address it's bound to (bindHost)
+	httpSrv *http.Server               // serving the port, while Run does
 	sockets map[string]string          // an extension's name to the socket its handoff named
 	handed  map[string]bool            // the extensions handed over since this server started
 	asked   map[string]time.Time       // when a handoff was last tried for a socket a request needed
@@ -78,15 +90,15 @@ type webListener struct {
 	waiting map[string]string // why an extension's automatic update waits
 }
 
-// newWebListener is serve's web listener, reported on (Enabled) until Run has read the settings.
-func newWebListener(l paths.Layout, st *store.Store, log *slog.Logger) *webListener {
-	return &webListener{l: l, st: st, log: log, reload: make(chan struct{}, 1), sockets: map[string]string{},
-		handed: map[string]bool{}, asked: map[string]time.Time{}, warned: map[string]string{},
-		proxied: map[string]*extproxy.Proxy{}, jobs: server.NewExtensionJobs(), lock: update.NewLock(l.Root),
-		waiting: map[string]string{}, status: server.WebStatus{Enabled: true}}
+// newWebListener is serve's listener on port, reported on (Enabled) until Bind has read the settings.
+func newWebListener(l paths.Layout, st *store.Store, log *slog.Logger, port int) *webListener {
+	return &webListener{l: l, st: st, log: log, port: port, reload: make(chan struct{}, 1),
+		sockets: map[string]string{}, handed: map[string]bool{}, asked: map[string]time.Time{},
+		warned: map[string]string{}, proxied: map[string]*extproxy.Proxy{}, jobs: server.NewExtensionJobs(),
+		lock: update.NewLock(l.Root), waiting: map[string]string{}, status: server.WebStatus{Enabled: true}}
 }
 
-// Reload has Run read the settings again, and start or stop the listener as [web] enabled says.
+// Reload has Run read the settings again, and let browsers in or keep them out as [web] enabled says.
 func (w *webListener) Reload() {
 	select {
 	case w.reload <- struct{}{}:
@@ -112,7 +124,7 @@ func (w *webListener) socket(name string) func() string {
 	}
 }
 
-// Status is the web listener's state, for status.
+// Status is the listener's state, for status.
 func (w *webListener) Status() *server.WebStatus {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -135,132 +147,220 @@ func (w *webListener) forget(name string) {
 	delete(w.handed, name)
 }
 
-// Run serves until ctx ends. A port that's taken is tried again every webRetry, and so is a handoff
-// that failed: once one works, its extension's settings are in web.toml, read before the port is.
-// While [web] enabled is off it takes no port, until a Reload finds it on.
-func (w *webListener) Run(ctx context.Context) {
-	logged := ""
-	for ctx.Err() == nil {
-		pending := w.handoff(ctx)
-		cfg, err := config.Load(w.l.Config, os.Getenv, config.Overrides{})
-		if err != nil {
-			w.fail(&logged, "can't read the settings", err)
-			if !sleep(ctx, webRetry) {
-				return
-			}
-			continue
-		}
-		w.set(func(s *server.WebStatus) {
-			s.URL, s.Access, s.Enabled = webURL(cfg.Web), cfg.Web.Access, cfg.Web.Enabled
-			if !s.Enabled {
-				s.Error = ""
-			}
-		})
-		if !cfg.Web.Enabled {
-			w.log.Info("the web UI is off ([web] enabled = false; meko ui start turns it on)")
-			logged = ""
-			select {
-			case <-ctx.Done():
-				return
-			case <-w.reload:
-			}
-			continue
-		}
-		ln, pair, err := w.listen(cfg)
-		if err != nil {
-			w.fail(&logged, "the web listener can't start", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-w.reload:
-			case <-time.After(webRetry):
-			}
-			continue
-		}
-		logged = ""
-		srv := server.New(w.newOpts(cfg))
-		w.mu.Lock()
-		w.srv = srv
-		w.status.Listening, w.status.Error = true, ""
-		if pair != nil {
-			w.status.Fingerprint, w.status.SelfSigned = pair.Fingerprint, pair.SelfSigned
-		}
-		w.mu.Unlock()
-		w.log.Info("web listener started", "url", webURL(cfg.Web), "access", cfg.Web.Access)
-		served := make(chan error, 1)
-		go func() { served <- srv.Serve(ln) }()
-		// An extension that couldn't hand over yet is asked again; when its settings change the
-		// listener's, the listener starts again with them.
-		iter, stopWatch := context.WithCancel(ctx)
-		restart := w.watchHandoffs(iter, pending, cfg)
-		select {
-		case <-ctx.Done():
-		case err = <-served:
-			w.log.Error("the web listener stopped", "error", err)
-		case <-restart:
-			w.log.Info("restarting the web listener with the settings an extension handed over")
-		case <-w.reload:
-			w.log.Info("reading the web listener's settings again")
-		}
-		stopWatch()
-		w.shutdownServer()
+// Bind takes the port for cfg, the settings serve started with.
+func (w *webListener) Bind(cfg config.Config) error {
+	if err := w.bindFor(cfg); err != nil {
+		return err
 	}
+	w.mu.Lock()
+	w.cfg = cfg
+	w.mu.Unlock()
+	w.report(cfg)
+	return nil
 }
 
-func (w *webListener) fail(logged *string, what string, err error) {
-	w.set(func(s *server.WebStatus) { s.Listening, s.Error = false, err.Error() })
-	if *logged != err.Error() {
-		w.log.Warn(what+"; trying again every 30 s", "error", err)
-		*logged = err.Error()
+// open takes the port for cfg: over Sniff, with the certificate, when it's on every address.
+func (w *webListener) open(cfg config.Config) (net.Listener, error) {
+	host := bindHost(cfg.Web)
+	if host == "" {
+		if err := w.loadCert(cfg); err != nil {
+			return nil, err
+		}
 	}
+	ln, err := server.ListenOn(host, w.port)
+	if err != nil {
+		return nil, err
+	}
+	if host == "" {
+		ln = server.Sniff(ln, &tls.Config{MinVersion: tls.VersionTLS12,
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return w.cert.Load(), nil }})
+	}
+	return ln, nil
 }
 
-// listen takes the web port, over TLS with remote access.
-func (w *webListener) listen(cfg config.Config) (net.Listener, *tlscert.Pair, error) {
+// loadCert reads the certificate remote access serves: [tls]'s, or the self-signed pair, made now
+// or again within 30 days of expiring. TLS takes the new one at once.
+func (w *webListener) loadCert(cfg config.Config) error {
 	var pair *tlscert.Pair
-	if cfg.Web.Access == config.AccessRemote {
-		var err error
-		if cfg.TLS.Cert != "" {
-			pair, err = tlscert.Load(expandHome(cfg.TLS.Cert), expandHome(cfg.TLS.Key))
-		} else {
-			pair, err = tlscert.SelfSigned(w.l.Certs, time.Now())
-		}
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	ln, err := net.Listen("tcp", webBind(cfg.Web))
-	if errors.Is(err, syscall.EADDRINUSE) {
-		return nil, nil, fmt.Errorf("port %d is in use (an AgentK from before Meko served it, or another "+
-			"program). Meko takes it once it's free; or pick another with [web] port in config.toml", cfg.Web.Port)
+	var err error
+	if cfg.TLS.Cert != "" {
+		pair, err = tlscert.Load(expandHome(cfg.TLS.Cert), expandHome(cfg.TLS.Key))
+	} else {
+		pair, err = tlscert.SelfSigned(w.l.Certs, time.Now())
 	}
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	if pair != nil {
-		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{pair.Cert}, MinVersion: tls.VersionTLS12})
-	}
-	return ln, pair, nil
+	w.cert.Store(&pair.Cert)
+	w.set(func(s *server.WebStatus) { s.Fingerprint, s.SelfSigned = pair.Fingerprint, pair.SelfSigned })
+	return nil
 }
 
-// Shutdown drains the web listener.
-func (w *webListener) Shutdown(ctx context.Context) error {
+// report is what status says once the listener has taken up cfg.
+func (w *webListener) report(cfg config.Config) {
+	w.set(func(s *server.WebStatus) {
+		s.URL, s.Access, s.Enabled, s.Listening, s.Error = webURL(cfg.Web, w.port), cfg.Web.Access, cfg.Web.Enabled, true, ""
+		if bindHost(cfg.Web) != "" {
+			s.Fingerprint, s.SelfSigned = "", false
+		}
+	})
+}
+
+// Run serves the port Bind took until ctx ends, then drains it. It hands over from the extensions
+// that serve a web UI first, and again every webRetry while one can't yet; it takes up their
+// settings and a Reload's as they come.
+func (w *webListener) Run(ctx context.Context) {
 	w.mu.Lock()
-	srv := w.srv
-	w.srv = nil
+	cfg := w.cfg
 	w.mu.Unlock()
-	if srv == nil {
+	w.cur.Store(server.New(w.newOpts(cfg)))
+	served := w.serve()
+	for {
+		pending := w.handoff(ctx)
+		if next, err := config.Load(w.l.Config, os.Getenv, config.Overrides{}); err != nil {
+			w.log.Warn("can't read the settings again; keeping the ones it has", "error", err)
+		} else {
+			cfg, served = w.takeUp(cfg, next, served)
+		}
+		iter, stopWatch := context.WithCancel(ctx)
+		restart := w.watchHandoffs(iter, pending, cfg)
+		var retry <-chan time.Time
+		if served == nil {
+			retry = time.After(webRetry)
+		}
+		select {
+		case <-ctx.Done():
+			stopWatch()
+			w.stop()
+			return
+		case err := <-served:
+			w.log.Error("the listener stopped; taking the port again every 30 s", "error", err)
+			w.set(func(s *server.WebStatus) { s.Listening, s.Error = false, err.Error() })
+			w.stop()
+			served = nil
+		case <-retry:
+		case <-restart:
+			w.log.Info("taking up the settings an extension handed over")
+		case <-w.reload:
+			w.log.Info("reading the web UI's settings again")
+		}
+		stopWatch()
+	}
+}
+
+// serve starts serving the bound port, and returns what its Serve returns, or nil with no port.
+func (w *webListener) serve() <-chan error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.ln == nil {
 		return nil
 	}
-	return srv.Shutdown(ctx)
+	hs := &http.Server{ReadHeaderTimeout: 10 * time.Second,
+		Handler: http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { w.cur.Load().ServeHTTP(rw, r) })}
+	ln := w.ln
+	w.httpSrv, w.ln = hs, nil
+	served := make(chan error, 1)
+	go func() {
+		if err := hs.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+			served <- err
+		}
+	}()
+	return served
 }
 
-// shutdownServer drains the web listener, then closes the WebSockets it proxied, which a shutdown
-// leaves open.
-func (w *webListener) shutdownServer() {
+// takeUp moves from the settings now taken up to next: the port is taken again when the address
+// it's bound to changes (or it was lost), and else only the server is swapped. When the new address
+// can't be taken, the old one is taken back, and the old settings kept. It returns the settings
+// taken up and what's serving (nil: nothing, to try again).
+func (w *webListener) takeUp(now, next config.Config, served <-chan error) (config.Config, <-chan error) {
+	w.mu.Lock()
+	host, up := w.host, w.httpSrv != nil
+	w.mu.Unlock()
+	rebind := !up || bindHost(next.Web) != host
+	if !rebind && host == "" {
+		// The certificate's files may have changed, or the self-signed one be due again.
+		if err := w.loadCert(next); err != nil {
+			w.log.Warn("can't read the certificate; keeping the one it has", "error", err)
+		}
+	}
+	if rebind {
+		w.stop()
+		err := w.bindFor(next)
+		if err != nil && up {
+			w.log.Error("can't take the port for the new settings; keeping the old ones", "error", err)
+			if err = w.bindFor(now); err == nil {
+				next = now
+			}
+		}
+		if err != nil {
+			w.log.Error("can't take the port; trying again every 30 s", "error", err)
+			w.set(func(s *server.WebStatus) { s.Listening, s.Error = false, err.Error() })
+			return now, nil
+		}
+	}
+	w.cur.Store(server.New(w.newOpts(next)))
+	if now.Web.Enabled && !next.Web.Enabled {
+		w.closeWebSockets()
+	}
+	if next.Web != now.Web || rebind {
+		w.log.Info("listening", "url", webURL(next.Web, w.port), "access", next.Web.Access,
+			"web_ui", map[bool]string{true: "on", false: "off"}[next.Web.Enabled])
+	}
+	w.mu.Lock()
+	w.cfg = next
+	w.mu.Unlock()
+	w.report(next)
+	if rebind {
+		served = w.serve()
+	}
+	return next, served
+}
+
+// bindFor takes the port for cfg, after stop.
+func (w *webListener) bindFor(cfg config.Config) error {
+	ln, err := w.open(cfg)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	w.ln, w.host = ln, bindHost(cfg.Web)
+	w.mu.Unlock()
+	return nil
+}
+
+// Close drains the port, or closes it when Run never served it.
+func (w *webListener) Close() {
+	w.mu.Lock()
+	ln := w.ln
+	w.ln = nil
+	w.mu.Unlock()
+	if ln != nil {
+		_ = ln.Close()
+	}
+	w.stop()
+}
+
+// stop drains the port (drainTimeout), then closes the WebSockets the extensions' proxies upgraded,
+// which a drain leaves open.
+func (w *webListener) stop() {
+	w.mu.Lock()
+	hs := w.httpSrv
+	w.httpSrv = nil
+	w.mu.Unlock()
+	if hs == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
-	_ = w.Shutdown(ctx)
+	if err := hs.Shutdown(ctx); err != nil {
+		w.log.Warn("requests didn't finish in time", "error", err)
+	}
+	w.closeWebSockets()
+	w.set(func(s *server.WebStatus) { s.Listening = false })
+}
+
+// closeWebSockets closes the WebSockets the extensions' proxies upgraded: AgentK's terminals.
+func (w *webListener) closeWebSockets() {
 	w.mu.Lock()
 	proxies := make([]*extproxy.Proxy, 0, len(w.proxied))
 	for _, p := range w.proxied {
@@ -270,7 +370,6 @@ func (w *webListener) shutdownServer() {
 	for _, p := range proxies {
 		p.CloseAll()
 	}
-	w.set(func(s *server.WebStatus) { s.Listening = false })
 }
 
 // Proxies are the registered extensions with a web UI, read from the registry each time, so one
@@ -429,17 +528,19 @@ func (w *webListener) importLegacy(name string, lg *extensions.Legacy) error {
 			tlsFiles = config.TLS{Cert: t.Cert, Key: t.Key}
 		}
 	}
+	// A port says it served browsers itself. Its access is taken over, never its port: Meko's is
+	// [server] port, where agents connect too.
 	if lg.Port != 0 {
 		access := config.AccessRemote
 		if isLoopback(lg.Bind) {
 			access = config.AccessLocal
 		}
-		added, err := config.AddWeb(w.l.Config, config.Web{Port: lg.Port, Access: access}, tlsFiles)
+		added, err := config.AddWeb(w.l.Config, config.Web{Access: access}, tlsFiles)
 		if err != nil {
 			return err
 		}
 		if added {
-			w.log.Info("took over the extension's web settings", "extension", name, "port", lg.Port, "access", access)
+			w.log.Info("took over the extension's web settings", "extension", name, "access", access)
 		}
 	}
 	return nil
@@ -497,7 +598,7 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// webAccessNote says which browsers reach the web listener: this computer's, or any that reaches it.
+// webAccessNote says which browsers reach the web UI: this computer's, or any that reaches it.
 func webAccessNote(w *server.WebStatus) string {
 	if w.Access != config.AccessRemote {
 		return "local, from this computer"
@@ -508,7 +609,7 @@ func webAccessNote(w *server.WebStatus) string {
 // webOffNote is what status and start say while [web] enabled is off.
 const webOffNote = "off (meko ui start turns it on)"
 
-// printWeb is status --verbose's lines about the web listener.
+// printWeb is status --verbose's lines about the web UI.
 func printWeb(stdout io.Writer, w *server.WebStatus) {
 	if w == nil {
 		return

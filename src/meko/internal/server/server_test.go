@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,6 +58,11 @@ func startWith(t *testing.T, authMode string) (*Server, string, *bytes.Buffer) {
 	return s, fmt.Sprintf("http://127.0.0.1:%d", port), &logs
 }
 
+// testClient takes the test servers' self-signed certificates.
+var testClient = &http.Client{Transport: &http.Transport{
+	TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: the tests' own certificate
+}}
+
 func tcpPort(t *testing.T, ln net.Listener) int {
 	t.Helper()
 	a, ok := ln.Addr().(*net.TCPAddr)
@@ -75,7 +81,7 @@ func get(t *testing.T, url string, header map[string]string, host string) (int, 
 	if host != "" {
 		req.Host = host
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,8 +241,8 @@ func TestListenTakenPort(t *testing.T) {
 	defer ln.Close()
 	port := tcpPort(t, ln)
 	_, err = Listen(port)
-	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("port %d is already in use", port)) ||
-		!strings.Contains(err.Error(), "--port") {
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("port %d is in use", port)) ||
+		!strings.Contains(err.Error(), "--port") || !strings.Contains(err.Error(), "AgentK") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -329,7 +335,7 @@ func TestServerStatusForClients(t *testing.T) {
 	}
 }
 
-// POST /api/v1/web/reload (meko ui start and stop) is the API listener's, for the admin token only.
+// POST /api/v1/web/reload (meko ui start and stop) is for the admin token only.
 func TestReloadWeb(t *testing.T) {
 	reloads := 0
 	s := New(Options{Info: Info{Version: "test"}, Port: 7790, Token: token, ClientToken: clientToken,
@@ -343,7 +349,7 @@ func TestReloadWeb(t *testing.T) {
 		{name: "the admin token", bearer: token, want: 200},
 	} {
 		req := httptest.NewRequest(http.MethodPost, reloadWebRoute, nil)
-		req.Host = "127.0.0.1:7790"
+		req.Host, req.RemoteAddr = "127.0.0.1:7790", "127.0.0.1:50000"
 		if tc.bearer != "" {
 			req.Header.Set("Authorization", "Bearer "+tc.bearer)
 		}

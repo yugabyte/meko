@@ -10,30 +10,29 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/envelope"
 )
 
-// cloudRoute is the Meko Cloud link's (docs/cloud.md): GET reads it, PUT links (cloudlink.Update),
-// DELETE unlinks. The web listener takes its browsers (local or remote access); the API listener
-// only the admin token (adminOnly), for meko cloud_link. Replies never carry the key.
-const cloudRoute = "/api/v1/settings/meko-cloud"
-
+// registerCloud is the Meko Cloud link's route (docs/cloud.md): GET reads it, PUT links
+// (cloudlink.Update), DELETE unlinks. Browsers (local or remote access) and the admin token (meko
+// cloud_link) take it, never an agent's client token, which mustn't redirect the link (ownerOnly).
+// Replies never carry the key.
 func (s *Server) registerCloud(v1 *echo.Group) {
 	if s.opts.Cloud == nil {
 		return
 	}
-	v1.GET("/settings/meko-cloud", s.cloudStatus)
-	v1.PUT("/settings/meko-cloud", s.cloudLink)
-	v1.DELETE("/settings/meko-cloud", s.cloudUnlink)
+	v1.GET("/settings/meko-cloud", s.cloudStatus, ownerOnly)
+	v1.PUT("/settings/meko-cloud", s.cloudLink, ownerOnly)
+	v1.DELETE("/settings/meko-cloud", s.cloudUnlink, ownerOnly)
 }
 
-// registerCloudSignIn is the web UI's sign-in to Meko Cloud (docs/cloud.md, "Signing in"), on the web
-// listener only: POST …/sign-in starts it and answers where the browser goes to sign in; Meko Cloud
+// registerCloudSignIn is the web UI's sign-in to Meko Cloud (docs/cloud.md, "Signing in"), for
+// browsers (ownerOnly): POST …/sign-in starts it and answers where the browser goes to sign in; Meko Cloud
 // sends the browser back to the web UI's /settings/meko-cloud/callback, a page rather than a route
-// (the web listener refuses an API call another site sends), whose POST …/sign-in/finish links.
+// (Meko refuses an API call another site sends), whose POST …/sign-in/finish links.
 func (s *Server) registerCloudSignIn(v1 *echo.Group) {
 	if s.opts.Cloud == nil {
 		return
 	}
-	v1.POST("/settings/meko-cloud/sign-in", s.cloudSignIn)
-	v1.POST("/settings/meko-cloud/sign-in/finish", s.cloudSignInFinish)
+	v1.POST("/settings/meko-cloud/sign-in", s.cloudSignIn, ownerOnly)
+	v1.POST("/settings/meko-cloud/sign-in/finish", s.cloudSignInFinish, ownerOnly)
 }
 
 // signInCallbackPath is the web UI's page Meko Cloud sends the browser back to.
@@ -44,7 +43,7 @@ func (s *Server) cloudSignIn(c echo.Context) error {
 	if err := c.Bind(&u); err != nil {
 		return envelope.Fail(c, http.StatusBadRequest, "VALIDATION_ERROR", "Send a JSON body.")
 	}
-	// The browser comes back to the address it's on: the request's own, which the web listener's
+	// The browser comes back to the address it's on: the request's own, which the browsers'
 	// checks have let in (this computer's name with local access, the Origin's with remote).
 	redirect := c.Scheme() + "://" + c.Request().Host + signInCallbackPath
 	to, err := s.opts.Cloud.StartSignIn(c.Request().Context(), u, redirect)

@@ -46,7 +46,7 @@ func (c *client) get(ctx context.Context, path string, data any) error {
 	return c.do(ctx, http.MethodGet, path, data)
 }
 
-// reloadWeb has the server read the web listener's settings again (meko ui start and stop).
+// reloadWeb has the server read the web UI's settings again (meko ui start and stop).
 func (c *client) reloadWeb(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/api/v1/web/reload", nil)
 }

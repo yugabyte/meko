@@ -29,7 +29,7 @@ func testListener(t *testing.T, dir string) *webListener {
 	if err = st.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return newWebListener(paths.New(dir), st, slog.New(slog.DiscardHandler))
+	return newWebListener(paths.New(dir), st, slog.New(slog.DiscardHandler), 0)
 }
 
 // webExtension writes a fake extension with a web UI at path: it logs its arguments, echoes

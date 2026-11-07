@@ -95,7 +95,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 		if err = m.Preflight(); err != nil {
 			return fail(stderr, err)
 		}
-		if code := checkAPIPort(l, m, home, r, stderr); code != exitOK {
+		if code := checkPort(l, m, home, r, stderr); code != exitOK {
 			return code
 		}
 	}
@@ -201,7 +201,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	return exitOK
 }
 
-// setWebAccess writes the web listener's access to web.toml (config.AddWeb) when neither it nor
+// setWebAccess writes how browsers reach Meko (its access) to web.toml (config.AddWeb) when neither it nor
 // config.toml sets one: with access, or, unless an AgentK is on this computer (whose own access Meko
 // takes over when it hands over its port), with the default AgentK had: remote over SSH or on Linux
 // with no display, local otherwise. The summary's Web UI link row says which. With noUI it turns

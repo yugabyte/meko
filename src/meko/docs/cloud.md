@@ -46,18 +46,17 @@ every extension the same way (`internal/cloudlink`).
   key. `PUT` takes `{url?, web_url?, api_url?, api_key?}` (a field left out is unchanged; an empty
   `api_key` keeps the saved one) and answers the same shape, or 400 `VALIDATION_ERROR` with why it
   was refused. `DELETE` unlinks.
-- On the web listener they take the owner: its browsers, with local or remote access, from Meko's
-  own origin. On the API listener they take only the admin token (`adminOnly`), for `meko
-  cloud_link`; an agent's client token gets 403, so it can't read the link's state or redirect
-  the key.
+- They take the owner: a browser, with local or remote access, from Meko's own origin, or the
+  admin token, for `meko cloud_link` (`ownerOnly`); an agent's client token gets 403, so it can't
+  read the link's state or redirect the key.
 - `POST /api/v1/settings/meko-cloud/sign-in {url?, web_url?, api_url?}` starts the web UI's sign-in
   and answers `{authorize_url}`, where the browser goes to sign in; `POST
   …/sign-in/finish {code, state}` finishes it and answers as `PUT` does
-  ([below](#signing-in)). Only on the web listener, for the owner.
+  ([below](#signing-in)). For the owner too.
 - `meko cloud_link [--url U] [--web-url W] [--api-url A] [--no-browser]`, on a terminal, asks
   whether to sign in with the browser (the default) or enter an API key (asked for with echo off;
   Enter keeps a saved one), and links; piped, it reads the key from stdin. `--off` unlinks. With a server
-  running it goes through the API listener (admin token), so the running extensions are told;
+  running it goes through the server (admin token), so the running extensions are told;
   otherwise it saves the link itself, and they read it when they next ask. A link ends
   with `✓ Linked to <url> (key …abcd)` and what to run next. `meko status`, `start` and
   `install` show the link in their link rows (`Cloud`, the linked web app's URL, or `not
@@ -100,10 +99,10 @@ error, reply or log holds the code, token, verifier or key.
   the sign-in (its state, verifier and the link's URLs, pinned to the server it signs in to) in
   memory for 10 minutes, one at a time; a new one replaces it, and a finish with its own state uses
   it up (one with another state is refused and leaves it waiting). The key is linked to the server
-  signed in to, even if the saved link changed meanwhile. The redirect URI is the web listener's own address
+  signed in to, even if the saved link changed meanwhile. The redirect URI is Meko's own address
   as the browser reached it, plus `/settings/meko-cloud/callback`: a page of the web UI, not an
-  `/api/v1` route, since Meko Cloud's redirect is another site's request, which the web listener's
-  routes refuse (`SameSite`) and its pages don't. The page takes the code out of the address and
+  `/api/v1` route, since Meko Cloud's redirect is another site's request, which Meko's
+  routes refuse to a browser (`SameSite`) and its pages don't. The page takes the code out of the address and
   POSTs it from Meko's own origin. Meko Cloud takes a remote-access `https://<host>:<port>` redirect
   URI as well as a loopback one. The registered client is kept for each server and redirect URI, so
   signing in again registers none.
@@ -267,7 +266,7 @@ MCP tools on the kept session, each within 30 s but the listing's 10 s):
   Cloud's tools require one.
 - **Credential:** every route takes the credential every data route does: the client token too,
   or nothing with `[server] auth = "none"`. Only a create in Meko Cloud takes the admin token
-  (`meko-cli`) or the owner on the web listener; an agent's client token gets 403 there.
+  (`meko-cli`) or a browser; an agent's client token gets 403 there.
 - **Failures:** they keep the reply off 401, which the web UI reads as Meko refusing the browser.
   - Meko Cloud's own 4xx keeps its status, code and message (`NOT_FOUND`, a 409 `CONFLICT`, a 403).
   - The rest are 502s with a code:

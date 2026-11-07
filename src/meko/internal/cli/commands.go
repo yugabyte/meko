@@ -594,7 +594,7 @@ func runToken(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 	}
 	// web_url is where browsers find Meko's web UI and its extensions' (AgentK's at /ext/agentk/):
 	// "" while it's off ([web] enabled), when web_off says so.
-	web, off := webURL(cfg.Web), !cfg.Web.Enabled
+	web, off := webURL(cfg.Web, cfg.Server.Port), !cfg.Web.Enabled
 	if a.running {
 		if c, cerr := newClient(l); cerr == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

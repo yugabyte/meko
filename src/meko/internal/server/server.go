@@ -1,8 +1,10 @@
-// Package server is Meko's HTTP servers: the API listener on 127.0.0.1, which agents and the CLI
-// call with a Bearer token, and the web listener (Options.Web), which browsers use, for the web UI
-// at / (Options.UI) and the extensions' at /ext/<name>/, with local or remote access and no login.
-// Both have the Host and Origin checks, the credential check, /mcp (Options.MCP) and the rest of
-// /api/v1 (Options.REST); replies use internal/envelope.
+// Package server is Meko's HTTP server, on its one port: agents and the CLI call /mcp (Options.MCP)
+// and /api/v1 (Options.REST) with a Bearer token, and browsers (Options.Web) get the web UI at /
+// (Options.UI), the same routes and the extensions' UIs at /ext/<name>/, with local or remote access
+// and no login. Which credential a request has depends on the request, never on how it came in
+// (authorize); the Host and Origin checks depend on the connection (guard). With remote access the
+// port takes TLS from anywhere and plain HTTP from this computer (Sniff). Replies use
+// internal/envelope.
 package server
 
 import (
@@ -13,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"syscall"
@@ -73,25 +76,26 @@ type Options struct {
 	// DownloadTicketPath, then the ticket). They take no token: the ticket is the credential, as a
 	// presigned URL's signature is. Uploads have UploadBodyLimit.
 	Upload, Download echo.HandlerFunc
-	// UI, if set, serves the web UI (internal/webui) on every GET no other route takes, on the web
-	// listener. Its files need no credential.
+	// UI, if set with Web, serves the web UI (internal/webui) on every GET no other route takes. Its
+	// files need no credential.
 	UI http.Handler
-	// Web, if set, makes this the web listener instead of the API listener.
+	// Web, if set, lets browsers in too (local or remote access), and serves their routes: the
+	// extensions' UIs, the Extensions page's and the Status page's. Without it only tokens get in.
 	Web *Web
-	// WebStatus, if set, is the web listener's state, for status.
+	// WebStatus, if set, is the state of the port browsers use, for status.
 	WebStatus func() *WebStatus
-	// ReloadWeb, if set, serves POST /api/v1/web/reload on the API listener (admin token only), for
-	// meko ui start and stop: the web listener reads its settings again, and starts or stops.
+	// ReloadWeb, if set, serves POST /api/v1/web/reload (admin token only), for meko ui start and
+	// stop: the listener reads its settings again, and lets browsers in or keeps them out.
 	ReloadWeb func()
 	// Cloud, if set, serves the Meko Cloud link's routes (/api/v1/settings/meko-cloud): to the web UI
-	// on the web listener, and to the CLI's admin token (meko cloud_link) on the API listener. The
-	// linked Meko Cloud's datapacks go through the REST routes (internal/rest's cloud.go).
+	// and to the CLI's admin token (meko cloud_link), never to the client token. The linked Meko
+	// Cloud's datapacks go through the REST routes (internal/rest's cloud.go).
 	Cloud *cloudlink.Service
-	// Agents, if set, serves the agents' routes (/api/v1/agents, agents.go) on either listener.
+	// Agents, if set, serves the agents' routes (/api/v1/agents, agents.go).
 	Agents *agents.Manager
 }
 
-// WebStatus is what status says about the web listener.
+// WebStatus is what status says about the web UI and the port browsers use.
 type WebStatus struct {
 	URL         string `json:"url"`
 	Access      string `json:"access"` // local or remote
@@ -99,7 +103,8 @@ type WebStatus struct {
 	Error       string `json:"error,omitempty"`       // why it isn't listening
 	Fingerprint string `json:"fingerprint,omitempty"` // its certificate's SHA-256, with remote access
 	SelfSigned  bool   `json:"self_signed,omitempty"`
-	// Enabled is [web] enabled: false while meko ui stop keeps the web listener off.
+	// Enabled is [web] enabled, as the listener has taken it up: false while meko ui stop keeps
+	// browsers out (the port stays open to agents and the CLI, on 127.0.0.1).
 	Enabled bool `json:"enabled"`
 }
 
@@ -151,25 +156,20 @@ func New(opts Options) *Server {
 	}))
 	e.Use(s.accessLog)
 	e.Use(s.guard)
-	if opts.Web != nil {
-		e.Use(s.requireBrowser)
-	} else {
-		e.Use(s.requireToken)
-	}
+	e.Use(s.authorize)
 
 	e.GET("/healthz", s.healthz)
 	v1 := e.Group("/api/v1", middleware.BodyLimit(BodyLimit))
 	// The same reply as status for the web UI's status page: what it says (versions, the memory
 	// engine's state, the data folder) is the local user's own.
 	v1.GET("/server", s.status)
-	if opts.Web == nil {
-		v1.GET("/status", s.status)
-		v1.GET("/version", s.version)
-		if opts.ReloadWeb != nil {
-			v1.POST("/web/reload", s.reloadWeb)
-		}
-		s.registerCloud(v1)
-	} else {
+	v1.GET("/status", s.status)
+	v1.GET("/version", s.version)
+	if opts.ReloadWeb != nil {
+		v1.POST("/web/reload", s.reloadWeb)
+	}
+	s.registerCloud(v1)
+	if opts.Web != nil {
 		if opts.Web.Extensions == nil {
 			opts.Web.Extensions = func() []*extproxy.Proxy { return nil }
 		}
@@ -228,10 +228,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // Listen opens 127.0.0.1:port. A taken port gets an error saying how to pick another.
 func Listen(port int) (net.Listener, error) {
-	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	return ListenOn("127.0.0.1", port)
+}
+
+// ListenOn opens host:port ("" is every address). A taken port gets an error saying what may hold
+// it and how to pick another.
+func ListenOn(host string, port int) (net.Listener, error) {
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if errors.Is(err, syscall.EADDRINUSE) {
-		return nil, fmt.Errorf("port %d is already in use. Stop what's using it, or pick another port "+
-			"with --port, MEKO_PORT or [server] port in config.toml", port)
+		return nil, fmt.Errorf("port %d is in use (an AgentK from before Meko served it, or another program). "+
+			"Stop it, or pick another port with --port, MEKO_PORT or [server] port in config.toml", port)
 	}
 	return ln, err
 }
@@ -250,27 +256,25 @@ func (s *Server) accessLog(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 // guard refuses requests that don't name this server in Host (DNS rebinding) and any request
-// from another site's page (an Origin header that isn't this server's own): only the web UI
-// Meko serves may call it from a browser. There are no CORS headers, so no other page can read a
-// reply either. The web listener with remote access has no Host list, as AgentK had none: it's
-// HTTPS, so a rebound page can't pass TLS for another name. Its Origin must still be its own,
+// from another site's page (an Origin header that isn't this server's own): only the pages Meko
+// serves may call it from a browser. There are no CORS headers, so no other page can read a reply
+// either. Plain HTTP, which comes only from this computer, must name 127.0.0.1, localhost or [::1]
+// with this port, and an Origin must be http:// one of those. TLS (remote access) has no Host list,
+// as AgentK had none: a rebound page can't pass TLS for another name. Its Origin must be
 // https://<Host>.
 func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 	port := strconv.Itoa(s.opts.Port)
-	allowed := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true}
-	remote := s.opts.Web != nil && s.opts.Web.Access == config.AccessRemote
-	if s.opts.Web != nil {
-		allowed["[::1]:"+port] = true
-	}
+	allowed := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true, "[::1]:" + port: true}
 	return func(c echo.Context) error {
 		r := c.Request()
-		if !remote && !allowed[r.Host] {
+		overTLS := r.TLS != nil
+		if !overTLS && !allowed[r.Host] {
 			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
 				"Requests must be addressed to 127.0.0.1:"+port+" or localhost:"+port+".")
 		}
 		o := r.Header.Get(echo.HeaderOrigin)
 		ownOrigin := strings.HasPrefix(o, "http://") && allowed[strings.TrimPrefix(o, "http://")]
-		if remote {
+		if overTLS {
 			ownOrigin = strings.EqualFold(o, "https://"+r.Host)
 		}
 		if o != "" && !ownOrigin {
@@ -281,8 +285,11 @@ func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// ui serves the web UI for any GET no other route takes.
+// ui serves the web UI for any GET no other route takes; while it's off, a page saying so.
 func (s *Server) ui(c echo.Context) error {
+	if s.opts.Web.Off {
+		return c.String(http.StatusNotFound, "The web UI is off. Turn it on with meko ui start.\n")
+	}
 	s.opts.UI.ServeHTTP(c.Response(), c.Request())
 	return nil
 }
@@ -293,8 +300,8 @@ const (
 	CredentialClient = "client" // the client token: MCP and REST clients
 	CredentialNone   = "none"   // nothing, with [server] auth = "none"
 	CredentialTicket = "ticket" // a knowledge-file link's ticket, on its route only
-	// The web listener's: a request from this computer with local access, or any same-site request
-	// with remote access.
+	// A browser's: a request from this computer (LocalAccess) over plain HTTP, or any same-site
+	// request over TLS with remote access (SameSite).
 	CredentialLocal  = "local"
 	CredentialRemote = "remote"
 )
@@ -316,12 +323,10 @@ func Credential(c echo.Context) string {
 }
 
 // adminOnly are the routes only the CLI's admin token opens, whatever the auth setting: they
-// describe the server itself, start or stop the web listener, or change the Meko Cloud link (which
-// an agent's client token mustn't redirect). On the API listener; the web listener has its own check.
-var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true, reloadWebRoute: true,
-	cloudRoute: true}
+// describe the server itself, or start and stop the web UI.
+var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true, reloadWebRoute: true}
 
-// reloadWebRoute is the API listener's, for meko ui start and stop.
+// reloadWebRoute is for meko ui start and stop.
 const reloadWebRoute = "/api/v1/web/reload"
 
 func (s *Server) reloadWeb(c echo.Context) error {
@@ -329,42 +334,113 @@ func (s *Server) reloadWeb(c echo.Context) error {
 	return envelope.OK(c, map[string]bool{"reloading": true})
 }
 
-// requireToken is the API listener's credential check: /healthz needs none, nor do the
-// knowledge-file links (their ticket is the credential); the admin-only routes need the admin
-// token; every other route takes the admin or the client token, or nothing when auth is "none". It
-// keys on the matched route, never the raw URL.
-func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
+// authorize is the credential check, keyed on the matched route, never the raw URL, and on what
+// the request carries, never on how it came in:
+//   - /healthz, the web UI's files, /ext/<name> (a redirect) and auth/status need nothing, and the
+//     knowledge-file links' ticket is their credential;
+//   - an extension's pages (/ext/<name>/...) take a browser (local or remote) and nothing else: a
+//     token there is the extension's business, never Meko's;
+//   - a request with Authorization: Bearer is held to it (checkToken), and never falls back to the
+//     browser rules: only from this computer, the admin token anywhere, the client token everywhere
+//     but the admin-only routes and the browsers' own (ownerOnly);
+//   - one without a token is a browser's (browser) when it passes their rules, then, with auth =
+//     "none", anything from this computer on the data routes, and else refused.
+func (s *Server) authorize(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		r := c.Request()
 		switch c.Path() {
-		case "/healthz":
+		case "/healthz", authStatusRoute, uiRoute, extRootRoute:
 			return next(c)
 		case uploadRoute, downloadRoute:
 			c.Set(credentialKey, CredentialTicket)
 			return next(c)
+		case extRoute:
+			if cred := s.browser(r); cred != "" {
+				c.Set(credentialKey, cred)
+				return next(c)
+			}
+			return s.refuseBrowser(c)
 		}
-		h := c.Request().Header.Get(echo.HeaderAuthorization)
-		isClient := s.opts.ClientToken != "" && auth.CheckBearer(h, s.opts.ClientToken)
-		switch {
-		case auth.CheckBearer(h, s.opts.Token):
-			c.Set(credentialKey, CredentialAdmin)
-		case adminOnly[c.Path()] && isClient:
-			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
-				"This route needs the admin token. Use the meko CLI, which reads it from the data folder.")
-		case adminOnly[c.Path()]:
+		if h := r.Header.Get(echo.HeaderAuthorization); h != "" {
+			return s.checkToken(c, next, h)
+		}
+		if adminOnly[c.Path()] {
 			c.Response().Header().Set(echo.HeaderWWWAuthenticate, "Bearer")
 			return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
 				"Missing or wrong admin token. Use the meko CLI, which reads it from the data folder.")
-		case isClient:
-			c.Set(credentialKey, CredentialClient)
-		case s.opts.Auth == config.AuthNone:
-			c.Set(credentialKey, CredentialNone)
-		default:
-			c.Response().Header().Set(echo.HeaderWWWAuthenticate, "Bearer")
-			return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
-				"Missing or wrong token. Send the client token (meko token prints it) as Authorization: Bearer <token>.")
 		}
-		return next(c)
+		if cred := s.browser(r); cred != "" {
+			c.Set(credentialKey, cred)
+			return next(c)
+		}
+		if s.opts.Auth == config.AuthNone && fromThisComputer(r) {
+			c.Set(credentialKey, CredentialNone)
+			return next(c)
+		}
+		if r.TLS != nil || browserSent(r) {
+			return s.refuseBrowser(c)
+		}
+		return missingToken(c)
 	}
+}
+
+// checkToken holds a request with an Authorization header to it: tokens are taken only from this
+// computer, whether the request came over plain HTTP or TLS.
+func (s *Server) checkToken(c echo.Context, next echo.HandlerFunc, h string) error {
+	r := c.Request()
+	if !fromThisComputer(r) {
+		return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
+			"Meko takes tokens only from this computer: send them to http://127.0.0.1:"+strconv.Itoa(s.opts.Port)+".")
+	}
+	isClient := s.opts.ClientToken != "" && auth.CheckBearer(h, s.opts.ClientToken)
+	switch {
+	case auth.CheckBearer(h, s.opts.Token):
+		c.Set(credentialKey, CredentialAdmin)
+	case adminOnly[c.Path()] && isClient:
+		return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
+			"This route needs the admin token. Use the meko CLI, which reads it from the data folder.")
+	case adminOnly[c.Path()]:
+		c.Response().Header().Set(echo.HeaderWWWAuthenticate, "Bearer")
+		return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
+			"Missing or wrong admin token. Use the meko CLI, which reads it from the data folder.")
+	case isClient:
+		c.Set(credentialKey, CredentialClient)
+	case s.opts.Auth == config.AuthNone:
+		c.Set(credentialKey, CredentialNone)
+	default:
+		return missingToken(c)
+	}
+	return next(c)
+}
+
+func missingToken(c echo.Context) error {
+	c.Response().Header().Set(echo.HeaderWWWAuthenticate, "Bearer")
+	return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
+		"Missing or wrong token. Send the client token (meko token prints it) as Authorization: Bearer <token>.")
+}
+
+// ownerOnly is a route's check for the routes only the owner reaches: a browser, or the CLI's admin
+// token. An agent's client token, or nothing with auth = "none", gets a 403: installing software,
+// updating Meko or changing the Meko Cloud link is the owner's call.
+func ownerOnly(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		switch Credential(c) {
+		case CredentialAdmin, CredentialLocal, CredentialRemote:
+			return next(c)
+		}
+		return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
+			"Only the web UI, or the meko CLI, may use this route.")
+	}
+}
+
+// fromThisComputer reports whether a request's connection comes from a loopback address.
+func fromThisComputer(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	peer, err := netip.ParseAddr(host)
+	return err == nil && peer.Unmap().IsLoopback()
 }
 
 func (s *Server) healthz(c echo.Context) error {

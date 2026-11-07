@@ -81,11 +81,11 @@ func runStart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 	return code
 }
 
-// webWait is how long start and install wait for the web listener, which binds a moment after the
-// API listener answers (after the extensions' handoff), before they print its link.
+// webWait is how long start, install and meko ui wait for the port to be listening, when it's being
+// taken again (remote access turned on or off), before they print its link.
 var webWait = 10 * time.Second
 
-// waitWebListening reads the server's status, and while the web listener is still starting (not
+// waitWebListening reads the server's status, and while the port is being taken again (not
 // listening, and not saying why) reads it again until ctx ends. It returns the last status it read.
 func waitWebListening(ctx context.Context, c *client) (server.StatusReply, error) {
 	st, err := c.status(ctx)
@@ -129,7 +129,7 @@ type runningOptions struct {
 }
 
 // printRunning is the end of start's and install's summary: the memory engine's row, which shows
-// the dots until it's ready (at most engineWait); the web listener's row, when it isn't listening;
+// the dots until it's ready (at most engineWait); the web UI's row, when it's off or not listening;
 // a ● headline with the version, the links, and the commands to run next (nextSteps).
 func printRunning(l paths.Layout, o runningOptions, stdout io.Writer) {
 	r := newReport(stdout)

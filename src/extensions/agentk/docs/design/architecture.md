@@ -13,7 +13,7 @@ flowchart LR
     B["Browser or installed web app"]
   end
   subgraph Host["Devserver (headless) or your Mac"]
-    MW["Meko web listener<br/>:7777, local or remote access"]
+    MW["Meko's port<br/>:7777, local or remote access"]
     S["AgentK server<br/>web.sock (unix socket)"]
     H["hook.sock<br/>unix socket"]
     T["session host<br/>own service (systemd or launchd)"]

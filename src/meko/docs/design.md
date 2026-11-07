@@ -10,7 +10,7 @@ an HTTP server with auth, and a supervisor for child processes. The rest builds 
 | [api.md](api.md) | MCP at `/mcp`, REST at `/api/v1`, the client token, the call log, the CLI's tool commands |
 | [knowledge.md](knowledge.md) | Knowledge files: uploads, ingestion, hybrid search with a reranker |
 | [install.md](install.md) | Release builds, releases, the installer, the login service, extensions, updates, secrets |
-| [web.md](web.md) | The web listener browsers use: local or remote access (no login), turning it off, TLS, extensions at `/ext/<name>/`, the handoff from AgentK |
+| [web.md](web.md) | One port for browsers and agents: local or remote access (no login), turning the web UI off, TLS beside plain HTTP, extensions at `/ext/<name>/`, the handoff from AgentK |
 | [web-ui.md](web-ui.md) | The web UI served at `/` |
 
 Meko keeps up to 200 MB of content by default: the stored data itself (memory text, conversation
@@ -29,8 +29,7 @@ code is private: nothing here copies it or cites its paths.
 ```mermaid
 flowchart LR
   cli["meko start"] -->|"spawns detached, or starts the login service"| serve["meko serve"]
-  serve -->|"HTTP 127.0.0.1:7778"| api["/healthz, /api/v1, /mcp"]
-  serve -->|"7777, local or remote (web.md)"| web["/ (the web UI), /api/v1, /mcp, /ext/agentk/"]
+  serve -->|"7777: agents and the CLI on 127.0.0.1, browsers local or remote (web.md)"| web["/healthz, /api/v1, /mcp, / (the web UI), /ext/agentk/"]
   serve -->|"owns"| db[("meko.db (SQLite)")]
   serve -->|"starts, watches, restarts"| memory_engine["Node memory engine"]
   memory_engine -->|"store API, unix socket"| serve
@@ -50,8 +49,7 @@ Given one of `meko-cli`'s commands, `meko` runs nothing and names the `meko-cli`
 Each command's help comes from one table (`help.go`: its group, summary, usage and examples, and its
 flag set's flags), which `meko --help`, `meko help <cmd>` and `<cmd> --help` (exit 0) all print. `install`, `start`, `stop`, `restart` and `status` print a summary
 (`report.go`): a row per step marked `✓`, `!` or `✗`, a `● Meko <version> is running` headline,
-the links as plain aligned rows (`Web UI` on the web listener, `Agents` on the API listener,
-`Cloud`), and the commands to run next (`next.go`, the first shown as the call to action, which
+the links as plain aligned rows (`Web UI` and `Agents`, both on Meko's one port, and `Cloud`), and the commands to run next (`next.go`, the first shown as the call to action, which
 leaves out what's already set up, an agent connected, memory extraction on or Meko Cloud linked,
 and once AgentK is installed offers opening it in place of installing it); the extensions
 print their own rows ([install.md](install.md#the-summary-rows)), and the colors are one palette
@@ -64,7 +62,7 @@ all; the ones that run the server:
 | Command | What it does |
 |---|---|
 | `serve` | Runs the server in the foreground. What `start`, launchd and systemd run. |
-| `start` | With the login service installed, starts it ([install.md](install.md)). Otherwise starts `serve` in the background in its own session (setsid), waits until `/api/v1/status` (with the admin token) reports the new server's pid, and prints the URL. If that doesn't happen within 10 s, it stops the server (SIGTERM, then SIGKILL) and prints `logs/start.log`. Already running: says so and exits 0. Then starts the extensions, waits up to a minute for the memory engine to be ready (`engineWait`; its row shows the dots meanwhile, then `ready in …` or `! still loading`), then up to 10 s more for the web listener (which binds after their handoff) before it prints the links. |
+| `start` | With the login service installed, starts it ([install.md](install.md)). Otherwise starts `serve` in the background in its own session (setsid), waits until `/api/v1/status` (with the admin token) reports the new server's pid, and prints the URL. If that doesn't happen within 10 s, it stops the server (SIGTERM, then SIGKILL) and prints `logs/start.log`. Already running: says so and exits 0. Then starts the extensions, waits up to a minute for the memory engine to be ready (`engineWait`; its row shows the dots meanwhile, then `ready in …` or `! still loading`), then up to 10 s more for the port while it's being taken again (remote access turned on or off) before it prints the links. |
 | `stop` | Stops the extensions, then the service, or sends SIGTERM to the pid in `run/meko.pid` and waits up to 30 s (longer than the server's 10 s drain plus 15 s for its children) before SIGKILL. Not running: says so and exits 0. |
 | `status` | Running or not, with a row each for the memory engine, the service, updates and the extensions (and the Meko Cloud link when it can't be read), then a headline with the version, pid and uptime and the link rows (people's web UI, agents' MCP URL, and the Meko Cloud it's linked to), then what to run next, from `/api/v1/status`. Each extension's row is its `<command> status`, all of them run at once while the server is asked, each cut off after 3 s (`extensions.StatusTimeout`; a `!` row, "didn't answer in 3s"); `--verbose` adds the version, port, uptime, data folder, models, certificate, auth mode and children, `--json` the reply itself (usage stats included). Exits 3 when not running. |
 | `version` | Version, commit, Go version, SQLite and sqlite-vec versions (`--json` for installers and updates). |
@@ -119,7 +117,7 @@ of input means no; a no exits 1), or doesn't ask with `--force`.
 ```
 ~/.meko/                     0700
   config.toml                optional; Meko never writes it
-  web.toml, cloud.toml       what Meko chose itself: the web listener's settings (web.md), the
+  web.toml, cloud.toml       what Meko chose itself: how browsers reach it (web.md), the
                              Meko Cloud link's URLs (cloud.md; its key is a secret)
   meko.db, meko.db-wal       0600; the only database
   meko.db.bak-<version>      the copy made before a migration (below)
@@ -153,8 +151,8 @@ Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown k
 
 | Key | Env | Default | What |
 |---|---|---|---|
-| `[server] port` | `MEKO_PORT`, `--port` | 7778 | The API listener's port on 127.0.0.1. A taken port is an error naming the setting, with no random fallback. |
-| `[web] port`, `access`, `name`; `[tls] cert`, `key` | `MEKO_WEB_PORT`, `MEKO_WEB_ACCESS` | 7777, `"local"` | The web listener ([web.md](web.md#settings)). A taken port is retried, not an error: AgentK may still hold it. What Meko chose itself (`meko install`, the handoff from AgentK) is in `web.toml`, which these keys in `config.toml` override. |
+| `[server] port` | `MEKO_PORT`, `--port` | 7777 | Meko's one port, for agents, the CLI and browsers ([web.md](web.md)). A taken port is an error naming the setting, with no random fallback. `[web] port` and `MEKO_WEB_PORT` are refused, naming it. |
+| `[web] access`, `name`, `enabled`; `[tls] cert`, `key` | `MEKO_WEB_ACCESS` | `"local"` | How browsers reach Meko ([web.md](web.md#settings)). What Meko chose itself (`meko install`, the handoff from AgentK, `meko ui start` and `stop`) is in `web.toml`, which these keys in `config.toml` override. |
 | `[server] auth` | `MEKO_AUTH` | `"token"` | `"none"` lifts the credential on `/mcp` and the data routes ([api.md](api.md)). |
 | `[log] level` | `MEKO_LOG_LEVEL`, `--log-level` | `"info"` | |
 | `[memory_engine] node`, `dir` | `MEKO_NODE`, `MEKO_MEMORY_ENGINE_DIR` | found | Node and the built memory engine ([memory-engine.md](memory-engine.md)). |
@@ -310,10 +308,10 @@ place for larger datasets.
 
 ## HTTP server
 
-echo v4. Two listeners share the handlers: the **API listener**, below, for the CLI, MCP clients and
-AgentK, and the **web listener** for browsers ([web.md](web.md)).
+echo v4, on one port for the CLI, MCP clients, the extensions and browsers ([web.md](web.md)).
 
-- The API listener listens on `127.0.0.1` only; there's no option to bind other addresses.
+- It listens on `127.0.0.1` only, unless remote access is on ([web.md](web.md)): then on every
+  address, TLS for browsers beside plain HTTP from this computer.
 - Envelope: Meko Cloud's wire shape, `{data, error{code, message, details}}`, with `error` omitted
   on success (`internal/envelope`). HTTP errors below 500 keep their status; anything else is logged
   and the caller gets a generic 500.
@@ -331,16 +329,16 @@ AgentK, and the **web listener** for browsers ([web.md](web.md)).
   `run/admin.token` (0600, in a 0700 folder), so only the OS user who runs Meko can read it. The CLI
   sends it as `Authorization: Bearer <token>`. It's compared in constant time and never logged.
 - **The client token**, for MCP and REST clients, kept across restarts ([api.md](api.md#auth)).
-- Every route needs one of them, or nothing with the opt-in `[server] auth = "none"`, except:
+- Every route needs one of them, a browser's way in (no login: local access, or remote access's
+  site check, [web.md](web.md)), or nothing with the opt-in `[server] auth = "none"`, except:
   `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload` take only the admin token;
   `/healthz` and the knowledge-file links (a one-time ticket instead) take none
-  ([api.md](api.md#auth)). The check runs on the matched route (`c.Path()`), never the raw URL. The
-  web listener has its own check, with no login: local access, or remote access's site check
-  ([web.md](web.md)).
-- Host check: requests must name `127.0.0.1:<port>` or `localhost:<port>`, which stops DNS
-  rebinding. A request with an `Origin` header is refused unless it's this server's own
-  (`http://127.0.0.1:<port>` or `http://localhost:<port>`), so no page can call it from a browser;
-  no CORS headers are sent.
+  ([api.md](api.md#auth)). A token is held to the token rules, never a browser's, and taken only
+  from this computer. The check runs on the matched route (`c.Path()`), never the raw URL.
+- Host check: plain HTTP must name `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, which
+  stops DNS rebinding. A request with an `Origin` header is refused unless it's this server's own
+  (`http://` one of those, or `https://<Host>` over TLS), so no other page can call it from a
+  browser; no CORS headers are sent.
 
 ## Supervisor
 
@@ -430,28 +428,32 @@ In `make test` on Linux and macOS:
 - **server** (in-process on port 0): `/healthz` answers without auth; `/api/v1/*` needs a token
   (401 without it or with a wrong one); a foreign Host gets 403; an `Origin` other than the server's
   own is refused; replies use the envelope with `error` omitted on success; an internal error
-  returns the generic message and logs the cause. The web listener: local access and its refusals
-  (a proxy's headers, another site, a foreign Host, a Bearer token); with remote access, no
-  credential needed, another site's page refused, the login's routes gone, the proxy's headers, and
-  a WebSocket closed by `CloseAll`; an extension that isn't answering; `POST /api/v1/web/reload`
-  for the admin token only.
+  returns the generic message and logs the cause. Browsers: local access and its refusals (a
+  proxy's headers, another site, a foreign Host); with remote access over TLS, no credential
+  needed, another site's page refused, the login's routes gone, the proxy's headers, and a WebSocket
+  closed by `CloseAll`; an extension that isn't answering; `POST /api/v1/web/reload` for the admin
+  token only. One port (`TestOnePortCredentials`): every route class against every credential,
+  plain HTTP and TLS, from this computer and elsewhere, with the web UI on and off. `Sniff`: TLS and
+  plain HTTP on one port, plain HTTP from elsewhere refused, a silent connection closed.
 - **auth** and **tlscert**: the tokens; a self-signed pair names localhost and is renewed near its
   end.
 - **config**: `[web] enabled` set and cleared in `web.toml` with its other keys kept, refused
-  while `config.toml` sets it, and still readable as a release without it reads `web.toml`.
+  while `config.toml` sets it, and still readable as a release without it reads `web.toml`;
+  `[web] port` and `MEKO_WEB_PORT` refused, and an older Meko's `port` in `web.toml` ignored.
 - **supervisor** (the test binary re-run as a stub child): starts and reports healthy; restarts with
   backoff after a crash; marks the child failed after 5 crashes in 10 minutes; stop sends SIGTERM,
   then SIGKILL to the whole process group, including a grandchild that outlives the child;
   `UnixHTTPCheck` passes on 2xx and fails on other answers or a missing socket.
-- **cli**: `start`, `status`, `stop` against a temp data folder; `ui`, `ui stop` (the port closed,
-  and kept closed across a restart) and `ui start`, running or not, and `token --json`'s `web_url`;
-  the handoff from a fake AgentK (its port, remote access and certificate taken over, its login
-  ignored, then AgentK reached through Meko over HTTPS, and nothing added twice); a second `serve` on the same
+- **cli**: `start`, `status`, `stop` against a temp data folder; `ui`, `ui stop` (browsers kept
+  out and agents let in, across a restart too) and `ui start`, running or not, and `token --json`'s
+  `web_url`; the handoff from a fake AgentK (remote access and its certificate taken over, never its
+  port, its login ignored, then AgentK reached through Meko over HTTPS while the CLI keeps plain
+  HTTP, and nothing added twice); agents at 127.0.0.1:7778 moved to the one port once; a second `serve` on the same
   folder fails on the lock; a stale pid file doesn't block `start` and is replaced by the new
   server's pid; a taken port gives the clear error; `destroy`'s refusals and what it keeps; every
   printed line ends without a period (`TestOutputLinesEndWithoutPeriod`).
 - **shutdown**: SIGTERM drains, stops children, checkpoints the WAL and removes the pid file.
 
 By hand, on a Mac and on Linux: `make build`; `meko start`, `status`, `stop`; `meko version` shows
-the SQLite and sqlite-vec versions; `curl` to `127.0.0.1:7778/api/v1/status` without a token gets
+the SQLite and sqlite-vec versions; `curl` to `127.0.0.1:7777/api/v1/status` without a token gets
 401, and with `run/admin.token` the status.

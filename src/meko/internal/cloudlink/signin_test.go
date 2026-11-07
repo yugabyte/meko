@@ -295,7 +295,7 @@ func TestKeyNameAndURL(t *testing.T) {
 	for in, want := range map[string]string{
 		DefaultURL:                         "https://mcp.mekodata.ai/api-keys",
 		"https://meko.example.com/x/mcp/":  "https://meko.example.com/x/api-keys",
-		"http://127.0.0.1:7778/mcp":        "http://127.0.0.1:7778/api-keys",
+		"http://127.0.0.1:7777/mcp":        "http://127.0.0.1:7777/api-keys",
 		"https://meko.example.com/ignored": "https://meko.example.com/ignored/api-keys",
 	} {
 		if got := APIKeysURL(in); got != want {

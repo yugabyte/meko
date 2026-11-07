@@ -25,8 +25,8 @@ import (
 // location: the datapack's id decides. The server calls Meko Cloud with the link's key, which never
 // leaves it.
 
-// owner says whether the request is the owner's: the admin token (meko-cli) or a browser on the web
-// listener (local or remote access), not an agent's client token. The owner's settings and a create
+// owner says whether the request is the owner's: the admin token (meko-cli) or a browser (local or
+// remote access), not an agent's client token. The owner's settings and a create
 // in the linked Meko Cloud take it; a client creates one through /mcp.
 func (a *api) owner(c echo.Context) bool {
 	switch a.Credential(c) {
@@ -66,7 +66,7 @@ func (a *api) staleTab(c echo.Context) bool {
 	return a.browser(c) && c.QueryParam("location") == "local"
 }
 
-// browser says whether the request is a browser's on the web listener (local or remote access).
+// browser says whether the request is a browser's (local or remote access).
 func (a *api) browser(c echo.Context) bool {
 	switch a.Credential(c) {
 	case "remote", "local":

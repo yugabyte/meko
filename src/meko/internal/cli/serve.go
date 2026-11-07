@@ -71,11 +71,10 @@ func SignalContext() context.Context {
 }
 
 // Serve runs the server until ctx ends: it locks the data folder, opens and migrates the
-// database, listens on 127.0.0.1 (the API listener), writes the admin token, pid and port files,
-// and serves; and it runs the web listener beside it (webListener), which hands over from the
-// extensions first. On
-// the way out it drains requests, stops children, checkpoints the WAL, closes the database and
-// removes the run files.
+// database, takes Meko's one port (webListener: 127.0.0.1, or every address with remote access),
+// writes the admin token, pid and port files, and serves agents, the CLI and browsers on it, with
+// the extensions' handoff once it serves. On the way out it drains requests, stops children,
+// checkpoints the WAL, closes the database and removes the run files.
 func Serve(ctx context.Context, o ServeOptions) (err error) {
 	l, cfg := o.Layout, o.Config
 	if err = l.Ensure(); err != nil {
@@ -190,11 +189,13 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 
-	ln, err := server.Listen(cfg.Server.Port)
-	if err != nil {
+	// The one port, for agents, the CLI and browsers: taken now, so one another program holds stops
+	// serve before anything starts. The extensions hand over once it serves (web.Run).
+	web := newWebListener(l, st, log, cfg.Server.Port)
+	if err = web.Bind(cfg); err != nil {
 		return err
 	}
-	defer ln.Close()
+	defer web.Close()
 	token, err := auth.NewToken()
 	if err != nil {
 		return err
@@ -322,8 +323,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return mcp.Call(ctx, mcpOpts, cred, name, args)
 	}
 	registerREST := func(g *echo.Group) { rest.Register(g, restOpts) }
-	// The web listener: the web UI and the extensions' for browsers, with local or remote access.
-	web := newWebListener(l, st, log)
 	// Updates: a release install checks for them, and the Status page checks and installs them.
 	restart := make(chan struct{})
 	updCtx, stopUpdates := context.WithCancel(context.Background())
@@ -367,22 +366,17 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	// The routes that take a datapack send one this Meko doesn't have to the linked Meko Cloud.
 	restOpts.Cloud = cloud
 	mcpHandler := mcp.NewHandler(mcpOpts)
+	// The server for the settings the listener takes up: [web] (access, and whether browsers are let
+	// in) may change while serve runs; the rest is read at start.
 	web.newOpts = func(wcfg config.Config) server.Options {
-		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
-			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
-			MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, UI: ui, Cloud: cloud,
-			Agents: agentsMgr, Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
-				Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates, CheckExtensions: web.CheckExtensions,
-				SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
+		return server.Options{Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken,
+			Auth: cfg.Server.Auth, Logger: log, Children: sup.Statuses, MemoryEngine: svc.EngineStatus,
+			UsageStats: usage.State, Storage: svc.Storage, MCP: mcpHandler, REST: registerREST, Upload: upload,
+			Download: download, UI: ui, Cloud: cloud, Agents: agentsMgr, WebStatus: web.Status, ReloadWeb: web.Reload,
+			Web: &server.Web{Access: wcfg.Web.Access, Off: !wcfg.Web.Enabled, Extensions: web.Proxies,
+				Installed: web.Installed, Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates,
+				CheckExtensions: web.CheckExtensions, SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
 	}
-	srv := server.New(server.Options{
-		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
-		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
-		MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, Cloud: cloud, Agents: agentsMgr,
-		WebStatus: web.Status, ReloadWeb: web.Reload,
-	})
-	served := make(chan error, 1)
-	go func() { served <- srv.Serve(ln) }()
 	webCtx, stopWeb := context.WithCancel(context.Background())
 	defer stopWeb()
 	webDone := make(chan struct{})
@@ -397,6 +391,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	go func() {
 		defer close(followDone)
 		moveBackOnce(followCtx, st, cloud, log)
+		moveToOnePortOnce(followCtx, st, agentsMgr, local, log)
 	}()
 	go cloud.CloudTools(followCtx)
 	// The extensions still running from before this start read Meko again: an update or a rollback may
@@ -409,7 +404,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			"write your memories through /mcp and /api/v1")
 	}
 
-	var serveErr error
 	// Without a service to start the new version, serve runs it in its own place once it has stopped.
 	var execInto string
 	select {
@@ -425,7 +419,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		if os.Getenv("MEKO_SERVICE") == "" {
 			execInto = app.CurrentExe()
 		}
-	case serveErr = <-served:
 	}
 	stopUpdates()
 	// An action still running is stopped (an install is cut off; Install again finishes it). Its
@@ -435,20 +428,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		defer close(jobsDone)
 		web.jobs.Cancel(jobsWait)
 	}()
-	if onProbation && serveErr == nil {
+	if onProbation {
 		// A clean stop of a version on probation isn't a failed start.
 		if err := app.Uncount(release); err != nil {
 			log.Warn("can't update the pending update", "error", err)
 		}
 	}
-	stopWeb() // Run drains the web listener (drainTimeout) before it returns
+	stopWeb() // Run drains the port (drainTimeout) before it returns
 	<-webDone
-	// The API listener's own drain, after the web listener's: agents' requests get the whole of it.
-	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
-	defer cancel()
-	if err := srv.Shutdown(drain); err != nil {
-		log.Warn("requests didn't finish in time", "error", err)
-	}
 	stopEmbedder()
 	<-embedderDone
 	stopFollow()
@@ -467,10 +454,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	<-jobsDone
 	log.Info("Meko stopped")
 	// A stop asked for while serve was stopping (meko stop, restart or destroy) wins over the exec.
-	if serveErr == nil && execInto != "" && ctx.Err() == nil {
+	if execInto != "" && ctx.Err() == nil {
 		return &execError{exe: execInto, why: "restarting into the update"}
 	}
-	return serveErr
+	return nil
 }
 
 // installFacts is what the usage stats say about this install: versions, platform, settings and
@@ -749,6 +736,31 @@ func moveBackOnce(ctx context.Context, st *store.Store, cloud *cloudlink.Service
 	}
 	if err := st.SetSetting(ctx, keyAgentsOnThisMeko, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		log.Warn("can't record that the agents came back from Meko Cloud", "error", err)
+	}
+}
+
+// keyAgentsOnOnePort records that this Meko moved the agents connected to the listener agents had
+// before one port (127.0.0.1:7778) to its one port, so it runs once.
+const keyAgentsOnOnePort = "agents_one_port"
+
+// oldAgentsURL is where a Meko before one port had its agents connect: its agents' listener's MCP URL.
+const oldAgentsURL = "http://127.0.0.1:7778/mcp"
+
+// moveToOnePortOnce connects to the one port, once, the agents a Meko before it connected to its
+// agents' listener: Move connects every agent whose meko server is on this computer and isn't the
+// target, and leaves the rest. It's recorded only when no agent failed, so a failed one is tried
+// again at the next start; a stop during it leaves it for the next start too.
+func moveToOnePortOnce(ctx context.Context, st *store.Store, m *agents.Manager, to agents.Target, log *slog.Logger) {
+	if _, done, err := st.Setting(ctx, keyAgentsOnOnePort); err != nil || done {
+		return
+	}
+	moves := m.Move(ctx, agents.Target{Kind: agents.KindLocal, URL: oldAgentsURL, Token: to.Token}, to)
+	logMoves(log, moves)
+	if ctx.Err() != nil || len(moves.Failed) > 0 {
+		return
+	}
+	if err := st.SetSetting(ctx, keyAgentsOnOnePort, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		log.Warn("can't record that the agents moved to Meko's one port", "error", err)
 	}
 }
 

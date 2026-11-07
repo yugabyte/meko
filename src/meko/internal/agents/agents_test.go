@@ -33,7 +33,7 @@ func TestMain(m *testing.M) {
 const (
 	token    = "test-token-0123456789"
 	cloudKey = "mko_tkn_cloud_0123456789wxyz"
-	localURL = "http://127.0.0.1:7778/mcp"
+	localURL = "http://127.0.0.1:7777/mcp"
 	cloudURL = "https://cloud.example.com/mcp"
 	otherURL = "https://meko.example.com/mcp"
 )
@@ -772,7 +772,7 @@ model = "o3"
 command = "git-mcp"
 
 [mcp_servers.meko]
-url = "http://127.0.0.1:7778/mcp"
+url = "http://127.0.0.1:7777/mcp"
 http_headers = { Authorization = "Bearer ` + token + `" }
 `
 	if got := read(t, path); got != w {

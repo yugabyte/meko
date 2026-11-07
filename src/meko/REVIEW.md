@@ -13,30 +13,35 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] Every database call goes through `internal/store`, the only package that imports the SQLite
       driver.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
-- [ ] On the API listener, every route but `/healthz` and the knowledge-file links needs a
+- [ ] Meko has one port, `[server] port` ([docs/web.md](docs/web.md)): nothing listens on
+      another, and `[web] port` stays refused. Every route but `/healthz`, the UI's files,
+      `/api/v1/auth/status`, `/ext/<name>` (the slash redirect) and the knowledge-file links needs a
       credential, checked on the matched route (`c.Path()`), never the raw URL. The links
       (`/api/v1/knowledge-uploads/:ticket`, `/api/v1/knowledge-downloads/:ticket`) take a one-time
       ticket instead: 256 random bits, 5 minutes, an upload's bound to its datapack, key, size and
       SHA-256 ([docs/knowledge.md](docs/knowledge.md)). Otherwise it's the admin token on
-      `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload`, the admin or client token
-      everywhere else, and nothing there only with `[server] auth = "none"`
-      ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text: a call's
+      `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload`; the owner (a browser or the
+      admin token, never the client token) on the Extensions, update and Meko Cloud link routes; and
+      the admin or client token or a browser everywhere else, with nothing there only with
+      `[server] auth = "none"` ([docs/api.md](docs/api.md#auth)). A request with a token is held to
+      it and never falls back to a browser's way in, and tokens are taken only from a loopback peer. Tokens and call-log rows never hold memory or turn text: a call's
       arguments and reply go only in `call_contents`, only while Settings keeps them, for 7 days, and
       never into an export, usage stats or a log. The store
       API and the memory engine's API listen only on their unix sockets (0600) and need the internal
       token on every route, the memory engine's `/healthz` too (its reply can say why the memory
-      engine failed). The API listener binds 127.0.0.1 only, checks `Host`, and refuses requests
-      whose `Origin` isn't its own (`http://127.0.0.1:<port>` or `http://localhost:<port>`).
+      engine failed). The port binds 127.0.0.1 only unless remote access is on; plain HTTP
+      comes only from a loopback peer (`Sniff`), must name 127.0.0.1, localhost or [::1] in `Host`,
+      and is refused with an `Origin` that isn't its own.
       `knowledgebase_upload_file` reads a path as the server's user, so it refuses a call that came
       in with no token.
-- [ ] The web listener ([docs/web.md](docs/web.md)) never takes a Bearer token and has no
-      admin-only routes, and no login. A request gets in by local access (`LocalAccess`, only with
-      `[web] access = "local"`) or, with remote access, by the site check (`SameSite`: no other
-      site's page sent it), checked on the matched route; only `/healthz`, the UI's files,
-      `/api/v1/auth/status`, `/ext/<name>` (the slash redirect) and the knowledge-file links go
-      without. Remote access is HTTPS; its Origin must be `https://<Host>`. A stop of the listener
-      (`meko ui stop`, a restart) closes the WebSockets the proxy upgraded (`CloseAll`).
-      `[web] enabled` is written to `web.toml`, never `config.toml`.
+- [ ] Browsers ([docs/web.md](docs/web.md)) have no login. One gets in, without a token, by local
+      access (`LocalAccess`, over plain HTTP from this computer) or, over TLS with remote access, by
+      the site check (`SameSite`: no other site's page sent it); its Origin over TLS must be
+      `https://<Host>`. While the web UI is off (`meko ui stop`) no browser gets in, `/` and
+      `/ext/<name>/` answer 404, agents keep the port, and the WebSockets the proxy upgraded close
+      (`CloseAll`); with remote access the port is taken again on 127.0.0.1 only. A settings change
+      swaps the server under the same socket, and takes the port again only when its address
+      changes. `[web] enabled` is written to `web.toml`, never `config.toml`.
 - [ ] `/ext/<name>/*` passes the browser's Host and Origin to the extension's socket, drops the
       Cookie and adds no `X-Forwarded-*` (the extension trusts its socket and checks only the
       origin). The handoff (`_handoff --json`) takes an extension's old settings over once and only

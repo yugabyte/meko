@@ -108,7 +108,8 @@ func TestInstallRefusesAPortInUse(t *testing.T) {
 	defer func() { _ = ln.Close() }()
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+" is in use by another program\n")
+	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+
+		" is in use by another program (an AgentK from before Meko served it, or another)\n")
 	// Nothing was written before the check: no rows of the steps before it, no web.toml, no token.
 	if strings.Contains(out, "✓ Data") {
 		t.Errorf("install wrote the data folder before the port check:\n%s", out)
