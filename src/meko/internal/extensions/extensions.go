@@ -89,7 +89,7 @@ var Known = map[string]Catalog{
 		OldTitles: []string{"Presenter"},
 		Description: "Builds presentations that branch with the room from your datapacks: Claude drafts the story " +
 			"map and the slides, and you pick each path live.",
-		Summary:       "presentations that branch with the room, built from your datapacks",
+		// No Summary: meko install's picker doesn't offer it; meko extension install present adds it.
 		Command:       "me_present",
 		Verb:          "present",
 		TagPrefixes:   []string{"present-v"},
@@ -129,7 +129,7 @@ type Catalog struct {
 	// output, such as the status headline meko status shows without the title (Present: Presenter).
 	OldTitles   []string
 	Description string // what it does, in a sentence, for the web UI's Extensions page
-	Summary     string // what it does, in a few lowercase words, for meko install's picker
+	Summary     string // what it does, in a few lowercase words, for meko install's picker, which skips one without
 	Command     string // the program's name: a release's bin/<Command>, or a build from source's on PATH
 	Verb        string // the meko command that runs it: meko <Verb> <its command>
 	// OldNames are the names Meko knew it by before, newest first (Kode's agentk). An entry

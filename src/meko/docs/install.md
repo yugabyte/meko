@@ -145,9 +145,11 @@ safe.
   gives the URL and the access.
 - It installs Meko alone. On a first install from the installer (`MEKO_INSTALL_FIRST=1`) at a
   terminal, it ends, after the links, with "Choose your agentic experience": a picker of the
-  known extensions not installed yet (`extensions.Known`, Kode first), each by the `meko`
-  command that runs it (`kode`, `present`) with its `Summary`; then the experiences still to come
-  (`migrate`, `scribe`), dim and ending " · coming soon"; then "skip for now". ↑ and ↓ (or k and
+  known extensions not installed yet that have a `Summary` (`extensions.Known`, Kode first), each
+  by the `meko` command that runs it (`kode`) with its `Summary`; Present has none, so it isn't
+  offered there (`meko extension install present` adds it). After them, the experiences still to
+  come (`migrate`, `scribe`), dim and ending " · coming soon"; then "skip for now". With none to
+  offer (Kode already added), there's no picker. ↑ and ↓ (or k and
   j) move the mark, skipping the ones to come, and Enter picks; the rows have no numbers
   (`pickRows`, on `/dev/tty`). A row wider than the terminal is cut with "…" to fit (its
   description first, then " · coming soon" with it, and last its label, at the width read for each
