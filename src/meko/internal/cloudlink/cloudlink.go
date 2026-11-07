@@ -147,7 +147,7 @@ func (s Store) save(linked bool, l Link) error {
 		}
 	}
 	var b strings.Builder
-	b.WriteString("# The Meko Cloud link, written by Meko (its web UI's Settings › Meko Cloud, or meko cloud_link).\n" +
+	b.WriteString("# The Meko Cloud link, written by Meko (its web UI's Settings › Meko Cloud, or meko cloud-link).\n" +
 		"# The API key is kept with Meko's other secrets, not here.\n")
 	fmt.Fprintf(&b, "linked = %t\n", linked)
 	for _, kv := range [][2]string{{"url", l.URL}, {"web_url", l.WebURL}, {"api_url", l.APIURL}} {

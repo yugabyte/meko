@@ -28,7 +28,7 @@ sh scripts/smoke-release.sh out/presenter-<version>-linux-x64.tar.gz <version>
 
 Under `npm run dev` the pages are at `http://127.0.0.1:5179/` with no `<base>`; Meko's web
 listener isn't involved, but the server still asks `meko token --json` which Meko to use: a Meko
-on this computer (`meko start`), and through it the Meko Cloud link it keeps (`meko cloud_link`). To try it behind Meko: `npm run build`, put `dist/server/cli.js` on PATH as
+on this computer (`meko start`), and through it the Meko Cloud link it keeps (`meko cloud-link`). To try it behind Meko: `npm run build`, put `dist/server/cli.js` on PATH as
 `me_presenter` (`npm link`), and run `meko extension install presenter`, then `meko ui /ext/presenter/`.
 
 ## Map

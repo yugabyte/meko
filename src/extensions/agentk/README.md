@@ -73,7 +73,7 @@ Setup offers to install anything missing and prints the address to open. A new i
 the AgentK tour. Updates install by themselves.
 
 To share projects with your team, link Meko to Meko Cloud: Settings › Meko Cloud in Meko's web UI,
-or `meko cloud_link`.
+or `meko cloud-link`.
 
 AgentK has no login. With Meko's remote access (the default over SSH), anyone who can reach port
 7777 can open it and its terminals.

@@ -1,5 +1,5 @@
 // Package cli is the meko and meko-cli commands, one binary run by either name. meko runs Meko:
-// install, start, stop, restart, status, logs, update, version, token, ui, ui start|stop, cloud_link,
+// install, start, stop, restart, status, logs, update, version, token, ui, ui start|stop, cloud-link,
 // destroy, uninstall, extension list|install|update|delete, agent list|connect|disconnect (agent.go)
 // and serve. meko-cli
 // works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
@@ -35,7 +35,7 @@ const (
 	exitLocked = 75
 )
 
-// stdin is what add_memory, delete_datapack, cloud_link, destroy, uninstall --purge and extension
+// stdin is what add_memory, delete_datapack, cloud-link, destroy, uninstall --purge and extension
 // delete read; tests replace it.
 var stdin io.Reader = os.Stdin
 
@@ -212,7 +212,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		if i := slices.Index(rest, "--"); i >= 0 {
 			rest, c.extra = rest[:i], rest[i+1:]
 		}
-	case "cloud_link":
+	case "cloud-link":
 		fs.StringVar(&cl.url, "url", "", "the MCP server's URL (default Meko Cloud's)")
 		fs.StringVar(&cl.webURL, "web-url", "", "its web app's URL (default: worked out from --url)")
 		fs.StringVar(&cl.apiURL, "api-url", "", "its REST API's URL (default: the web app's plus /api/v1)")
@@ -297,11 +297,11 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	cl.set = map[string]bool{}
 	fs.Visit(func(fl *flag.Flag) { cl.set[fl.Name] = true })
 	if cl.off && (cl.set["url"] || cl.set["web-url"] || cl.set["api-url"]) {
-		fmt.Fprintln(stderr, "meko cloud_link: --off takes no URLs")
+		fmt.Fprintln(stderr, "meko cloud-link: --off takes no URLs")
 		return exitUsage
 	}
 	if cl.off && cl.noBrowser {
-		fmt.Fprintln(stderr, "meko cloud_link: --off and --no-browser don't go together")
+		fmt.Fprintln(stderr, "meko cloud-link: --off and --no-browser don't go together")
 		return exitUsage
 	}
 	if cmd == "extension update" && c.all && (t.text != "" || c.auto != "") {
@@ -343,7 +343,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		return runUISwitch(l, true, stdout, stderr)
 	case "ui stop":
 		return runUISwitch(l, false, stdout, stderr)
-	case "cloud_link":
+	case "cloud-link":
 		return runCloudLink(l, cl, stdin, stdout, stderr)
 	case "destroy":
 		return runDestroy(l, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdin, stdout, stderr)
