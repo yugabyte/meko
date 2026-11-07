@@ -121,9 +121,10 @@ func TestPickKeyNeedsATerminal(t *testing.T) {
 	}
 }
 
-// A first install's picker asks on the terminal which extension to add: Skip and Ctrl+C add none,
-// and one whose install fails is a ✗ row, with Meko left as it is. AgentK, already added, isn't
-// offered again.
+// A first install's picker asks on the terminal which experience to add, by the meko command that
+// runs it, with no numbers: the mark skips the coming-soon rows, skip for now and Ctrl+C add none,
+// and one whose install fails is a ✗ row, with Meko left as it is. On an 80-column terminal a long
+// detail is cut to fit its line. AgentK, already added, isn't offered again.
 func TestPickExtensionOnATerminal(t *testing.T) {
 	dir, _ := setup(t)
 	noRealExtensions(t)
@@ -131,41 +132,66 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 	if err := l.Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct {
-		name, typed string
-		shows       []string
-	}{
-		{"3 skips", "3", []string{"  ? Add an extension? (↑ and ↓, then Enter, or 1 to 3)\n",
-			"  ❯ 1) AgentK         runs coding agents across your projects, from task to merged PR",
-			"    2) Present        presentations that branch with the room",
-			"    3) Skip for now"}},
-		{"Ctrl+C adds none", "\x03", nil},
-		{"AgentK, whose install fails", "\r", []string{
-			"\n  → meko extension install agentk   · adds an extension at any time\n",
-			"  ✗ AgentK          not added: "}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			var shown syncWriter
-			typing, term := openPTYTo(t, &shown)
-			old := openTTY
-			openTTY = func() (*os.File, error) { return os.OpenFile(term.Name(), os.O_RDWR, 0) }
-			defer func() { openTTY = old }()
-			t.Setenv("NO_COLOR", "1")
-			got := make(chan string, 1)
-			go func() { got <- pickExtension(l, true, term, term)(newReport(term)) }()
+	all := []string{"  ? Choose your agentic experience\n",
+		"  ❯ kode           agentic development — reviews, PRs, refactors\033[K\n",
+		"    present        presentations that branch with the room, built from your datapacks\033[K\n",
+		"    migrate        database migrations with a safety net · coming soon\033[K\n",
+		"    scribe         briefs, decks, docs and posts from your context · coming soon\033[K\n",
+		"    skip for now   explore the base platform — add an experience anytime\033[K\n"}
+	// pick runs the picker on a pseudo-terminal cols wide, types each of typed after a pause, and
+	// returns what it added and what the terminal showed.
+	pick := func(t *testing.T, cols uint16, typed ...string) (string, string) {
+		t.Helper()
+		var shown syncWriter
+		typing, term := openPTYTo(t, &shown)
+		if err := unix.IoctlSetWinsize(int(term.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Row: 40, Col: cols}); err != nil {
+			t.Fatal(err)
+		}
+		old := openTTY
+		openTTY = func() (*os.File, error) { return os.OpenFile(term.Name(), os.O_RDWR, 0) }
+		t.Cleanup(func() { openTTY = old })
+		t.Setenv("NO_COLOR", "1")
+		got := make(chan string, 1)
+		go func() { got <- pickExtension(l, true, term, term)(newReport(term)) }()
+		for _, k := range typed {
 			time.Sleep(100 * time.Millisecond)
-			if _, err := typing.WriteString(c.typed); err != nil {
+			if _, err := typing.WriteString(k); err != nil {
 				t.Fatal(err)
 			}
-			if name := <-got; name != "" {
+		}
+		name := <-got
+		time.Sleep(50 * time.Millisecond)
+		return name, strings.ReplaceAll(shown.String(), "\r\n", "\n")
+	}
+	for _, c := range []struct {
+		name  string
+		cols  uint16
+		typed []string
+		shows []string
+	}{
+		{"down twice skips the soon rows to skip for now", 120, []string{"j", "\x1b[B", "\r"},
+			append(all, "  ❯ skip for now   explore the base platform")},
+		{"up wraps to skip for now", 120, []string{"k", "\r"}, []string{"  ❯ skip for now"}},
+		{"a number does nothing", 120, []string{"2", "\x03"}, nil},
+		{"Ctrl+C adds none", 120, []string{"\x03"}, nil},
+		{"kode, whose install fails", 120, []string{"\r"}, []string{
+			"\n  → meko extension install agentk   · adds an extension at any time\n",
+			"  ✗ kode            not added: "}},
+		{"80 columns cut a long detail", 80, []string{"\x03"}, []string{
+			"    present        presentations that branch with the room, built from your da…\033[K\n"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			name, out := pick(t, c.cols, c.typed...)
+			if name != "" {
 				t.Errorf("added %q", name)
 			}
-			time.Sleep(50 * time.Millisecond)
-			out := strings.ReplaceAll(shown.String(), "\r\n", "\n")
 			for _, s := range c.shows {
 				if !strings.Contains(out, s) {
 					t.Errorf("no %q in:\n%s", s, out)
 				}
+			}
+			if strings.Contains(out, "1)") || strings.Contains(out, "Enter") {
+				t.Errorf("numbers or a hint in:\n%s", out)
 			}
 		})
 	}
@@ -178,19 +204,7 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 	if err = reg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	var shown syncWriter
-	typing, term := openPTYTo(t, &shown)
-	openTTY = func() (*os.File, error) { return os.OpenFile(term.Name(), os.O_RDWR, 0) }
-	defer func() { openTTY = func() (*os.File, error) { return os.OpenFile("/dev/tty", os.O_RDWR, 0) } }()
-	got := make(chan string, 1)
-	go func() { got <- pickExtension(l, true, term, term)(newReport(term)) }()
-	time.Sleep(100 * time.Millisecond)
-	if _, err = typing.WriteString("2"); err != nil {
-		t.Fatal(err)
-	}
-	<-got
-	time.Sleep(50 * time.Millisecond)
-	if out := shown.String(); strings.Contains(out, "AgentK") || !strings.Contains(out, "1) Present") {
+	if _, out := pick(t, 120, "\x03"); strings.Contains(out, "kode") || !strings.Contains(out, "  ❯ present ") {
 		t.Errorf("with AgentK added:\n%s", out)
 	}
 }

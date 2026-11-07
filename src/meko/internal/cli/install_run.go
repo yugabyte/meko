@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -296,25 +297,38 @@ func portInUse(r report, msg string, port int, move string) {
 // addLater is what a first install says in place of the picker, where it can't ask.
 const addLater = "Add an extension at any time: meko extension install agentk"
 
-// pickExtension is a first install's last question, asked after the links: which of the known
-// extensions not installed yet to add, or none. The one picked is installed as meko extension
-// install does, on the terminal, where it asks its own questions; it returns its name, or "" for
-// none. Where it can't (no terminal) or mayn't (--non-interactive) ask, it says how to add one
-// later. A failed extension install is a ✗ row and its error, and Meko stays installed.
+// upcoming are the experiences a first install's picker lists as coming soon. They aren't
+// extensions yet (nothing in extensions.Known), so they can't be picked or installed.
+var upcoming = []pickRow{
+	{label: "migrate", detail: "database migrations with a safety net", soon: true},
+	{label: "scribe", detail: "briefs, decks, docs and posts from your context", soon: true},
+}
+
+// skipRow is the picker's last row, which adds none.
+var skipRow = pickRow{label: "skip for now", detail: "explore the base platform — add an experience anytime"}
+
+// pickExtension is a first install's last question, asked after the links: "Choose your agentic
+// experience", which of the known extensions not installed yet to add (each by its Verb, the meko
+// command that runs it, with its Summary), or none; the upcoming ones are listed too, dim, and
+// can't be picked. The one picked is installed as meko extension install does, on the terminal,
+// where it asks its own questions; it returns its name, or "" for none. Where it can't (no
+// terminal) or mayn't (--non-interactive) ask, it says how to add one later. A failed extension
+// install is a ✗ row and its error, and Meko stays installed.
 func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r report) string {
 	return func(r report) string {
 		reg, err := extensions.Load(l.Root)
 		if err != nil {
 			return ""
 		}
-		var names, choices, details []string
+		var names []string
+		var rows []pickRow
 		for _, n := range extensions.KnownNames() {
 			if _, ok := reg.Entries[n]; ok {
 				continue
 			}
+			c := extensions.Known[n]
 			names = append(names, n)
-			choices = append(choices, extensions.Known[n].Title)
-			details = append(details, extensions.Known[n].Summary)
+			rows = append(rows, pickRow{label: cmp.Or(c.Verb, n), detail: c.Summary})
 		}
 		if len(names) == 0 {
 			return ""
@@ -323,8 +337,7 @@ func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r re
 		for i, n := range names {
 			if n == "agentk" && i > 0 {
 				names[0], names[i] = names[i], names[0]
-				choices[0], choices[i] = choices[i], choices[0]
-				details[0], details[i] = details[i], details[0]
+				rows[0], rows[i] = rows[i], rows[0]
 			}
 		}
 		var tty *os.File
@@ -337,12 +350,13 @@ func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r re
 		}
 		defer func() { _ = tty.Close() }()
 		fmt.Fprintln(stdout)
-		i, err := pickKey(tty, stdout, "Add an extension?", append(choices, "Skip for now"), details)
+		rows = append(append(rows, upcoming...), skipRow)
+		i, err := pickRows(tty, stdout, "Choose your agentic experience", rows, false)
 		if errors.Is(err, errNoKeyMode) {
 			fmt.Fprintf(stdout, "  %s\n", addLater)
 			return ""
 		}
-		if err != nil || i == len(names) {
+		if err != nil || i >= len(names) {
 			return ""
 		}
 		name := names[i]
@@ -350,7 +364,7 @@ func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r re
 			spin.Dim("   · adds an extension at any time", r.color))
 		err = installExtension(context.Background(), l, name, extInstallOptions{}, true, tty, stdout, stderr)
 		if err != nil {
-			r.step(stepFail, choices[i], "not added: "+err.Error())
+			r.step(stepFail, rows[i].label, "not added: "+err.Error())
 			return ""
 		}
 		return name

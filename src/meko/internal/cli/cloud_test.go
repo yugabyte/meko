@@ -731,9 +731,88 @@ func TestPickKeyPress(t *testing.T) {
 		{"Ctrl+C", 0, "\x03", 0, false, errCanceled},
 		{"Ctrl+D", 1, "\x04", 1, false, errCanceled},
 	} {
-		next, picked, err := pickKeyPress(c.at, 2, []byte(c.keys))
+		next, picked, err := pickKeyPress(c.at, make([]pickRow, 2), true, []byte(c.keys))
 		if next != c.next || picked != c.picked || !errors.Is(err, c.err) {
 			t.Errorf("%s: %d %v %v, want %d %v %v", c.name, next, picked, err, c.next, c.picked, c.err)
+		}
+	}
+}
+
+// The install picker's keys: its rows aren't numbered, so a number does nothing, and the mark skips
+// the coming-soon rows both ways, wrapping around; Enter never picks one.
+func TestPickKeyPressSkipsSoonRows(t *testing.T) {
+	rows := []pickRow{{label: "kode"}, {label: "present"}, {label: "migrate", soon: true},
+		{label: "scribe", soon: true}, {label: "skip for now"}}
+	for _, c := range []struct {
+		name   string
+		at     int
+		keys   string
+		next   int
+		picked bool
+	}{
+		{"down", 0, "\x1b[B", 1, false},
+		{"down past the soon rows", 1, "\x1b[B", 4, false},
+		{"down wraps", 4, "j", 0, false},
+		{"up past the soon rows", 4, "\x1b[A", 1, false},
+		{"up wraps", 0, "k", 4, false},
+		{"Enter", 4, "\r", 4, true},
+		{"Enter on a soon row", 2, "\r", 2, false},
+		{"no numbers", 0, "2", 0, false},
+	} {
+		next, picked, err := pickKeyPress(c.at, rows, false, []byte(c.keys))
+		if next != c.next || picked != c.picked || err != nil {
+			t.Errorf("%s: %d %v %v, want %d %v", c.name, next, picked, err, c.next, c.picked)
+		}
+	}
+	if _, picked, _ := pickKeyPress(0, []pickRow{{}, {soon: true}}, true, []byte("2")); picked {
+		t.Error("a soon row's number picked it")
+	}
+}
+
+// The picker's rows: numbered, the question gives the keys; unnumbered, it doesn't. Details sit in
+// one column, counted in terminal cells (an em dash is one), and a soon row ends " · coming soon".
+// At a terminal's width a long detail is cut with "…" so its row fits on a line, " · coming soon"
+// kept; with no width nothing is cut.
+func TestPickLines(t *testing.T) {
+	rows := []pickRow{{label: "kode", detail: "agentic development — reviews, PRs, refactors"},
+		{label: "migrate", detail: "database migrations with a safety net", soon: true},
+		{label: "skip for now"}}
+	got := pickLines("Choose?", rows, false, 0, false, 0)
+	want := "  ? Choose?\n" +
+		"  ❯ kode           agentic development — reviews, PRs, refactors\033[K\n" +
+		"    migrate        database migrations with a safety net · coming soon\033[K\n" +
+		"    skip for now\033[K\n"
+	if got != want {
+		t.Errorf("unnumbered:\n%q\nwant\n%q", got, want)
+	}
+	if q := pickLines("How?", rows[:1], true, -1, false, 0); q != "  ? How? (↑ and ↓, then Enter, or 1 to 1)\n" {
+		t.Errorf("numbered question: %q", q)
+	}
+	got = pickLines("", rows, false, 2, false, 50)
+	want = "    kode           agentic development — reviews…\033[K\n" +
+		"    migrate        database migrat… · coming soon\033[K\n" +
+		"  ❯ skip for now\033[K\n"
+	if got != want {
+		t.Errorf("50 columns:\n%q\nwant\n%q", got, want)
+	}
+	// Narrower, " · coming soon" goes with the detail it ends, and then the label is cut too; at no
+	// width does a row reach the edge.
+	got = pickLines("", rows, false, 0, false, 30)
+	want = "  ❯ kode           agentic d…\033[K\n" +
+		"    migrate\033[K\n" +
+		"    skip for now\033[K\n"
+	if got != want {
+		t.Errorf("30 columns:\n%q\nwant\n%q", got, want)
+	}
+	if got = pickLines("", rows, false, 0, false, 12); !strings.Contains(got, "    skip f…\033[K\n") {
+		t.Errorf("12 columns: %q", got)
+	}
+	for width := 6; width <= 90; width++ {
+		lines := pickLines("", rows, false, 0, false, width)
+		for _, line := range strings.Split(strings.TrimSuffix(lines, "\n"), "\n") {
+			if n := cells(strings.TrimSuffix(line, "\033[K")); n >= width {
+				t.Errorf("%q takes %d cells of %d", line, n, width)
+			}
 		}
 	}
 }

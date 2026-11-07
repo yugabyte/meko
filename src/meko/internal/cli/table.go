@@ -116,6 +116,28 @@ func cells(s string) int {
 	return n
 }
 
+// fitCells is s cut to n terminal cells, ending in "…" when it's cut; "" when n can't hold more
+// than the "…".
+func fitCells(s string, n int) string {
+	if cells(s) <= n {
+		return s
+	}
+	if n < 2 {
+		return ""
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		c := cells(string(r))
+		if used+c > n-1 {
+			break
+		}
+		b.WriteRune(r)
+		used += c
+	}
+	return strings.TrimRight(b.String(), " ") + "…"
+}
+
 // termWidth is the width of the terminal w writes to: 0 when w isn't a terminal (a character
 // device that isn't one, such as /dev/null, fails the size query), 80 when the terminal doesn't
 // say.
