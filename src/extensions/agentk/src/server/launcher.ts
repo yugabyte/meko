@@ -104,7 +104,7 @@ export function loginShell(): string {
 /**
  * Under systemd or launchd the environment is bare. Take PATH from the user's login shell
  * so git, gh and claude resolve the way they do in a terminal. ~/.local/bin is added
- * when it's missing: Meko links `me_koder` (and the installer gh, when it installs it) there. So are
+ * when it's missing: the installer puts gh there when it installs it. So are
  * Homebrew's folders (`withUsualBins`), for when the shell gives no PATH: it can take longer than
  * 5 s, for a slow profile or one that reads ~/Downloads while macOS asks whether Meko may. MEKO_HOME
  * and XDG_STATE_HOME come from there too when unset, since they decide where Meko's data folder

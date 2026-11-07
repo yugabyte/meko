@@ -2,7 +2,7 @@
 // install named with AK_HOME, to <Meko's data folder>/extensions/agentk (paths.ts `mekoHome`).
 //
 // It happens by itself once a release with it has proved healthy (`HomeMove`, run by the server),
-// in a one-shot job outside the services (`me_koder _move-home`, service.ts `startMoveJob`): it ends
+// in a one-shot job outside the services (`me_kode _move-home`, service.ts `startMoveJob`): it ends
 // every session, moves the folder (a rename, or a copy onto another disk), rewrites every path
 // stored outside it that named it, and starts the services on the new home, whose recovery resumes
 // the sessions. Without services, `serve` does it at its next start. A journal (move.json, carried
@@ -249,11 +249,11 @@ export function makeHomeParent(home: string): void {
 
 /**
  * Whether a process's command line (`ps -o args`) is an AgentK server's: a release's Node on
- * `…/cli.js serve`, or a build from source run through its npm bin, `node …/bin/me_koder serve`
- * (`agentk` or `agent-k-local` before).
+ * `…/cli.js serve`, or a build from source run through its npm bin, `node …/bin/me_kode serve`
+ * (`me_koder`, `agentk` or `agent-k-local` before).
  */
 export function isServerArgs(args: string): boolean {
-  return /(me_koder|agentk|agent-k-local|cli\.[jt]s) serve\b/.test(args);
+  return /(me_kode|me_koder|agentk|agent-k-local|cli\.[jt]s) serve\b/.test(args);
 }
 
 /** Whether a pid is an AgentK server: after a crash its lease can name a pid another process has now. */
@@ -286,7 +286,7 @@ export async function stopAll(paths: Paths, svc: ServiceManager | null = service
       // Its SIGTERM handler shuts down cleanly and releases the lease.
       process.kill(server.pid, 'SIGTERM');
       for (let i = 0; i < 200 && heldLease(paths.lock); i++) await sleep(100);
-      if (heldLease(paths.lock)) throw new Error(`The server (pid ${server.pid}) didn't stop within 20 seconds. See: me_koder logs`);
+      if (heldLease(paths.lock)) throw new Error(`The server (pid ${server.pid}) didn't stop within 20 seconds. See: meko kode logs`);
       stopped = true;
     }
   }
@@ -689,11 +689,11 @@ export class HomeMove {
 // ---------------------------------------------------------------------------
 // The job, and `serve` without services
 
-/** The move job's own run (`me_koder _move-home --to <dir>`). */
+/** The move job's own run (`me_kode _move-home --to <dir>`). */
 export async function runMoveJob(args: string[]): Promise<void> {
   const i = args.indexOf('--to');
   const to = i >= 0 ? args[i + 1] : undefined;
-  if (!to) throw new Error('usage: me_koder _move-home --to <dir> (run by AgentK itself)');
+  if (!to) throw new Error('usage: me_kode _move-home --to <dir> (run by AgentK itself)');
   const from = process.env.AK_HOME;
   if (!from) throw new Error('AK_HOME names the home to move');
   const log: Log = {

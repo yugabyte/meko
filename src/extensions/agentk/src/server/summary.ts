@@ -15,12 +15,12 @@ export function summaryRow(mark: Mark, title: string, text: string, color = colo
 
 /**
  * What AgentK's row of `meko stop` says. Its sessions resume when the server starts again: at `meko
- * start` with services, but without them `meko start`'s `me_koder start` can't, and `me_koder serve` does.
+ * start` with services, but without them `meko start`'s `meko kode start` can't, and `meko kode serve` does.
  */
 export function stopRowText(stopped: boolean, sessions: number, services: boolean): string {
   if (!stopped) return "wasn't running";
   if (!sessions) return 'stopped';
-  return `stopped; ${sessions} session(s) resume at ${services ? 'meko start' : 'me_koder serve'}`;
+  return `stopped; ${sessions} session(s) resume at ${services ? 'meko start' : 'meko kode serve'}`;
 }
 
 /** Whether Meko runs this start or stop for its summary (MEKO_SUMMARY=1): it then prints one row. */

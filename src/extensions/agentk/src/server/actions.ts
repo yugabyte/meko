@@ -358,7 +358,7 @@ async function openProject(core: Core, a: Extract<AskAgentkAction, { type: 'open
   }
 }
 
-// ---- AgentK's session tools: the calls `me_koder mcp` makes (tools.ts, tooldefs.ts) ----
+// ---- AgentK's session tools: the calls `me_kode mcp` makes (tools.ts, tooldefs.ts) ----
 
 /** The answer to a tool call: the text the agent reads, marked as an error when nothing was done. */
 function answer(text: string, isError = false): ModReply {
@@ -402,7 +402,7 @@ export class SessionTools {
   }
 
   /**
-   * A tool call from `me_koder mcp` in `row`'s session: `{ v, tool, input }`. Answered at once if the
+   * A tool call from `me_kode mcp` in `row`'s session: `{ v, tool, input }`. Answered at once if the
    * hook socket closes first: a call that clones a repo can take minutes, and the socket's close
    * (a stop, a restart, a rebind) waits for every request still open.
    */
@@ -483,7 +483,7 @@ export class SessionTools {
         case 'open_project':
           return this.run(row, [{ type: 'openProject', repo: input.repo, name: input.name, datapack: input.datapack }], projects);
         default:
-          return answer(`AgentK has no tool ${tool || '(none named)'}: this session may run a newer me_koder mcp than the server. Update AgentK.`, true);
+          return answer(`AgentK has no tool ${tool || '(none named)'}: this session may run a newer me_kode mcp than the server. Update AgentK.`, true);
       }
     } catch (e) {
       return answer(`AgentK couldn't do that: ${errMsg(e)}`, true);

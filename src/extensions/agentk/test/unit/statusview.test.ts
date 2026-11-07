@@ -11,8 +11,8 @@ function facts(o: Partial<StatusFacts> = {}): StatusFacts {
     leasePid: 39527,
     host: { up: true, pid: 39531, sessions: 0, running: 0 },
     services: { kind: 'launchd', units: [
-      { id: 'com.yugabyte.me_koder', installed: true, running: true, text: 'running' },
-      { id: 'com.yugabyte.me_koder.host', installed: true, running: true, text: 'running' },
+      { id: 'com.yugabyte.me_kode', installed: true, running: true, text: 'running' },
+      { id: 'com.yugabyte.me_kode.host', installed: true, running: true, text: 'running' },
     ] },
     webUrl: 'http://127.0.0.1:7777/ext/agentk/',
     home: '/home/alice/.meko/extensions/agentk',
@@ -22,7 +22,7 @@ function facts(o: Partial<StatusFacts> = {}): StatusFacts {
   };
 }
 
-describe("me_koder status, shaped like meko status", () => {
+describe("meko kode status, shaped like meko status", () => {
   it('opens with a marked headline, then a row per part, then the links in a box like Meko\'s', () => {
     expect(formatStatus(facts())).toEqual([
       '✓ AgentK 0.20261103.13 is running (pid 39527, up 2h4m0s)',
@@ -46,15 +46,15 @@ describe("me_koder status, shaped like meko status", () => {
       leasePid: null,
       host: { up: true, pid: 39531, sessions: 2, running: 1 },
       services: { kind: 'systemd', units: [
-        { id: 'me_koder.service', installed: true, running: false, text: 'inactive' },
-        { id: 'me_koder-host.service', installed: true, running: false, text: 'inactive' },
+        { id: 'me_kode.service', installed: true, running: false, text: 'inactive' },
+        { id: 'me_kode-host.service', installed: true, running: false, text: 'inactive' },
       ] },
     }));
     expect(lines[0]).toBe("✗ AgentK 0.20261103.13 isn't running");
     expect(lines).toContain('  ✓ Session host    running (pid 39531), 2 sessions (1 running)');
     expect(lines).toContain('  ! Service         systemd, stopped');
     expect(lines.some((l) => l.includes('Server'))).toBe(false);
-    expect(lines.at(-1)).toBe('  Start it: me_koder start');
+    expect(lines.at(-1)).toBe('  Start it: meko kode start');
   });
 
   it('warns about a server that holds the lease but is slow to answer, and a host that is down', () => {
@@ -62,7 +62,7 @@ describe("me_koder status, shaped like meko status", () => {
     expect(lines[0]).toBe("! AgentK 0.20261103.13 is running (pid 39527), but isn't answering");
     expect(lines).toContain('  ! Server          not answering (timed out)');
     expect(lines).toContain('  ! Session host    not running');
-    expect(lines).not.toContain('  Start it: me_koder start');
+    expect(lines).not.toContain('  Start it: meko kode start');
   });
 
   it('goes without the uptime from a server before it, and says what is wrong with the services', () => {
@@ -70,15 +70,15 @@ describe("me_koder status, shaped like meko status", () => {
       probe: { ok: true, version: '0.20261103.12' },
       host: { error: 'EACCES' },
       services: { kind: 'launchd', units: [
-        { id: 'com.yugabyte.me_koder', installed: true, running: true, text: 'running' },
-        { id: 'com.yugabyte.me_koder.host', installed: false, running: false, text: 'not installed' },
+        { id: 'com.yugabyte.me_kode', installed: true, running: true, text: 'running' },
+        { id: 'com.yugabyte.me_kode.host', installed: false, running: false, text: 'not installed' },
       ] },
       webUrl: null,
       webWhy: "Meko isn't running: start it with meko start",
     }));
     expect(lines[0]).toBe('✓ AgentK 0.20261103.13 is running (pid 39527)');
     expect(lines).toContain('  ! Session host    not answering (EACCES)');
-    expect(lines).toContain('  ! Service         launchd: com.yugabyte.me_koder.host not installed');
+    expect(lines).toContain('  ! Service         launchd: com.yugabyte.me_kode.host not installed');
     expect(lines.some((l) => l.startsWith("│ Web UI   none (Meko isn't running: start it with meko start)"))).toBe(true);
     expect(formatStatus(facts({ services: 'other' }))).toContain('  ! Service         none for this home (the installed services run another one)');
     expect(formatStatus(facts({ services: null })).some((l) => l.includes('Service'))).toBe(false);

@@ -84,10 +84,10 @@ AgentK has no login. With Meko's remote access (the default over SSH), anyone wh
 
 | Command | What it does |
 |---|---|
-| `me_koder ui` | Open AgentK in your browser |
-| `me_koder status` | Show whether AgentK is running, and its address |
-| `me_koder attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches) |
-| `me_koder logs -f` | Follow the server log |
+| `meko kode ui` | Open AgentK in your browser |
+| `meko kode status` | Show whether AgentK is running, and its address |
+| `meko kode attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches) |
+| `meko kode logs -f` | Follow the server log |
 
 [All commands](docs/install.md#commands)
 

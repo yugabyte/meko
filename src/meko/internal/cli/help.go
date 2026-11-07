@@ -68,10 +68,8 @@ var mekoCommands = []command{
 			{"meko status --json", "the server's status reply, for scripts and agents"},
 		}},
 	{name: "ui", group: "Get started", summary: "Open the web UI in your browser",
-		usage: "meko ui [path] [flags]", examples: []example{
-			{"meko ui", "open Meko's web UI"},
-			{"meko ui /ext/agentk/", "open AgentK's page"},
-			{"meko ui --no-open", "only print the link"},
+		usage: "meko ui", examples: []example{
+			{"meko ui", "open Meko's web UI (with no browser here, such as over SSH, print its link)"},
 			{"meko ui stop", "turn the web UI off, and meko ui start to turn it on again"},
 		}},
 	{name: "ui start", group: "Run", summary: "Turn the web UI on, and keep it on",
@@ -167,22 +165,34 @@ var mekoCommands = []command{
 			{"meko extension list", "a row each: its state, the release installed and its updates"},
 			{"meko extension list --json", "the same, for scripts"},
 		}},
-	{name: "extension install", group: "Extensions", summary: "Add an extension (agentk, presenter)",
-		usage: "meko extension install agentk|presenter [flags] [-- <its install's options>]", examples: []example{
+	{name: "extension install", group: "Extensions", summary: "Add an extension (agentk, present)",
+		usage: "meko extension install agentk|present [flags] [-- <its install's options>]", examples: []example{
 			{"meko extension install agentk", "install AgentK from its newest release, and run it with Meko"},
 			{"meko extension install agentk -- --agent opencode", "pass options on to AgentK's own install"},
 		}},
 	{name: "extension update", group: "Extensions", summary: "Update an extension now, or turn its automatic updates off",
-		usage: "meko extension update agentk|presenter|--all [flags]", examples: []example{
+		usage: "meko extension update agentk|present|--all [flags]", examples: []example{
 			{"meko extension update --all", "update every extension now"},
 			{"meko extension update agentk --check", "only look"},
 			{"meko extension update agentk --auto=off", "stop Meko installing its updates on its own"},
 		}},
 	{name: "extension delete", group: "Extensions", summary: "Remove an extension (--purge also deletes its data)",
-		usage: "meko extension delete agentk|presenter [flags]", examples: []example{
-			{"meko extension delete presenter", "stop it and remove it, after asking; its data stays"},
+		usage: "meko extension delete agentk|present [flags]", examples: []example{
+			{"meko extension delete present", "stop it and remove it, after asking; its data stays"},
 			{"meko extension delete agentk --purge", "also delete its data: AgentK's sessions and worktrees"},
 			{"meko extension delete agentk --force", "don't ask"},
+		}},
+	{name: "kode", group: "Extensions", summary: "Run one of AgentK's commands",
+		usage: "meko kode <command> [args]", examples: []example{
+			{"meko kode ui", "open AgentK in your browser"},
+			{"meko kode status", "whether AgentK is running, and its address"},
+			{"meko kode attach <session>", "show a session's terminal in yours (Ctrl+\\ detaches)"},
+			{"meko kode --help", "AgentK's commands"},
+		}},
+	{name: "present", group: "Extensions", summary: "Run one of Presenter's commands",
+		usage: "meko present <command> [args]", examples: []example{
+			{"meko present status", "whether Presenter is running"},
+			{"meko present --help", "Presenter's commands"},
 		}},
 	{name: "destroy", group: "Remove", summary: "Stop Meko and delete its data",
 		usage: "meko destroy [flags]", examples: []example{
