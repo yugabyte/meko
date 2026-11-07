@@ -77,6 +77,7 @@ type webListener struct {
 	host    string                     // the address it's bound to (bindHost, or 127.0.0.1: certErr)
 	certErr string                     // why remote access couldn't start: its certificate
 	httpSrv *http.Server               // serving the port, while Run does
+	serving net.Listener               // the port httpSrv serves
 	sockets map[string]string          // an extension's name to the socket its handoff named
 	handed  map[string]bool            // the extensions handed over since this server started
 	asked   map[string]time.Time       // when a handoff was last tried for a socket a request needed
@@ -287,7 +288,7 @@ func (w *webListener) serve() <-chan error {
 	hs := &http.Server{ReadHeaderTimeout: 10 * time.Second,
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { w.cur.Load().ServeHTTP(rw, r) })}
 	ln := w.ln
-	w.httpSrv, w.ln = hs, nil
+	w.httpSrv, w.serving, w.ln = hs, ln, nil
 	served := make(chan error, 1)
 	go func() {
 		if err := hs.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
@@ -308,7 +309,13 @@ func (w *webListener) takeUp(now, next config.Config, served <-chan error) (conf
 	want := w.hostFor(next, host, up)
 	rebind := !up || want != host
 	if rebind {
-		w.stop()
+		// The old socket is closed and the new one taken at once, and the old server's requests
+		// finish in the background: waiting for them first (up to drainTimeout, longer than an MCP
+		// stream may stay open) would leave nothing on the port meanwhile. The WebSockets go:
+		// browsers that reached the old address may not reach the new one.
+		drain := w.release()
+		defer func() { go drain() }()
+		w.closeWebSockets()
 		err := w.bindTo(want)
 		if err != nil && up {
 			w.log.Error("can't take the port for the new settings; keeping the old ones", "error", err)
@@ -364,12 +371,31 @@ func (w *webListener) Close() {
 	w.stop()
 }
 
+// release closes the port now and returns what drains its server's requests (drainTimeout).
+func (w *webListener) release() (drain func()) {
+	w.mu.Lock()
+	hs, ln := w.httpSrv, w.serving
+	w.httpSrv, w.serving = nil, nil
+	w.mu.Unlock()
+	if hs == nil {
+		return func() {}
+	}
+	_ = ln.Close()
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+		defer cancel()
+		if err := hs.Shutdown(ctx); err != nil {
+			w.log.Warn("requests didn't finish in time", "error", err)
+		}
+	}
+}
+
 // stop drains the port (drainTimeout), then closes the WebSockets the extensions' proxies upgraded,
 // which a drain leaves open.
 func (w *webListener) stop() {
 	w.mu.Lock()
 	hs := w.httpSrv
-	w.httpSrv = nil
+	w.httpSrv, w.serving = nil, nil
 	w.mu.Unlock()
 	if hs == nil {
 		return
