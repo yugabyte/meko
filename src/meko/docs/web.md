@@ -1,10 +1,10 @@
 # Meko backend: one port for browsers and agents
 
 Meko listens on one port, `[server] port` (7777), for everyone. Agents (MCP clients, AgentK,
-Presenter) and the CLI call `/mcp` and `/api/v1` there with their Bearer tokens
+Present) and the CLI call `/mcp` and `/api/v1` there with their Bearer tokens
 ([api.md](api.md#auth)). Browsers get the web UI ([web-ui.md](web-ui.md)) at `/`, the data routes
 and `/mcp` the UI calls, `/api/v1/auth/status`, and each extension's own web UI at `/ext/<name>/`:
-AgentK's at `/ext/agentk/`, Presenter's at `/ext/present/`. This page is about the browsers' side:
+AgentK's at `/ext/agentk/`, Present's at `/ext/present/`. This page is about the browsers' side:
 how they get in, remote access, turning the web UI off, and the extensions.
 
 ```mermaid
@@ -15,7 +15,7 @@ flowchart LR
   port --> ui["/ : web UI"]
   port --> data["/api/v1, /mcp"]
   port -->|"/ext/agentk/*, prefix stripped"| sock["AgentK's unix socket"]
-  port -->|"/ext/present/*, prefix stripped"| psock["Presenter's unix socket"]
+  port -->|"/ext/present/*, prefix stripped"| psock["Present's unix socket"]
 ```
 
 ## Decisions

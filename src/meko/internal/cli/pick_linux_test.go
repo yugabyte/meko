@@ -137,7 +137,7 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 	}{
 		{"3 skips", "3", []string{"  ? Add an extension? (↑ and ↓, then Enter, or 1 to 3)\n",
 			"  ❯ 1) AgentK         runs coding agents across your projects, from task to merged PR",
-			"    2) Presenter      presentations that branch with the room",
+			"    2) Present        presentations that branch with the room",
 			"    3) Skip for now"}},
 		{"Ctrl+C adds none", "\x03", nil},
 		{"AgentK, whose install fails", "\r", []string{
@@ -190,7 +190,7 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 	}
 	<-got
 	time.Sleep(50 * time.Millisecond)
-	if out := shown.String(); strings.Contains(out, "AgentK") || !strings.Contains(out, "1) Presenter") {
+	if out := shown.String(); strings.Contains(out, "AgentK") || !strings.Contains(out, "1) Present") {
 		t.Errorf("with AgentK added:\n%s", out)
 	}
 }

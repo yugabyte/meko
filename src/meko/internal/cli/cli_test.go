@@ -223,7 +223,7 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 	}
 	reg, _ := extensions.Load(dir)
 	reg.Entries["agentk"] = extensions.Entry{Command: script("agentk", "sleep 1\necho 'AgentK 1.0'\n")}
-	reg.Entries["present"] = extensions.Entry{Command: script("present", "echo 'Presenter 1.0'\nsleep 30\n")}
+	reg.Entries["present"] = extensions.Entry{Command: script("present", "echo 'Present 1.0'\nsleep 30\n")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 		t.Errorf("status took %s", took)
 	}
 	want(t, "status", code, 0, out, "  ✓ AgentK          running, AgentK 1.0\n"+
-		"  ! Presenter       didn't answer in 2s (meko present status)\n")
+		"  ! Present         didn't answer in 2s (meko present status)\n")
 	want(t, "status's links", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
 	want(t, "status's Cloud", code, 0, out, "\n  Cloud   not linked\n")
 	want(t, "status's next steps", code, 0, out, "More detail: meko status --verbose\n\nNext:\n  meko ui ")

@@ -15,7 +15,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error?: 
     return (
       <div role="alert" className="space-y-2 p-6 text-sm">
         <p className="font-semibold">This page stopped: {this.state.error.message}</p>
-        <p className="text-muted-foreground">Reload it. If Presenter was just updated, restart it (meko stop, then meko start) first.</p>
+        <p className="text-muted-foreground">Reload it. If Present was just updated, restart it (meko stop, then meko start) first.</p>
       </div>
     );
   }

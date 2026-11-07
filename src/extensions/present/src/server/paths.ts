@@ -1,4 +1,4 @@
-// Where Presenter keeps its state: its home, `<Meko's data folder>/extensions/present`, by Meko's
+// Where Present keeps its state: its home, `<Meko's data folder>/extensions/present`, by Meko's
 // own rule for that folder (Resolve in src/meko/internal/paths, tested against the same
 // resolve-cases.json). PRESENT_HOME names another home, for dev and tests only.
 
@@ -75,7 +75,7 @@ export function mekoHome(o: MekoHomeOptions = {}): string {
   return join(o.sharedTmp ?? '/var/tmp', o.user ?? userInfo().username, 'meko');
 }
 
-/** Presenter's home in Meko's data folder. */
+/** Present's home in Meko's data folder. */
 export function homeIn(mekoDir: string): string {
   return join(mekoDir, 'extensions', 'present');
 }
@@ -91,7 +91,7 @@ export function presentHome(env: NodeJS.ProcessEnv = process.env): string {
 
 export interface Paths {
   home: string;
-  /** Where an older Presenter kept a Meko URL and key; install removes them (Meko's link is used instead). */
+  /** Where an older Present kept a Meko URL and key; install removes them (Meko's link is used instead). */
   config: string;
   run: string;
   /** The server's only listener: Meko's web listener serves it to browsers at /ext/present/. */
@@ -157,12 +157,12 @@ export const MEKO_COMMANDS = ['start', 'stop', 'status', 'uninstall', '_handoff'
 
 /**
  * Refuses a command Meko runs for another data folder than the one this home is in, so a second
- * Meko (or Meko's tests) can't stop or uninstall this Presenter.
+ * Meko (or Meko's tests) can't stop or uninstall this Present.
  */
 export function refuseOtherMeko(paths: Paths, env: NodeJS.ProcessEnv = process.env): void {
   const own = mekoDirOf(paths.home);
   if (!env.MEKO_HOME || !own || samePath(resolve(env.MEKO_HOME), own)) return;
-  throw new Error(`This Presenter belongs to the Meko in ${own}, and MEKO_HOME names ${resolve(env.MEKO_HOME)}: nothing was done. Run it with MEKO_HOME=${own}, or without MEKO_HOME.`);
+  throw new Error(`This Present belongs to the Meko in ${own}, and MEKO_HOME names ${resolve(env.MEKO_HOME)}: nothing was done. Run it with MEKO_HOME=${own}, or without MEKO_HOME.`);
 }
 
 /** PATH with ~/.local/bin, where Meko's installer links `meko`. */

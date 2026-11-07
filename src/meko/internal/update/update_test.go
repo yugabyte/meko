@@ -362,7 +362,7 @@ func TestLinkCommand(t *testing.T) {
 	}
 }
 
-// An extension's releases (Presenter's) go through the same App: its tarball and top folder named for
+// An extension's releases (Present's) go through the same App: its tarball and top folder named for
 // its package (present), its binary and its link in ~/.local/bin for its program (me_present).
 func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	const next = "0.20261024.0"

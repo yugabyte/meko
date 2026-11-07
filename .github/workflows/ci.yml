@@ -152,9 +152,9 @@ jobs:
         working-directory: src/meko/context_engine
       - run: make test
 
-  # Presenter (src/extensions/present).
+  # Present (src/extensions/present).
   present:
-    name: Presenter (${{ matrix.os }})
+    name: Present (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.present == 'true'
     strategy:

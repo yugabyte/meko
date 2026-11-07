@@ -23,7 +23,7 @@ class Recording extends MekoClient {
   }
 }
 
-describe('Meko\'s tools as Presenter calls them', () => {
+describe('Meko\'s tools as Present calls them', () => {
   it('names the conversation when it makes a deck\'s datapack, and sets its description after', async () => {
     const m = new Recording((name, args) => {
       if (name === 'conversation_create') return { id: 'c1' };
@@ -31,10 +31,10 @@ describe('Meko\'s tools as Presenter calls them', () => {
       if (name === 'datapack_create') return args.conversation_id ? { datapack_id: 'dp1', name: args.name } : {};
       return { message: 'datapack updated' };
     });
-    expect(await m.createDatapack('present/deck/acme', 'Presenter deck "Acme"')).toEqual({ id: 'dp1', name: 'present/deck/acme', description: 'Presenter deck "Acme"' });
+    expect(await m.createDatapack('present/deck/acme', 'Present deck "Acme"')).toEqual({ id: 'dp1', name: 'present/deck/acme', description: 'Present deck "Acme"' });
     expect(m.calls.slice(1)).toEqual([
       { name: 'datapack_create', args: { name: 'present/deck/acme', conversation_id: 'c1' } },
-      { name: 'datapack_update', args: { datapack_id: 'dp1', description: 'Presenter deck "Acme"', conversation_id: 'c1' } },
+      { name: 'datapack_update', args: { datapack_id: 'dp1', description: 'Present deck "Acme"', conversation_id: 'c1' } },
     ]);
   });
 
@@ -228,7 +228,7 @@ describe('Meko Cloud\'s REST API', () => {
     });
     const url = await mcp();
     const routed = new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'local-token', apiUrl: `${api}/api/v1`, kind: 'cloud', cloudHost: 'cloud.meko.example' } }), 'test');
-    // An older Meko that handed out the link's key: Presenter calls Meko Cloud itself.
+    // An older Meko that handed out the link's key: Present calls Meko Cloud itself.
     const before = new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'cloud-key', apiUrl: `${api}/api/v1`, kind: 'cloud' } }), 'test');
     try {
       expect(await routed.localIds()).toEqual(new Set(['here-1']));

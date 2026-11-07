@@ -24,8 +24,8 @@ export interface NoteCommit {
 const SUBJECT = new RegExp(`^(${RELEASE_TYPES.join('|')})(?:\\(([^)]*)\\))?(!?): (.+)$`);
 const PR = /\s*\(#(\d+)\)$/;
 /**
- * A component that isn't AgentK's: a subject that names only such components (Meko's and Presenter's,
- * which release those; `presenter` was Presenter's before it was `present`) isn't AgentK's, and one that names one in a list
+ * A component that isn't AgentK's: a subject that names only such components (Meko's and Present's,
+ * which release those; `presenter` was Present's before it was `present`) isn't AgentK's, and one that names one in a list
  * with AgentK's (feat(agentk,meko): ...) is (`exclude` in scripts/release/product.sh).
  */
 const OTHER_PRODUCT = /^(meko|present|presenter)(\/|$)/;
@@ -33,7 +33,7 @@ const OTHER_PRODUCT = /^(meko|present|presenter)(\/|$)/;
 /**
  * Release notes for a range of commits, newest first, by the rules of
  * scripts/release/release-notes.sh --product agentk: only feat, fix, perf and deps subjects count,
- * Meko's and Presenter's (subjects naming only `meko` or `present`) don't, a `!` subject is listed
+ * Meko's and Present's (subjects naming only `meko` or `present`) don't, a `!` subject is listed
  * under Breaking changes instead of its type's section (so it shows once), a `BREAKING CHANGE:`
  * footer adds its own line there, and a section with nothing in it is left out.
  * `repo` (owner/name) links a subject's "(#123)" to its PR.

@@ -15,7 +15,7 @@ function Header() {
   return (
     <header className="flex items-center gap-2 border-b bg-card px-3 py-1.5">
       <img src={appUrl('logo.png')} alt="" className="size-7" />
-      <span className="font-semibold">Presenter</span>
+      <span className="font-semibold">Present</span>
       <span className="flex-1" />
       {/* Meko's own pages, on the same web listener. */}
       <a href="/" className="text-sm text-muted-foreground hover:underline">Meko</a>

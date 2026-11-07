@@ -1,4 +1,4 @@
-// The API contract between Presenter's server and its pages: every route's request and reply, and
+// The API contract between Present's server and its pages: every route's request and reply, and
 // every WebSocket message. Change it first.
 
 import type { DatapackGroups, MekoAt } from './datapacks.js';
@@ -29,7 +29,7 @@ export interface DeckSummary {
   title: string;
   savedAt: string | null;
   draft: boolean;
-  /** A draft whose datapack is in another Meko than the one Presenter uses now: it can't be opened. */
+  /** A draft whose datapack is in another Meko than the one Present uses now: it can't be opened. */
   elsewhere?: MekoAt;
 }
 

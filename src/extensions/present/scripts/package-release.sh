@@ -5,14 +5,14 @@
 #   scripts/package-release.sh <version> <linux|darwin> <x64|arm64> <node-dir> <out-dir>
 #
 # Expects `npm run build` and `npm prune --omit=dev` to have run in src/extensions/present.
-# Presenter has no native modules, so one build packages every platform: only <node-dir>, an unpacked Node
+# Present has no native modules, so one build packages every platform: only <node-dir>, an unpacked Node
 # from nodejs.org for that platform, differs. Produces
 # <out-dir>/present-<version>-<platform>-<arch>.tar.gz containing:
 #
 #   present-<version>/
 #     bin/me_present           POSIX sh launcher (packaging/me_present): the program Meko runs
 #                              (meko present <command>)
-#     node/bin/me_present      bundled Node runtime, named so its process says it's Presenter's
+#     node/bin/me_present      bundled Node runtime, named so its process says it's Present's
 #     node/bin/node            a link to it
 #     node/LICENSE
 #     lib/package.json

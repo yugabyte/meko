@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/Presenter-nobg.png" width="200" alt="Presenter"></p>
+<p align="center"><img src="assets/Present-nobg.png" width="200" alt="Present"></p>
 
 <p align="center">
   <a href="https://mekodata.ai">
@@ -9,7 +9,7 @@
   </a>
 </p>
 
-# Presenter
+# Present
 
 Presentations that branch with the room, built from what your team keeps in Meko.
 
@@ -30,22 +30,22 @@ a deck.
 
 ## Run it
 
-Presenter needs [Meko](../../../README.md) on this computer and Claude Code (`claude`, signed in) to
-build decks; playing and editing them work without Claude. Meko installs it, from Presenter's
+Present needs [Meko](../../../README.md) on this computer and Claude Code (`claude`, signed in) to
+build decks; playing and editing them work without Claude. Meko installs it, from Present's
 newest release (or Install on the web UI's Extensions page):
 
 ```sh
 meko extension install present    # installs the newest release, pointed at this Meko
 meko start                        # starts Meko and its extensions
-meko ui                           # opens Meko's web UI: Presenter is in its sidebar
+meko ui                           # opens Meko's web UI: Present is in its sidebar
 ```
 
 Meko serves it at `/ext/present/` on its port, with Meko's access check, and its sidebar links
 to it. Decks are saved where Meko says: in Meko Cloud when Meko links it (Settings › Meko Cloud, or
-`meko cloud-link`), else in the Meko on this computer. Either way Presenter talks to the Meko on
+`meko cloud-link`), else in the Meko on this computer. Either way Present talks to the Meko on
 this computer, which passes its calls on to Meko Cloud with the link's key. While it links Meko
 Cloud, the decks in its own datapacks (made before the link) keep working beside Meko Cloud's.
-Presenter follows a change of the link at once; a draft made under the other Meko stays listed, and
+Present follows a change of the link at once; a draft made under the other Meko stays listed, and
 opens again once Meko links it again. Its commands go through Meko: `meko present status` says whether it runs (`meko present help`
 lists the rest). Meko
 updates it on its own when a new release comes out (unless its **Update automatically** switch on
@@ -67,7 +67,7 @@ meko extension install present        # registers it with this Meko (it asks Mek
 
 | Datapack | Holds |
 |---|---|
-| Any datapack | Content: whatever memories and knowledge files it has. Presenter only reads it. |
+| Any datapack | Content: whatever memories and knowledge files it has. Present only reads it. |
 | `present/template/<style>` | A style (later; every deck uses the built-in template for now). |
 | `present/anim/<area>` | Canned animations (later; slides name them for now). |
 | `present/deck/<name>` | A deck: `deck.json`, its scenes, files and versions. |

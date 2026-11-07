@@ -126,9 +126,9 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("%s didn't come up in time", what)
 }
 
-// Presenter is served like AgentK: registered, it names its socket at Meko's start, and the web
+// Present is served like AgentK: registered, it names its socket at Meko's start, and the web
 // listener serves it at /ext/present/ and lists it for the sidebar.
-func TestPresenterBesideMeko(t *testing.T) {
+func TestPresentBesideMeko(t *testing.T) {
 	dir, port := setup(t)
 	webPort := os.Getenv("MEKO_PORT")
 	home := shortDir(t)
@@ -170,7 +170,7 @@ func TestPresenterBesideMeko(t *testing.T) {
 	}
 	waitFor(t, "the web listener", func() bool { c, _ := get("/healthz"); return c == 200 })
 	if c, b := get("/ext/present/decks/x/map"); c != 200 || b != "present /decks/x/map" {
-		t.Fatalf("Presenter through Meko: %d %q", c, b)
+		t.Fatalf("Present through Meko: %d %q", c, b)
 	}
 	c, b := get("/api/v1/extensions")
 	var list struct {
@@ -185,11 +185,11 @@ func TestPresenterBesideMeko(t *testing.T) {
 	found := false
 	for _, e := range list.Data {
 		if e.Name == "present" {
-			found = e.Title == "Presenter" && e.Path == "/ext/present/" && e.Installed && e.Available
+			found = e.Title == "Present" && e.Path == "/ext/present/" && e.Installed && e.Available
 		}
 	}
 	if !found {
-		t.Fatalf("extensions: no running Presenter in %s", b)
+		t.Fatalf("extensions: no running Present in %s", b)
 	}
 }
 

@@ -303,7 +303,7 @@ func TestAFailingExtensionGetsAFailRow(t *testing.T) {
 	code, out, errs := run("stop", "--data-dir", dir)
 	want(t, "the failing extension's own output", code, 0, errs, "it broke\n")
 	want(t, "the failing extension's row", code, 0, out, "  ✗ AgentK          didn't stop: ")
-	want(t, "the damaged extension's row", code, 0, out, "  ✗ Presenter       is damaged (")
+	want(t, "the damaged extension's row", code, 0, out, "  ✗ Present         is damaged (")
 	want(t, "Meko's row", code, 0, out, "  ✓ Server          isn't running\n")
 }
 

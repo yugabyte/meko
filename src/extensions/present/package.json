@@ -1,7 +1,7 @@
 {
   "name": "present",
   "version": "0.0.0-dev",
-  "description": "Presenter: interactive, branching presentations built from Meko datapacks",
+  "description": "Present: interactive, branching presentations built from Meko datapacks",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",

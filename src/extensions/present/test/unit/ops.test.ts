@@ -18,7 +18,7 @@ describe('applyOps', () => {
   });
 
   it.each<[string, Op[], RegExp]>([
-    ['an operation it doesn\'t know', [{ op: 'explode' } as never], /isn't a change Presenter knows/],
+    ['an operation it doesn\'t know', [{ op: 'explode' } as never], /isn't a change Present knows/],
     ['a scene id that\'s taken', [{ op: 'addScene', scene: { id: 'amp', title: 'x', intent: '', slides: [] } }], /already a scene "amp"/],
     ['a slide that isn\'t there', [{ op: 'updateSlide', slide: slide('ghost') }], /no slide "ghost"/],
     ['a result that breaks the deck', [{ op: 'disconnect', id: 'e1' }], /can't be reached/],

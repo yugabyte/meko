@@ -1,11 +1,11 @@
-// How a deck is stored in its Meko datapack: pieces that only Presenter puts back together, each a
+// How a deck is stored in its Meko datapack: pieces that only Present puts back together, each a
 // Meko artifact of PART_BYTES at most (Meko keeps an artifact to 5 MiB). deck.json is the manifest:
 // everything the map needs, and every other piece by its SHA-256. Each scene is a piece; each asset
 // is a piece; anything bigger than PART_BYTES is stored as parts. Pure: the server does the IO.
 
 import { DECK_FORMAT, DECK_VERSION, deckProblems, DeckError, type AssetRef, type Brief, type Deck, type DeckSources, type Edge, type Scene, type Slide } from './deck.js';
 
-/** The most one artifact Presenter writes holds: room under Meko's 5 MiB, and under ~5.4 MiB as base64. */
+/** The most one artifact Present writes holds: room under Meko's 5 MiB, and under ~5.4 MiB as base64. */
 export const PART_BYTES = 4 * 1024 * 1024;
 /** A manifest bigger than this goes up in parts, and deck.json points at them. */
 export const INDEX_BYTES = 1024 * 1024;

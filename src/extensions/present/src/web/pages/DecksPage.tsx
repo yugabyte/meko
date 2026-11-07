@@ -21,8 +21,8 @@ export function DecksPage() {
         <Button variant="primary" onClick={() => navigate({ view: 'new' })}><Plus className="size-4" />New deck</Button>
       </div>
       {health && health.meko !== 'ready' && <ErrorLine error={health.mekoAt?.kind === 'cloud'
-        ? `Presenter can't reach ${mekoLabel(health.mekoAt)}, where decks are saved: check the link in Meko's Settings › Meko Cloud.`
-        : "Presenter can't reach Meko: decks are saved in Meko datapacks, so start it with meko start."} />}
+        ? `Present can't reach ${mekoLabel(health.mekoAt)}, where decks are saved: check the link in Meko's Settings › Meko Cloud.`
+        : "Present can't reach Meko: decks are saved in Meko datapacks, so start it with meko start."} />}
       {health?.meko === 'ready' && health.mekoAt && <p className="text-sm text-muted-foreground">Decks are saved in {mekoLabel(health.mekoAt)}.</p>}
       {health && !health.claude && <p className="rounded-md border bg-card px-3 py-2 text-sm text-muted-foreground">Claude Code isn't installed here: you can play and edit decks, and building them needs it.</p>}
       <ErrorLine error={error} />

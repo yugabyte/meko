@@ -358,7 +358,7 @@ async function status(): Promise<void> {
   const paint = { ok: style.green, warn: style.yellow, fail: style.red };
   for (const line of formatStatus(facts, (k, m) => paint[k](m))) console.log(line);
   // Meko reads the exit code (meko status, and an update deciding whether to restart AgentK): 3 when
-  // no server runs this home, as Presenter's. One holding the lease that was only slow to answer runs.
+  // no server runs this home, as Present's. One holding the lease that was only slow to answer runs.
   if (!serverRuns(facts)) process.exitCode = 3;
 }
 
