@@ -18,7 +18,7 @@ that they were `me_koder-host.service` and `me_koder.service` (`com.yugabyte.me_
 service installed under an old name keeps it: `service.ts` names whichever is installed, and an
 update doesn't touch the units, which start `service/me_koder` or `bin/agentk`: `bin/me_koder` and
 `bin/agentk` are links to `bin/me_kode` in every release since. The program the units from before
-the rename to AgentK start isn't in releases since #238, so those need `meko kode install` after
+the rename to AgentK start isn't in releases since #515, so those need `meko kode install` after
 an update. `meko kode install` moves them to the new names
 (`dropOldNames`): the server's at once, since it restarts the server anyway, and the host's only
 while the host isn't running, since stopping it would end every session. Until the host stops, the

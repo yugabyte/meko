@@ -53,9 +53,11 @@ var Known = map[string]Catalog{
 		Command:  "me_kode",
 		Verb:     "kode",
 		OldNames: []string{"agentk"},
-		// Its program's names before, newest first: me_koder, agentk, and agent-k-local before the
-		// rename to AgentK. Its releases still carry all three, as links to me_kode, for the services
-		// and older Mekos that run them; Rename moves an install onto the new name.
+		// Its program's names before, newest first: me_koder, agentk, and the last before the rename
+		// to AgentK. Its releases carry the first two, as links to me_kode, for the services and older
+		// Mekos that run them; releases since #515 don't carry the last, which stays here so entries
+		// and ~/.local/bin links by that name are still found and moved. Rename moves an install onto
+		// the new name.
 		OldCommands: []string{"me_koder", "agentk", "agent-k-local"},
 		// Its releases are tagged kode-v<version>; agentk-v<version> before, and v<version> before
 		// releases were tagged by product.
