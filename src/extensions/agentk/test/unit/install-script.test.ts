@@ -12,7 +12,7 @@ import { tempDir } from '../helpers.js';
 // curl, gh and friends.
 const SCRIPT = fileURLToPath(new URL('../../scripts/deps.sh', import.meta.url));
 const STUB = fileURLToPath(new URL('../../scripts/install.sh', import.meta.url));
-const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname', 'ln', 'readlink', 'awk'];
+const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname', 'ln', 'readlink', 'awk', 'tty', 'ps'];
 const GH_VERSION = '2.60.0';
 
 let root: string;
@@ -326,12 +326,16 @@ describe('deps.sh: installing missing tools', () => {
     ['Claude Code', 'claude', `[ "$1 $2" = "auth status" ] && echo '{ "loggedIn": false }'`, 'claude auth login', ['claude auth login']],
     // OpenCode with no provider signed in (and none's key in the environment).
     ['OpenCode', 'opencode', `[ "$1 $2" = "auth list" ] && echo 'No authenticated integrations'`, 'opencode auth login', ['opencode auth list --standalone', 'opencode auth login --standalone']],
-  ])('offers to sign %s in', async (_, cmd, body, login, expected) => {
+  ])('offers to sign %s in, reading the terminal’s own device rather than /dev/tty', async (_, cmd, body, login, expected) => {
     have('git', 'curl', 'gh');
-    stub(bin, cmd, `echo "${cmd} $*" >> "${log}"; ${body}; exit 0`);
+    // The sign-in logs what its input is. (Bun, which Claude Code and OpenCode run on, stops on
+    // macOS when it's /dev/tty, whose name it keeps here, but not when it's the device itself.)
+    const input = `[ "$*" = "${expected.at(-1)!.slice(cmd.length + 1)}" ] && echo "input $(readlink /proc/self/fd/0 2>/dev/null || tty)" >> "${log}"`;
+    stub(bin, cmd, `echo "${cmd} $*" >> "${log}"; ${input}; ${body}; exit 0`);
     const r = await runInTerminal('y', `Sign in now (${login})?`);
     expect(r.code).toBe(0);
-    expect(r.calls).toEqual(expected);
+    expect(r.calls.slice(0, -1)).toEqual(expected);
+    expect(r.calls.at(-1)).toMatch(/^input \/dev\/(pts\/\d+|ttys\d+)$/);
   });
 });
 
