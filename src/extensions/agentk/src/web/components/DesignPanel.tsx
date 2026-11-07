@@ -29,7 +29,7 @@ export function DesignPanel({
   datapacks,
 }: {
   session: Session;
-  /** The project's datapacks, to name the ones AgentK's Meko references are in. */
+  /** The project's datapacks, to name the ones Kode's Meko references are in. */
   datapacks?: DatapackRef[];
   onClose?: () => void;
   onApprove: () => void;
@@ -43,7 +43,7 @@ export function DesignPanel({
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'design' | 'questions'>(showQuestions ? 'questions' : 'design');
   // Bumped to open the key design decisions in the questions: from the Design tab's decisions bar,
-  // or to finish a change to one of AgentK's decisions before approving. 0 leaves them collapsed.
+  // or to finish a change to one of Kode's decisions before approving. 0 leaves them collapsed.
   const [decisionsAt, setDecisionsAt] = useState(0);
   const showTab = (t: 'design' | 'questions', decisions = false) => {
     setTab(t);
@@ -68,7 +68,7 @@ export function DesignPanel({
   }, [session.id, session.designUpdatedAt]);
 
   useEffect(() => {
-    if (page) document.title = `${session.name} · Design · AgentK`;
+    if (page) document.title = `${session.name} · Design · Kode`;
   }, [page, session.name]);
 
   const frame = useMemo(() => (doc?.html ? designFrameDoc(doc.html, theme) : null), [doc?.html, theme]);
@@ -80,16 +80,16 @@ export function DesignPanel({
   const showDoc = !tabs || tab === 'design';
   const open = session.stage === 'design' ? session.designQuestions.open : 0;
   const [drafts] = useDesignDrafts(session.id);
-  // A change to one of AgentK's decisions waits in this browser: it goes from the questions' footer.
+  // A change to one of Kode's decisions waits in this browser: it goes from the questions' footer.
   const changing = !!doc && hasDecisionChanges(doc.questions, drafts);
   // For the effect below, which runs only when the questions are asked for.
   const changingNow = useRef(changing);
   changingNow.current = changing;
   const toAnswer = open > 0 || changing;
-  // The decisions AgentK made itself, called out beside the open questions.
+  // The decisions Kode made itself, called out beside the open questions.
   const made = doc?.questions.filter((q) => q.kind === 'decision').length ?? 0;
   const fromMeko = doc?.questions.filter((q) => q.kind === 'decision' && q.meko.length).length ?? 0;
-  const madeText = `${made === 1 ? '1 decision' : `${made} decisions`} AgentK made${fromMeko ? ` (${fromMeko} from Meko)` : ''}`;
+  const madeText = `${made === 1 ? '1 decision' : `${made} decisions`} Kode made${fromMeko ? ` (${fromMeko} from Meko)` : ''}`;
   // The Questions tab's count takes in what Claude is asking right now, shown at its top.
   const waiting = open + (session.asking ? 1 : 0);
   const questions = !hasQuestions ? 'none' : split || tab === 'questions' ? 'shown' : 'hidden';
@@ -112,7 +112,7 @@ export function DesignPanel({
   const docView = (
     <>
       {frame && !error ? (
-        // No allow-same-origin: the page can't reach AgentK's cookies or API.
+        // No allow-same-origin: the page can't reach Kode's cookies or API.
         <iframe
           hidden={!showDoc}
           className="design-frame"
@@ -137,14 +137,14 @@ export function DesignPanel({
           ) : working ? (
             <>
               <p className="muted" role="status">
-                AgentK is reading the code and writing the design. It shows up here as soon as it’s written, and is
+                Kode is reading the code and writing the design. It shows up here as soon as it’s written, and is
                 saved to the project’s datapack.
               </p>
               <DesignSkeleton />
             </>
           ) : (
             <p className="muted">
-              No design yet. It shows up here as soon as AgentK writes it, and is saved to the project’s datapack.
+              No design yet. It shows up here as soon as Kode writes it, and is saved to the project’s datapack.
             </p>
           )}
         </div>
@@ -188,10 +188,10 @@ export function DesignPanel({
         {headerShown && (
           <button
             className="btn small primary"
-            // With open questions (or a change to one of AgentK's decisions) it only shows them; the
+            // With open questions (or a change to one of Kode's decisions) it only shows them; the
             // approval goes from their footer, with the answers.
             disabled={!!approveBlocker}
-            title={open > 0 ? 'Answer the open questions, then approve' : changing ? 'Approve from the questions, with your change to AgentK’s decision' : (approveBlocker ?? undefined)}
+            title={open > 0 ? 'Answer the open questions, then approve' : changing ? 'Approve from the questions, with your change to Kode’s decision' : (approveBlocker ?? undefined)}
             onClick={toAnswer ? toQuestions : onApprove}
           >
             {approveLabel(toAnswer ? 1 : 0)}
@@ -265,7 +265,7 @@ export function DesignPanel({
 }
 
 /**
- * The page a design is about to fill, while AgentK writes the first one: a title, paragraphs and a
+ * The page a design is about to fill, while Kode writes the first one: a title, paragraphs and a
  * diagram, in blocks that shimmer (still with reduced motion).
  */
 function DesignSkeleton() {
@@ -286,7 +286,7 @@ function DesignSkeleton() {
 const LANDED_MS = 3_000;
 
 /**
- * AgentK at work on the session's design, for the header's edge loader (`designWorking`), and the
+ * Kode at work on the session's design, for the header's edge loader (`designWorking`), and the
  * design it last landed, while that's news (`designLanding`): the header's time flashes once as it
  * comes back.
  */

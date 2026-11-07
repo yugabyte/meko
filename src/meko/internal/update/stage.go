@@ -25,12 +25,19 @@ import (
 // name the version), as app/<version>. Nothing in use changes.
 func (a App) Stage(ctx context.Context, c *Client, rel Release, version string) error {
 	goos, arch := Platform()
+	// A release from before the package's rename carries its tarball by the old name.
 	name := PackageTarball(a.pkg(), version, goos, arch)
 	tarAsset, ok := rel.Asset(name)
+	for _, old := range a.OldPackages {
+		if !ok {
+			tarAsset, ok = rel.Asset(PackageTarball(old, version, goos, arch))
+		}
+	}
 	sumAsset, ok2 := rel.Asset(Sums)
 	if !ok || !ok2 {
 		return fmt.Errorf("release %s has no %s or %s", rel.Tag, name, Sums)
 	}
+	name = tarAsset.Name
 	if err := os.MkdirAll(a.Root, 0o700); err != nil {
 		return err
 	}
@@ -95,8 +102,9 @@ func VerifySum(file, sumsFile string) error {
 	return nil
 }
 
-// Unpack unpacks a release tarball (one folder, <package>-<version>/) to app/<version>, checking
-// that its binary (bin/<name>) runs here first. An installed copy of the same version is replaced.
+// Unpack unpacks a release tarball (one folder, <package>-<version>/, or an old package name's) to
+// app/<version>, checking that its binary (bin/<name>) runs here first. An installed copy of the same
+// version is replaced.
 func (a App) Unpack(tarball, version string) error {
 	staging, err := os.MkdirTemp(a.Root, ".staging-")
 	if err != nil {
@@ -107,6 +115,11 @@ func (a App) Unpack(tarball, version string) error {
 		return err
 	}
 	top := filepath.Join(staging, a.pkg()+"-"+version)
+	for _, old := range a.OldPackages {
+		if _, err := os.Lstat(top); err != nil {
+			top = filepath.Join(staging, old+"-"+version)
+		}
+	}
 	// A version from before the program's rename (installed with --version) gets its new name too.
 	if err := adopt(filepath.Join(top, "bin"), a.name(), a.OldNames); err != nil {
 		return err
@@ -147,8 +160,8 @@ func (a App) Unpack(tarball, version string) error {
 }
 
 // CheckBinary runs `<exe> version --json` and checks it names version: a binary that can't run on
-// this machine never becomes current. Meko's, AgentK's and Presenter's answer {"version":
-// "<version>"}; an AgentK release from before --json prints the bare version, which counts too.
+// this machine never becomes current. Meko's, Kode's and Presenter's answer {"version":
+// "<version>"}; a Kode release from before --json prints the bare version, which counts too.
 func CheckBinary(exe, version string) error {
 	name := filepath.Base(exe)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

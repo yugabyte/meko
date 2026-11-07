@@ -220,7 +220,7 @@ function EndConfirm({
         Archive (keep branch)
       </button>
       {learnTo && (
-        <label className="check skip-learn" title={`Unchecked, AgentK saves what this session learned to ${learnTo} before discarding it`}>
+        <label className="check skip-learn" title={`Unchecked, Kode saves what this session learned to ${learnTo} before discarding it`}>
           <input type="checkbox" checked={skipLearn} disabled={busy} onChange={(e) => setSkipLearn(e.target.checked)} />
           <span>Don't save learnings</span>
         </label>

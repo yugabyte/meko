@@ -122,7 +122,7 @@ func TestPickKeyNeedsATerminal(t *testing.T) {
 }
 
 // A first install's picker asks on the terminal which extension to add: Skip and Ctrl+C add none,
-// and one whose install fails is a ✗ row, with Meko left as it is. AgentK, already added, isn't
+// and one whose install fails is a ✗ row, with Meko left as it is. Kode, already added, isn't
 // offered again.
 func TestPickExtensionOnATerminal(t *testing.T) {
 	dir, _ := setup(t)
@@ -136,13 +136,13 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 		shows       []string
 	}{
 		{"3 skips", "3", []string{"  ? Add an extension? (↑ and ↓, then Enter, or 1 to 3)\n",
-			"  ❯ 1) AgentK         runs coding agents across your projects, from task to merged PR",
+			"  ❯ 1) Kode           runs coding agents across your projects, from task to merged PR",
 			"    2) Presenter      presentations that branch with the room",
 			"    3) Skip for now"}},
 		{"Ctrl+C adds none", "\x03", nil},
-		{"AgentK, whose install fails", "\r", []string{
-			"\n  → meko extension install agentk   · adds an extension at any time\n",
-			"  ✗ AgentK          not added: "}},
+		{"Kode, whose install fails", "\r", []string{
+			"\n  → meko extension install kode   · adds an extension at any time\n",
+			"  ✗ Kode            not added: "}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var shown syncWriter
@@ -174,7 +174,7 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg.Entries["agentk"] = extensions.Entry{Command: "/bin/true"}
+	reg.Entries["kode"] = extensions.Entry{Command: "/bin/true"}
 	if err = reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -190,8 +190,8 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 	}
 	<-got
 	time.Sleep(50 * time.Millisecond)
-	if out := shown.String(); strings.Contains(out, "AgentK") || !strings.Contains(out, "1) Presenter") {
-		t.Errorf("with AgentK added:\n%s", out)
+	if out := shown.String(); strings.Contains(out, "Kode") || !strings.Contains(out, "1) Presenter") {
+		t.Errorf("with Kode added:\n%s", out)
 	}
 }
 

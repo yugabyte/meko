@@ -29,7 +29,7 @@ function fakeFiles(env: TestEnv, files: Record<string, string>): void {
   for (const [f, text] of Object.entries(files)) writeFileSync(join(env.fakeDir, f), text);
 }
 
-describe("AgentK's mod in Claude (real session host + git, fake claude)", () => {
+describe("Kode's mod in Claude (real session host + git, fake claude)", () => {
   let env: TestEnv;
   afterEach(async () => {
     await env.cleanup();
@@ -49,7 +49,7 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     const [first] = launches(env);
     expect(first.args).toEqual(expect.arrayContaining(['--plugin-dir', modDirPath(env.core.paths)]));
     expect(first.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS).toBe('1');
-    // With its view mod, which draws AgentK's prompts folded.
+    // With its view mod, which draws Kode's prompts folded.
     expect(first.args).toEqual(expect.arrayContaining(['--plugin-dir', viewDirPath(env.core.paths)]));
   });
 
@@ -59,16 +59,16 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     const [first] = launches(env);
     const prompt = first.args[first.args.indexOf('--') + 1];
     expect(prompt).toBeTruthy();
-    expect(first.env.AK_FIRST_PROMPT).toBe(prompt.split('\n').map((l) => l.trim()).find(Boolean));
-    expect(first.env.AK_HIDDEN_PROMPT).toBe('');
-    expect(env.core.sessions.row(s.id).first_prompt).toBe(first.env.AK_FIRST_PROMPT);
+    expect(first.env.KODE_FIRST_PROMPT).toBe(prompt.split('\n').map((l) => l.trim()).find(Boolean));
+    expect(first.env.KODE_HIDDEN_PROMPT).toBe('');
+    expect(env.core.sessions.row(s.id).first_prompt).toBe(first.env.KODE_FIRST_PROMPT);
     await env.core.host.kill(env.core.sessions.row(s.id).tmux_name);
     await env.core.sessions.reconcile();
     await waitFor(() => launches(env).length, (n) => n === 2, 10000, 'the relaunch');
     // Resumed: no prompt passed, and the line its start kept.
     expect(launches(env)[1].args).toContain('--resume');
     expect(launches(env)[1].args).not.toContain('--');
-    expect(launches(env)[1].env.AK_FIRST_PROMPT).toBe(first.env.AK_FIRST_PROMPT);
+    expect(launches(env)[1].env.KODE_FIRST_PROMPT).toBe(first.env.KODE_FIRST_PROMPT);
   });
 
   it('sends prompts through the mod while it polls, never typing them, and shows the context fill', async () => {
@@ -131,7 +131,7 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     expect(typed(env)).not.toContain('never acked');
   });
 
-  it("asks the user to step in when another plugin refuses AgentK's prompt", async () => {
+  it("asks the user to step in when another plugin refuses Kode's prompt", async () => {
     env = await makeEnv();
     fakeFiles(env, { mod: '', 'mod-drop': '' });
     const s = await session();
@@ -139,7 +139,7 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     await env.core.sessions.submit(s.id, 'refused');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input', 5000, 'needs input');
     expect(env.core.sessions.get(s.id).statusDetail).toBe(
-      "A plugin in Claude refused AgentK's prompt \"refused\": held by another plugin. Its text is in Claude's prompt box: press Enter in the terminal to send it, or edit it first.",
+      "A plugin in Claude refused Kode's prompt \"refused\": held by another plugin. Its text is in Claude's prompt box: press Enter in the terminal to send it, or edit it first.",
     );
   });
 
@@ -166,7 +166,7 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
     // The Design prompt names the mod's design_questions tool only while the mod is offered.
     const designPrompt = () => env.core.sessions.prompt(env.core.sessions.row(s.id), 'design');
-    expect(designPrompt()).toContain('mcp__agentk__design_questions');
+    expect(designPrompt()).toContain('mcp__kode__design_questions');
     env.core.updateConfig((c) => {
       c.claude.mod = false;
     });

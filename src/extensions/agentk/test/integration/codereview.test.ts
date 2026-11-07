@@ -57,7 +57,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     return s;
   }
 
-  it('reviews the change at Open PR in a child session, then sends the PR prompt with the findings and the me_ak_review line', async () => {
+  it('reviews the change at Open PR in a child session, then sends the PR prompt with the findings and the me_kode_review line', async () => {
     const s = await task();
     fake('review-reports.json', {
       ...LEDGERS,
@@ -72,11 +72,11 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
     expect(done.codeReview).toMatchObject({ strategy: 'sagittarius-3.0', state: 'done', counts: { blocker: 1, major: 1, minor: 0 } });
     const pr = await prPrompt(s.claudeSessionId);
-    expect(pr).toContain('AgentK reviewed this change locally (Sagittarius 3.0) before this PR.');
+    expect(pr).toContain('Kode reviewed this change locally (Sagittarius 3.0) before this PR.');
     expect(pr).toContain('[1:1] `src/a.ts:2` **blocker**: Off by one.');
     expect(pr).toContain('`src/a.ts:4` **major** (Meko gotcha MG-3): Breaks the guide.');
     expect(pr).not.toContain('Not this change.');
-    expect(pr).toContain('me_ak_review:1 blocker,1 major addressed;Sagittarius3.0');
+    expect(pr).toContain('me_kode_review:1 blocker,1 major addressed;Sagittarius3.0');
 
     // The review ran in a code-review session on the task's worktree, with read-only subagents.
     const childId = all<{ id: string }>(env.core.db, 'SELECT id FROM sessions WHERE parent_id = ?', s.id)[0].id;
@@ -84,7 +84,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     expect(child).toMatchObject({ kind: 'code-review', parent_id: s.id, stage: 'reviewing-code', worktree_path: env.core.sessions.row(s.id).worktree_path, worktree_released: 1 });
     const launch = readJsonl<{ args: string[]; env: Record<string, string | undefined> }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes('--agents'))!;
     const argv = launch.args;
-    expect(Object.keys(JSON.parse(argv[argv.indexOf('--agents') + 1]))).toEqual(['agentk-review-large', 'agentk-review-mid', 'agentk-review-small']);
+    expect(Object.keys(JSON.parse(argv[argv.indexOf('--agents') + 1]))).toEqual(['kode-review-large', 'kode-review-mid', 'kode-review-small']);
     // Subagents in the foreground: a backgrounded one ends the turn, the sweep, before it reports.
     expect(launch.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
     expect(argv[argv.indexOf('--disallowedTools') + 1]).toContain('Edit');
@@ -139,7 +139,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const [first, again] = scoring;
     expect(first).toContain('Batch 2:');
     // Asked again, only the missing one, in a batch of its own.
-    expect(again).toMatch(/Batch 1:\s+1\. score 6: subagent `agentk-review-small`/);
+    expect(again).toMatch(/Batch 1:\s+1\. score 6: subagent `kode-review-small`/);
     expect(again).not.toContain('score 1:');
     const calls = readJsonl<{ step: string }>(join(env.fakeDir, 'review-calls.jsonl')).map((c) => c.step).filter((c) => /^r1c/.test(c));
     expect(calls).toEqual(['r1c1', 'r1c2', 'r1c3', 'r1c4', 'r1c5', 'r1c7', 'r1c6']);
@@ -213,12 +213,12 @@ describe('code review before the PR (real session host + git, fake claude runnin
     expect(prompts(s.claudeSessionId).filter((p) => p.includes("write the PR's title and description"))).toHaveLength(1);
   });
 
-  it('opens the PR with me_ak_review:LGTM;Sirius1.0 when Sirius 1.0 finds nothing, set for the session alone', async () => {
+  it('opens the PR with me_kode_review:LGTM;Sirius1.0 when Sirius 1.0 finds nothing, set for the session alone', async () => {
     const s = await task({ review: { strategy: 'sirius-1.0' } });
     expect(env.core.sessions.get(s.id).review).toEqual({ strategy: 'sirius-1.0' });
     await env.core.sessions.action(s.id, 'open-pr');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_kode_review:LGTM;Sirius1.0');
     expect(readJsonl<{ step: string }>(join(env.fakeDir, 'review-calls.jsonl')).map((c) => c.step)).toEqual(['r1s1:all']);
   });
 
@@ -235,7 +235,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 5, severity: 'minor', comment: 'Name it better.', gotchas: [] }] } });
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
     expect(done.codeReview).toMatchObject({ round: 2, state: 'done', counts: { blocker: 1, major: 0, minor: 1 } });
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker,1 minor addressed;Sagittarius3.0');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_kode_review:1 blocker,1 minor addressed;Sagittarius3.0');
     // Round 2 running isn't round 1's outcome: the counts stay until the task reports both rounds'.
     const outcome = (key: string) => env.core.reviews.onTool(env.core.sessions.row(s.id), 'review_outcome', { outcomes: [{ key, status: 'fixed', note: 'Done.' }] });
     outcome('2:1');
@@ -266,7 +266,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     expect(env.core.sessions.get(s.id).skippedStages).not.toContain('reviewing-code');
     await env.core.sessions.action(s.id, 'review-open-anyway');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt');
-    expect(await prPrompt(s.claudeSessionId)).not.toContain('me_ak_review');
+    expect(await prPrompt(s.claudeSessionId)).not.toContain('me_kode_review');
     // The PR went without a finished review: Code Review was skipped.
     expect(env.core.sessions.get(s.id)).toMatchObject({ openPrReview: null, skippedStages: ['explore', 'design', 'reviewing-code'] });
   });
@@ -276,7 +276,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', start: 'code', autoRun: true, review: { strategy: 'sirius-1.0' } });
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
     expect(done.codeReview).toMatchObject({ strategy: 'sirius-1.0', state: 'done' });
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_kode_review:LGTM;Sirius1.0');
     // The PR went with the review: Code Review is done, not skipped.
     expect(env.core.sessions.get(s.id).skippedStages).toEqual(['explore', 'design']);
   });
@@ -289,7 +289,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       (env.core.lifecycle as unknown as { serial(id: string, f: () => Promise<string>): Promise<string> }).serial(id, async () => 'done'),
       new Promise((r) => setTimeout(() => r('stuck'), 5000)),
     ]);
-    /** A prompt of the user's starts a turn on the task just as the review's PR prompt is to go, so it finds AgentK working. */
+    /** A prompt of the user's starts a turn on the task just as the review's PR prompt is to go, so it finds Kode working. */
     function userTurnAtFinish(id: string) {
       const send = env.core.lifecycle.sendReviewedPr.bind(env.core.lifecycle);
       vi.spyOn(env.core.lifecycle, 'sendReviewedPr').mockImplementationOnce(async (t, o) => {
@@ -303,7 +303,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     /** The PR prompt went at the end of the user's turn, with the review's line, and nothing is left queued. */
     async function sentAfterTurn(id: string, claudeSessionId: string) {
       await waitFor(() => env.core.sessions.get(id), (x) => x.stage === 'pr', 15000, "the PR prompt at the turn's end");
-      expect(await prPrompt(claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
+      expect(await prPrompt(claudeSessionId)).toContain('me_kode_review:LGTM;Sirius1.0');
       const sent = prompts(claudeSessionId);
       expect(sent.at(-2)).toBe('Tidy up the tests.');
       expect(sent.filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
@@ -316,7 +316,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       const s = await task({ review: { strategy: 'sirius-1.0' } });
       userTurnAtFinish(s.id);
       await env.core.sessions.action(s.id, 'open-pr');
-      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The code review is done: the PR prompt goes when AgentK finishes its turn'), 30000, 'the review to finish');
+      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The code review is done: the PR prompt goes when Kode finishes its turn'), 30000, 'the review to finish');
       expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', status: 'working', queued: 'open-pr', codeReview: { state: 'done' } });
       expect(env.core.sessions.row(s.id).queued_auto).toBe(0);
       expect(finished(s.id)).toBeNull();
@@ -328,7 +328,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       const s = await task({ review: { strategy: 'sirius-1.0' } });
       userTurnAtFinish(s.id);
       await env.core.sessions.edit(s.id, { autoRun: true });
-      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The code review is done: the PR prompt goes when AgentK finishes its turn'), 30000, 'the review to finish');
+      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The code review is done: the PR prompt goes when Kode finishes its turn'), 30000, 'the review to finish');
       expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: 'open-pr', queued_auto: 1 });
       await sentAfterTurn(s.id, s.claudeSessionId);
     });
@@ -339,7 +339,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       await env.core.sessions.edit(s.id, { autoRun: true });
       expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: expect.stringMatching(/describing|preparing|sweeping|scoring/) });
       await env.core.sessions.edit(s.id, { autoRun: false });
-      await waitFor(() => events(s.id, 'review'), (e) => e.some((t) => t.startsWith("The PR prompt didn't go after the code review: AgentK is still working.")), 30000, 'the review to finish');
+      await waitFor(() => events(s.id, 'review'), (e) => e.some((t) => t.startsWith("The PR prompt didn't go after the code review: Kode is still working.")), 30000, 'the review to finish');
       expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: null, auto_run: 0 });
       await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, "the user's turn to end");
       expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', codeReview: { state: 'done' } });
@@ -427,7 +427,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       .toEqual(['Claude exited before taking the PR prompt; it goes again once Claude is back']);
     await env.core.sessions.action(s.id, 'resume');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt again');
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_kode_review:LGTM;Sirius1.0');
     expect(prompts(s.claudeSessionId).filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
     // Written once the prompt is typed, after the stage moved to Pull Request (Lifecycle.sendPr).
     await waitFor(finished, (f) => f !== null, 10000, "the review's finish");
@@ -443,9 +443,9 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const pr = await prPrompt(s.claudeSessionId);
     // Claude's system prompt still says Explore (no PR): the moved line leads the review's first prompt to it, the ask for the PR description.
     const asked = prompts(s.claudeSessionId).find((p) => p.includes("write the PR's title and description"))!;
-    expect(asked.startsWith('AgentK moved this session to the Code stage.')).toBe(true);
-    expect(pr.startsWith('AgentK moved this session')).toBe(false);
-    expect(pr).toContain('me_ak_review:LGTM;Sirius1.0');
+    expect(asked.startsWith('Kode moved this session to the Code stage.')).toBe(true);
+    expect(pr.startsWith('Kode moved this session')).toBe(false);
+    expect(pr).toContain('me_kode_review:LGTM;Sirius1.0');
     expect(pr).toContain('Mention the demo.');
     expect(all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', s.id).map((r) => r.stage)).toEqual(['explore', 'code', 'pr']);
   });
@@ -463,7 +463,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the new review');
     expect(done.codeReview).toMatchObject({ state: 'done' });
     expect(done.codeReview!.id).not.toBe(failed.codeReview!.id);
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_kode_review:LGTM;Sirius1.0');
   });
 
   describe('a fix turn the user interrupted', () => {
@@ -526,7 +526,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(done).toMatchObject({ stage: 'code', codeReview: { strategy: 'sagittarius-3.0', onDemand: true, stage: 'code', counts: { blocker: 1, major: 0, minor: 0 } } });
       // Its last round's findings go to the task as a fix prompt: no PR prompt carries them.
       const fix = await waitFor(() => prompts(s.claudeSessionId).at(-1)!, (p) => p.includes('round 1'), 10000, 'the fix prompt');
-      expect(fix).toContain("AgentK reviewed this change locally (Sagittarius 3.0, round 1) at the user's request.");
+      expect(fix).toContain("Kode reviewed this change locally (Sagittarius 3.0, round 1) at the user's request.");
       expect(fix).toContain("Don't open the PR yet: when it's opened, it goes with this review's result.");
       expect(fix).toContain('[1:1] `src/a.ts:2` **blocker**: Off by one.');
       await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the fix turn');
@@ -556,7 +556,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       vi.mocked(env.core.host.submit).mockRestore();
       expect(env.core.sessions.get(s.id).skippedStages).not.toContain('reviewing-code');
       const pr = await prPrompt(s.claudeSessionId);
-      expect(pr).toContain('me_ak_review:1 blocker addressed;Sagittarius3.0');
+      expect(pr).toContain('me_kode_review:1 blocker addressed;Sagittarius3.0');
       expect(pr).not.toContain('Off by one.');
       expect(reviews(s.id)).toHaveLength(1);
     });
@@ -566,7 +566,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       fake('review-reports.json', { all: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'blocker', comment: 'Off by one.', gotchas: [] }] } });
       await env.core.sessions.action(s.id, 'review-run');
       await described(s, 1);
-      // AgentK waits on the user in the terminal: the fix prompt isn't typed into it.
+      // Kode waits on the user in the terminal: the fix prompt isn't typed into it.
       run(env.core.db, `UPDATE sessions SET status = 'needs_input' WHERE id = ?`, s.id);
       await waitFor(() => env.core.sessions.get(s.id).codeReview!.state, (st) => st === 'done', 30000, 'the review to finish');
       expect(env.core.lifecycle.codeReviewPending(s.id)).toBe(true);
@@ -576,7 +576,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       await env.core.sessions.action(s.id, 'open-pr');
       const pr = await prPrompt(s.claudeSessionId);
       expect(pr).toContain('[1:1] `src/a.ts:2` **blocker**: Off by one.');
-      expect(pr).toContain('me_ak_review:1 blocker addressed;Sirius1.0');
+      expect(pr).toContain('me_kode_review:1 blocker addressed;Sirius1.0');
       expect(env.core.lifecycle.codeReviewPending(s.id)).toBe(false);
     });
 
@@ -589,7 +589,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       await env.core.sessions.move(s.id, { stage: 'review' });
       expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', codeReview: { onDemand: false } });
       await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
-      expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sagittarius3.0');
+      expect(await prPrompt(s.claudeSessionId)).toContain('me_kode_review:LGTM;Sagittarius3.0');
       expect(reviews(s.id)).toEqual([expect.objectContaining({ purpose: 'pr', stage: 'code' })]);
     });
 
@@ -604,7 +604,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       rmSync(join(env.fakeDir, 'turn-ms'), { force: true });
       fake('review-reports.json', {});
       await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
-      expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker addressed;Sirius1.0');
+      expect(await prPrompt(s.claudeSessionId)).toContain('me_kode_review:1 blocker addressed;Sirius1.0');
       expect(reviews(s.id)).toEqual([expect.objectContaining({ purpose: 'pr' })]);
     });
 
@@ -641,7 +641,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(exited.hard).toEqual(expect.arrayContaining(['The code review is still running.', 'The worktree has 1 uncommitted file: commit or discard them.']));
       // No PR description turn: round 1 reads the PR's own title and description.
       const fix = await waitFor(() => prompts(s.claudeSessionId).at(-1)!, (p) => p.includes('round 1'), 30000, 'the fix prompt');
-      expect(fix).toContain("Don't commit or push yet: AgentK reviews the change again first.");
+      expect(fix).toContain("Don't commit or push yet: Kode reviews the change again first.");
       const id = env.core.sessions.get(s.id).codeReview!.id;
       expect(readFileSync(join(env.core.paths.run, 'reviews', id, 'r1', 'base.md'), 'utf8')).toContain('> feat(demo): add f\n>\n> Adds f.');
       // Round 2 finds nothing: the fixes, uncommitted, are pushed once.
@@ -650,7 +650,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(push).toContain("push them to the PR's branch");
       const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'done', 10000, 'the review to finish');
       expect(done).toMatchObject({ stage: 'review', codeReview: { round: 2, onDemand: true, stage: 'review' } });
-      await waitFor(() => gh.body, (b) => b.includes('me_ak_review:1 blocker addressed;Sagittarius3.0'), 10000, "the review's line in the PR");
+      await waitFor(() => gh.body, (b) => b.includes('me_kode_review:1 blocker addressed;Sagittarius3.0'), 10000, "the review's line in the PR");
       expect(prompts(s.claudeSessionId).filter((p) => p.includes("write the PR's title and description"))).toHaveLength(0);
       await waitFor(() => env.core.lifecycle.codeReviewPending(s.id), (p) => !p, 10000, 'the push turn to end');
     });
@@ -701,7 +701,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       // Round 2 finds nothing: the PR goes, its line without the dismissed one, and round 2 was told of it.
       const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
       expect(done.codeReview).toMatchObject({ round: 2, state: 'done', counts: { blocker: 1, major: 0, minor: 0 } });
-      expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker addressed;Sagittarius3.0');
+      expect(await prPrompt(s.claudeSessionId)).toContain('me_kode_review:1 blocker addressed;Sagittarius3.0');
       const round2 = readFileSync(join(env.core.paths.run, 'reviews', done.codeReview!.id, 'r2', 'base.md'), 'utf8');
       expect(round2).toContain('  > Rename it.\n  - the user dismissed it:\n    > The name is fine.');
       expect(env.core.reviews.detail(s.id).findings.find((f) => f.line === 4)).toMatchObject({ kept: false, dropped: 'dismissed by you' });
@@ -719,7 +719,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(env.core.reviews.detail(s.id).findings.filter((f) => f.kept)).toHaveLength(1);
       await env.core.sessions.action(s.id, 'review-send');
       await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt');
-      expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker addressed;Sagittarius3.0');
+      expect(await prPrompt(s.claudeSessionId)).toContain('me_kode_review:1 blocker addressed;Sagittarius3.0');
     });
 
     it.each([['you dismiss every finding and send', 'dismiss'], ['Run to merge is turned on', 'auto']] as const)(
@@ -737,11 +737,11 @@ describe('code review before the PR (real session host + git, fake claude runnin
         const pr = await prPrompt(s.claudeSessionId);
         if (how === 'dismiss') {
           expect(pr).not.toContain('Off by one.');
-          expect(pr).toContain('me_ak_review:LGTM;Sagittarius3.0');
+          expect(pr).toContain('me_kode_review:LGTM;Sagittarius3.0');
           expect(done.codeReview!.counts).toEqual({ blocker: 0, major: 0, minor: 0 });
         } else {
           expect(pr).toContain('`src/a.ts:2` **blocker**: Off by one.');
-          expect(pr).toContain('me_ak_review:1 blocker addressed;Sagittarius3.0');
+          expect(pr).toContain('me_kode_review:1 blocker addressed;Sagittarius3.0');
         }
       },
     );
@@ -763,7 +763,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       await waiting(s.id);
       const st = await (await import('../../src/server/github.js')).prStatus('', 7);
       const info = env.core.lifecycle.mergeInfo(env.core.sessions.row(s.id), st);
-      const waits = "The code review's findings wait on you: send them to AgentK or dismiss them.";
+      const waits = "The code review's findings wait on you: send them to Kode or dismiss them.";
       expect(info).toMatchObject({ canMerge: false, hard: [waits], yours: [waits] });
       expect(info.blockers).not.toContain('The code review is still running.');
       // Sending them polls the PR, which compares the branch with its head (abc123, no commit here)

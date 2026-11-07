@@ -1,7 +1,7 @@
 #!/bin/sh
-# AgentK's prerequisites: git, curl, gh and a coding agent (Claude Code, OpenCode or Kiro CLI; one is
+# Kode's prerequisites: git, curl, gh and a coding agent (Claude Code, OpenCode or Kiro CLI; one is
 # enough), each agent signed in, and gh signed in to GitHub. `meko kode install` runs it first, on the
-# terminal Meko's `meko extension install agentk` attached (a release has it as lib/scripts/deps.sh),
+# terminal Meko's `meko extension install kode` attached (a release has it as lib/scripts/deps.sh),
 # and passes its options on:
 #
 #   --install-deps      install missing tools without asking
@@ -66,8 +66,8 @@ case $(uname -s) in
   Darwin)
     platform=darwin
     arch=arm64  # only for gh, which Homebrew installs here
-    # Homebrew's tools may not be on PATH yet in a fresh shell. (AK_BREW_DIRS is for tests.)
-    for brew_dir in ${AK_BREW_DIRS-/opt/homebrew/bin /usr/local/bin}; do
+    # Homebrew's tools may not be on PATH yet in a fresh shell. (KODE_BREW_DIRS is for tests.)
+    for brew_dir in ${KODE_BREW_DIRS-/opt/homebrew/bin /usr/local/bin}; do
       case ":$PATH:" in *":$brew_dir:"*) ;; *) [ -x "$brew_dir/brew" ] && PATH="$brew_dir:$PATH" ;; esac
     done
     ;;
@@ -118,7 +118,7 @@ command -v curl >/dev/null 2>&1 || { add_missing curl; pkgs="$pkgs curl"; }
 gh_skipped=false
 if ! command -v gh >/dev/null 2>&1; then
   # With GITHUB_TOKEN, Meko downloads with the token, so an unattended install can go on without gh
-  # (AgentK then can't open PRs or follow reviews until it's installed).
+  # (Kode then can't open PRs or follow reviews until it's installed).
   if [ -n "${GITHUB_TOKEN:-}" ] && [ "$install_deps" != yes ]; then gh_skipped=true
   else
     add_missing "gh (GitHub CLI)"
@@ -133,7 +133,7 @@ has_opencode() { command -v opencode >/dev/null 2>&1 || [ -x "$opencode_bin/open
 if ! command -v claude >/dev/null 2>&1 && ! has_opencode && ! command -v kiro-cli >/dev/null 2>&1; then
   if [ -z "$agent" ] && $interactive && [ "$install_deps" = ask ]; then
     say "${b}Coding agent${n}"
-    warn "Missing" "AgentK runs sessions on Claude Code, OpenCode or Kiro CLI, and none is installed"
+    warn "Missing" "Kode runs sessions on Claude Code, OpenCode or Kiro CLI, and none is installed"
     printf '    Install Claude Code (1), OpenCode (2) or Kiro CLI (3)? %s[1]%s ' "$d" "$n" >&2
     read -r answer </dev/tty || answer=""
     case $answer in
@@ -164,7 +164,7 @@ sudo=""
 if [ "$platform" = darwin ]; then
   if [ -n "$pkgs" ]; then
     command -v brew >/dev/null 2>&1 ||
-      die "missing: $missing. Install Homebrew (https://brew.sh), then run meko extension install agentk again; or install them yourself."
+      die "missing: $missing. Install Homebrew (https://brew.sh), then run meko extension install kode again; or install them yourself."
     plan="$plan
       brew install$pkgs"
   fi
@@ -193,7 +193,7 @@ else
       ${s}pacman -S --needed --noconfirm$pkgs" ;;
       apk) plan="$plan
       ${s}apk add$pkgs" ;;
-      *) die "missing: $missing, and no supported package manager (apt-get, dnf, yum, zypper, pacman, apk) was found. Install them yourself and run meko extension install agentk again." ;;
+      *) die "missing: $missing, and no supported package manager (apt-get, dnf, yum, zypper, pacman, apk) was found. Install them yourself and run meko extension install kode again." ;;
     esac
     [ "$sudo" = "(as root)" ] &&
       die "missing: $missing. Installing them needs root, and sudo isn't available. As root, run:$plan"
@@ -261,20 +261,20 @@ install_gh() {
 if [ -n "$plan" ]; then
   say "${b}Tools${n}"
   warn "Missing" "$missing"
-  say "    To install them, AgentK's setup will run:$plan"
+  say "    To install them, Kode's setup will run:$plan"
   case $install_deps in
     yes) ;;
-    no) die "missing: $missing. Install them and run meko extension install agentk again, or drop --no-install-deps." ;;
+    no) die "missing: $missing. Install them and run meko extension install kode again, or drop --no-install-deps." ;;
     ask)
-      $interactive || die "missing: $missing. Run meko extension install agentk -- --install-deps to install them, or install them yourself."
-      ask "    Install them now?" || die "missing: $missing. Install them and run meko extension install agentk again."
+      $interactive || die "missing: $missing. Run meko extension install kode -- --install-deps to install them, or install them yourself."
+      ask "    Install them now?" || die "missing: $missing. Install them and run meko extension install kode again."
       ;;
   esac
   if [ -n "$pkgs" ]; then
     brew_failed=false
     if ! install_system_pkgs; then
       # On Linux a failed install can leave the package database half-configured: stop there.
-      [ "$platform" = darwin ] || die "installing$pkgs failed (see the output above). Install them yourself and run meko extension install agentk again."
+      [ "$platform" = darwin ] || die "installing$pkgs failed (see the output above). Install them yourself and run meko extension install kode again."
       brew_failed=true
     fi
     hash -r 2>/dev/null || true
@@ -285,14 +285,14 @@ if [ -n "$plan" ]; then
     if [ -n "$bad" ]; then
       problem="$bad is still not available after installing it."
       if $brew_failed; then
-        die "brew failed (see the output above: its error can be well before its last lines). $problem Run 'brew install $bad' yourself to see what went wrong, then run meko extension install agentk again."
+        die "brew failed (see the output above: its error can be well before its last lines). $problem Run 'brew install $bad' yourself to see what went wrong, then run meko extension install kode again."
       fi
       die "$problem"
     fi
     $brew_failed && warn "brew" "exited with an error, but$pkgs work: going on"
   fi
   if $gh_download; then
-    install_gh || die "couldn't install gh from github.com/cli/cli. Install it yourself (https://cli.github.com) and run meko extension install agentk again."
+    install_gh || die "couldn't install gh from github.com/cli/cli. Install it yourself (https://cli.github.com) and run meko extension install kode again."
   fi
   if $claude_install; then
     command -v bash >/dev/null 2>&1 || die "Claude Code's installer needs bash, which wasn't found. Install Claude Code yourself: https://claude.com/claude-code"
@@ -306,7 +306,7 @@ if [ -n "$plan" ]; then
     command -v bash >/dev/null 2>&1 || die "OpenCode's installer needs bash, which wasn't found. Install OpenCode yourself: https://opencode.ai"
     # Saved first rather than piped, so a failed download isn't mistaken for a finished install.
     oc_tmp=$(mktemp -d)
-    # opencode.ai/install is OpenCode 1's, which AgentK doesn't run.
+    # opencode.ai/install is OpenCode 1's, which Kode doesn't run.
     { curl -fsSL -o "$oc_tmp/install" https://opencode.ai/v2/install && bash "$oc_tmp/install" </dev/null; } ||
       { rm -rf "$oc_tmp"; die "OpenCode's installer failed (see the output above). Install it yourself: https://opencode.ai"; }
     rm -rf "$oc_tmp"
@@ -328,7 +328,7 @@ if [ -n "$plan" ]; then
   ok "Installed" "$missing"
 fi
 
-# Each agent there has to be signed in before AgentK can run sessions on it.
+# Each agent there has to be signed in before Kode can run sessions on it.
 agents=""
 if command -v claude >/dev/null 2>&1; then
   agents="Claude Code"
@@ -342,7 +342,7 @@ if command -v claude >/dev/null 2>&1; then
 fi
 # OpenCode needs a model provider: one signed in with `opencode auth login`, or a provider's key in
 # the environment, which `opencode auth list` lists too. Both run on a server of their own
-# (--standalone): OpenCode 2's shared background service has another environment, and AgentK never
+# (--standalone): OpenCode 2's shared background service has another environment, and Kode never
 # starts it.
 if has_opencode; then
   agents="${agents:+$agents, }OpenCode"
@@ -369,11 +369,11 @@ if command -v kiro-cli >/dev/null 2>&1; then
   fi
 fi
 
-# gh signs in to GitHub for PRs and reviews, and Meko downloads AgentK's releases with its token.
+# gh signs in to GitHub for PRs and reviews, and Meko downloads Kode's releases with its token.
 if $gh_skipped; then
   warn "GitHub" "gh isn't installed: install gh for PRs and reviews"
 elif ! gh auth status >/dev/null 2>&1; then
-  if $interactive && ask "  gh isn't signed in to GitHub. AgentK needs it for PRs and reviews, and Meko for AgentK's updates. Sign in now (gh auth login)?"; then
+  if $interactive && ask "  gh isn't signed in to GitHub. Kode needs it for PRs and reviews, and Meko for Kode's updates. Sign in now (gh auth login)?"; then
     gh auth login <"$term" || warn "GitHub" "sign-in didn't finish; run 'gh auth login' later"
   else
     warn "GitHub" "gh isn't signed in: run 'gh auth login' (needed for PRs, reviews and updates)"

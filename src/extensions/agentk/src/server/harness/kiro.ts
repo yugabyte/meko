@@ -31,17 +31,17 @@ const MODELS_TIMEOUT_MS = 15_000;
 const UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 /** Kiro's file-writing tool, by the name its hook matchers take (Kiro 2.32 calls it `write` and keeps this alias). */
 const WRITE_TOOLS = ['write', 'fs_write'];
-/** The copy of the `agentk` agent AgentK last wrote, in its run folder (`writeKiroAgent`'s `written`). */
-const KIRO_AGENT_WRITTEN = 'kiro-agentk.json';
-/** The same for `agentk-trusted`. */
-const KIRO_TRUSTED_AGENT_WRITTEN = 'kiro-agentk-trusted.json';
-/** The first Kiro whose engine ignores `--trust-tools`, so `[kiro] trust_tools` runs it as `agentk-trusted`. */
+/** The copy of the `kode` agent Kode last wrote, in its run folder (`writeKiroAgent`'s `written`). */
+const KIRO_AGENT_WRITTEN = 'kiro-kode.json';
+/** The same for `kode-trusted`. */
+const KIRO_TRUSTED_AGENT_WRITTEN = 'kiro-kode-trusted.json';
+/** The first Kiro whose engine ignores `--trust-tools`, so `[kiro] trust_tools` runs it as `kode-trusted`. */
 const TRUST_BY_AGENT_VERSION = '3.0.0';
 /** Hook commands must never hold Kiro up for long. */
 const HOOK_TIMEOUT_MS = 5000;
 
 /**
- * Kiro's hook events as AgentK's (Claude Code's hook names). Kiro 2 sends its triggers' names
+ * Kiro's hook events as Kode's (Claude Code's hook names). Kiro 2 sends its triggers' names
  * (`agentSpawn`); Kiro 3.0 sends Claude Code's (`SessionStart`) for the same triggers.
  */
 const EVENTS: Record<string, string> = {
@@ -50,7 +50,7 @@ const EVENTS: Record<string, string> = {
 };
 
 /**
- * AgentK's hooks in the `agentk` agent: the forwarder on every event it follows, the context at
+ * Kode's hooks in the `kode` agent: the forwarder on every event it follows, the context at
  * start, the guard on writes, and the forwarder before each call to a Meko server (`mekoServers`,
  * matched as `@<name>`, Kiro's matcher for every tool of an MCP server), for the dot's Meko m.
  */
@@ -70,7 +70,7 @@ export function agentkHooks(paths: Paths, mekoServers: string[] = ['meko']): Kir
 }
 
 /**
- * Whether Kiro sessions run as `agentk-trusted`: true with `[kiro] trust_tools` on a Kiro whose
+ * Whether Kiro sessions run as `kode-trusted`: true with `[kiro] trust_tools` on a Kiro whose
  * engine ignores `--trust-tools` (3.0 or later, by `version`, the last one read); false with it off
  * or on an older Kiro; null with it on and no version read yet (or every read failed), when the
  * trusted agent is neither written nor removed, and a launch runs as it while it's there.
@@ -81,11 +81,11 @@ export function kiroTrustByAgent(cfg: Config, version: string | null): boolean |
 }
 
 /**
- * Writes the `agentk` agent from the user's default agent (Meko's `meko-default` when Meko's setup
- * for Kiro ran, else Kiro's built-in one) with AgentK's hooks added, Meko's capture hooks only
- * with `[meko] capture_transcripts`, and AgentK's session tools while `[tools] enabled` (one file for
+ * Writes the `kode` agent from the user's default agent (Meko's `meko-default` when Meko's setup
+ * for Kiro ran, else Kiro's built-in one) with Kode's hooks added, Meko's capture hooks only
+ * with `[meko] capture_transcripts`, and Kode's session tools while `[tools] enabled` (one file for
  * every session, so a session on an untrusted PR head has them too; the tools' route refuses it).
- * With `trusted` (`kiroTrustByAgent`) true, also `agentk-trusted`, the same with every tool allowed;
+ * With `trusted` (`kiroTrustByAgent`) true, also `kode-trusted`, the same with every tool allowed;
  * false removes it, so a session already running as it falls back to Kiro's default agent and asks
  * again; null leaves it as it is. Returns what changed, as lines for the log.
  */
@@ -106,19 +106,19 @@ export function writeAgentkAgent(paths: Paths, cfg: Config, trusted: boolean | n
   return changes;
 }
 
-/** Removes `agentk-trusted` while it's AgentK's. True when it removed it. */
+/** Removes `kode-trusted` while it's Kode's. True when it removed it. */
 function dropTrustedAgent(paths: Paths): boolean {
   return removeOwnKiroAgent(AGENTK_TRUSTED_AGENT, kiroHome(), join(paths.run, KIRO_TRUSTED_AGENT_WRITTEN));
 }
 
 /**
- * The command line of a Kiro session: as `agent` (`agentk` by default, `agentk-trusted` by `kiroTrustByAgent`), its own
+ * The command line of a Kiro session: as `agent` (`kode` by default, `kode-trusted` by `kiroTrustByAgent`), its own
  * conversation resumed by id (never `--resume`, Kiro's newest in the folder, which can be an earlier
  * session's in a reused worktree). `trustTools` (`[kiro] trust_tools`) trusts every tool for this
- * run only, so nothing in Kiro's home grants it to `agentk`: `--trust-tools=*`, not
+ * run only, so nothing in Kiro's home grants it to `kode`: `--trust-tools=*`, not
  * `--trust-all-tools`, which makes Kiro ask on screen whether to go on with "No, exit" first (a
  * typed prompt's Enter would pick it). Kiro 3.0's engine ignores `--trust-tools`, so there the
- * launch is also as `agentk-trusted`; the flag stays for Kiro 3.0 on its older engine.
+ * launch is also as `kode-trusted`; the flag stays for Kiro 3.0 on its older engine.
  */
 export function kiroArgs(o: { agent?: string; conversation: string | null; trustTools: boolean; prompt: string | null; model?: string | null }): string[] {
   const args = ['chat', '--agent', o.agent ?? AGENTK_AGENT];
@@ -166,7 +166,7 @@ export function kiroMekoTool(p: HookPayload): string | null {
   return typeof p.tool_name === 'string' && MEKO_TOOL.test(p.tool_name) ? p.tool_name : null;
 }
 
-/** A Kiro hook payload as AgentK's event: Kiro's id moves to `agent_session_id`, since `session_id` is Claude Code's. */
+/** A Kiro hook payload as Kode's event: Kiro's id moves to `agent_session_id`, since `session_id` is Claude Code's. */
 export function normalizeKiro(raw: HookPayload): HookPayload | null {
   const ev = EVENTS[String(raw.hook_event_name ?? '')];
   if (!ev) return null;
@@ -190,13 +190,13 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
   };
   const knownVersion = (cfg: Config) => (known?.command === cfg.kiro.command ? known.version : null);
   const trustByAgent = (cfg: Config) => kiroTrustByAgent(cfg, knownVersion(cfg));
-  /** The agent a launch now runs as: `agentk-trusted` while it's there when the version isn't known. */
+  /** The agent a launch now runs as: `kode-trusted` while it's there when the version isn't known. */
   const launchAgent = (cfg: Config) => ((trustByAgent(cfg) ?? ownKiroAgentExists(AGENTK_TRUSTED_AGENT)) ? AGENTK_TRUSTED_AGENT : AGENTK_AGENT);
   const refreshAgent = (paths: Paths, cfg: Config) => {
     try {
       for (const line of writeAgentkAgent(paths, cfg, trustByAgent(cfg))) deps.log.info(line);
     } catch (e) {
-      deps.log.warn(`couldn't write Kiro's ${AGENTK_AGENT} agent; Kiro sessions start without AgentK's hooks`, errMsg(e));
+      deps.log.warn(`couldn't write Kiro's ${AGENTK_AGENT} agent; Kiro sessions start without Kode's hooks`, errMsg(e));
     }
   };
 
@@ -206,14 +206,14 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
     systemPromptByContext: true,
     async prepare(paths, cfg) {
       writeKiroGuardScript(paths);
-      // With trust_tools off (Settings runs this when it changes), nothing runs as agentk-trusted any
+      // With trust_tools off (Settings runs this when it changes), nothing runs as kode-trusted any
       // more, a chat started by hand included, whether Kiro is on for new sessions or not.
       try {
         if (!cfg.kiro.trustTools && dropTrustedAgent(paths)) deps.log.info(`removed Kiro's ${AGENTK_TRUSTED_AGENT} agent`);
       } catch (e) {
         deps.log.warn(`couldn't remove Kiro's ${AGENTK_TRUSTED_AGENT} agent`, errMsg(e));
       }
-      // Only where Kiro is installed: AgentK never makes a ~/.kiro of its own.
+      // Only where Kiro is installed: Kode never makes a ~/.kiro of its own.
       if (!remember(cfg, await version(cfg))) return;
       if (!kiroDefaultAgentName()) await exportBuiltinKiroAgent(cfg.kiro.command, paths);
       refreshAgent(paths, cfg);
@@ -229,7 +229,7 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
       const agent = launchAgent(cfg);
       const own = l.untrusted ? kiroWorkspaceConfig(l.row.worktree_path, agent) : [];
       if (own.length) {
-        const what = own.map((f) => (f.endsWith('mcp.json') ? `the MCP servers in ${f}` : `the agent in ${f} in place of AgentK's`));
+        const what = own.map((f) => (f.endsWith('mcp.json') ? `the MCP servers in ${f}` : `the agent in ${f} in place of Kode's`));
         throw new HttpError(400, `Kiro would run this PR's own config (${what.join(', and ')}), and anyone can have written `
           + "this PR's code. Review it on Claude Code instead, which can leave the repo's config out.");
       }

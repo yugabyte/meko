@@ -1,7 +1,7 @@
-// What AgentK knows about its own updates. Meko installs them (`meko extension update agentk`, its
-// Extensions page, AgentK's Update button through Meko's routes) and runs their probation through
+// What Kode knows about its own updates. Meko installs them (`meko extension update kode`, its
+// Extensions page, Kode's Update button through Meko's routes) and runs their probation through
 // `meko _launch`: counting a new version's starts, rolling back one that keeps failing, and finishing
-// the update once it has run 5 minutes. AgentK only learns it was updated (MEKO_UPDATED_FROM, which
+// the update once it has run 5 minutes. Kode only learns it was updated (MEKO_UPDATED_FROM, which
 // Meko sets while the version is on probation), says so, snapshots its database before the new
 // version migrates it, and shows What's new.
 
@@ -19,7 +19,7 @@ const run = promisify(execFile);
 /** Time limit on asking GitHub, so a stalled call can't leave What's new loading forever. */
 const COMPARE_TIMEOUT_MS = 60_000;
 
-/** Where AgentK's releases are published: the commits What's new lists are compared there. */
+/** Where Kode's releases are published: the commits What's new lists are compared there. */
 export const RELEASES_REPO = 'yugabyte/meko';
 
 /**
@@ -81,7 +81,7 @@ export function notesRange(from: string, to: string): boolean {
 }
 
 /**
- * The prefixes of AgentK's release tags, newest scheme first: `agentk-v<version>`, and `v<version>`
+ * The prefixes of Kode's release tags, newest scheme first: `agentk-v<version>`, and `v<version>`
  * before releases were tagged by product (scripts/release/product.sh).
  */
 export const TAG_PREFIXES = ['agentk-v', 'v'] as const;
@@ -130,7 +130,7 @@ export class GhCompareSource implements CompareSource {
 /** Plain HTTPS against api.github.com; uses GITHUB_TOKEN when set. */
 export class HttpsCompareSource implements CompareSource {
   async compare(repo: string, base: string, head: string): Promise<Comparison> {
-    const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'agentk' };
+    const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'kode' };
     if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
     const res = await fetch(`https://api.github.com/${compareRoute(repo, base, head)}`, {
       headers,
@@ -173,10 +173,10 @@ export function onProbation(uptimeMs = process.uptime() * 1000, env: NodeJS.Proc
 }
 
 /**
- * Whether app/current no longer names the version this process runs from (`appDir`, AK_APP_DIR):
+ * Whether app/current no longer names the version this process runs from (`appDir`, KODE_APP_DIR):
  * Meko switched it to another version, so a stop now is a restart into that update.
  */
-export function switchedAway(appDir: string | undefined = process.env.AK_APP_DIR): boolean {
+export function switchedAway(appDir: string | undefined = process.env.KODE_APP_DIR): boolean {
   if (!appDir) return false;
   try {
     return realpathSync(join(dirname(appDir), 'current')) !== realpathSync(appDir);

@@ -53,7 +53,7 @@ func TestPruneKeepsAVersionInUse(t *testing.T) {
 	}
 }
 
-// AgentK's own updater kept its record and bad versions in its home: the record moves into the app
+// Kode's own updater kept its record and bad versions in its home: the record moves into the app
 // folder (its at in milliseconds), the bad versions count (a v dropped), and a rollback adds to both
 // lists.
 func TestLegacyRecords(t *testing.T) {
@@ -91,7 +91,7 @@ func TestLegacyRecords(t *testing.T) {
 	}
 }
 
-// A release whose `version --json` prints the bare version (AgentK's from before --json) passes the
+// A release whose `version --json` prints the bare version (Kode's from before --json) passes the
 // check; one that names another version doesn't. Checks run on the staged binary, and one that
 // fails keeps the version out.
 func TestCheckBinaryAndChecks(t *testing.T) {
@@ -155,7 +155,7 @@ func TestExtensionsOnlyUpdater(t *testing.T) {
 	}
 }
 
-// A version a live process names in a Running record (AgentK's run/host.json: a session host started
+// A version a live process names in a Running record (Kode's run/host.json: a session host started
 // before meko _launch, or without it) isn't pruned; one a dead process names is.
 func TestPruneKeepsAVersionARunningRecordNames(t *testing.T) {
 	a := newApp(t, "0.20261020.0", "0.20261021.0", "0.20261022.0")

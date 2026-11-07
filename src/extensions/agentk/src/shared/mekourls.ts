@@ -10,17 +10,17 @@ export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
 export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
 
 /**
- * Where browsers find AgentK: the Meko on this computer serves it at this path on its web listener,
- * with the path stripped (Meko's internal/extproxy), so AgentK's own routes stay at `/`.
+ * Where browsers find Kode: the Meko on this computer serves it at this path on its web listener,
+ * with the path stripped (Meko's internal/extproxy), so Kode's own routes stay at `/`.
  */
-export const AGENTK_PATH = '/ext/agentk/';
+export const KODE_PATH = '/ext/kode/';
 
-/** Meko's main page, on the same web listener as AgentK: the projects pane's Meko "m" links to it. */
+/** Meko's main page, on the same web listener as Kode: the projects pane's Meko "m" links to it. */
 export const MEKO_HOME_PATH = '/';
 
 /**
  * A datapack's page in the web UI of the Meko on this computer (its overview tab), on the same
- * origin as AgentK. Datapack names link to it: that web UI opens a Meko Cloud datapack in Meko
+ * origin as Kode. Datapack names link to it: that web UI opens a Meko Cloud datapack in Meko
  * Cloud's web app.
  */
 export function mekoDatapackPath(datapackId: string): string {

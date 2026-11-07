@@ -28,7 +28,7 @@ a single binary that has the command line, the server, the MCP tools and the RES
 | Give agents like Claude, Codex, or any MCP client, Meko's context | [Connect an agent](#connect-an-agent) |
 | Link to Meko Cloud | [Link to Meko Cloud](#link-to-meko-cloud) |
 | See every command | [CLI](src/meko/docs/cli.md) ⋅ [API](src/meko/docs/api.md#rest-at-apiv1) ⋅ [MCP](src/meko/docs/api.md#mcp-at-mcp)|
-| Run many coding sessions that share and learn from each other | [AgentK](src/extensions/agentk/README.md) |
+| Run many coding sessions that share and learn from each other | [Kode](src/extensions/agentk/README.md) |
 | Contribute to Meko | [Contributing](#docs-and-contributing) |
 
 ## Install
@@ -106,14 +106,14 @@ Meko Cloud.
 
 ## Extensions
 
-**[AgentK](src/extensions/agentk/README.md)** is the agentic coder built on Meko. It runs many Claude
+**[Kode](src/extensions/agentk/README.md)** is the agentic coder built on Meko. It runs many Claude
 Code, OpenCode and Kiro CLI sessions from a browser or your phone, takes each task from design to
 merged PR, and keeps each project's designs and learnings in a Meko datapack.
 
 Install it with:
 ```sh
-meko extension install agentk     # -- --agent claude picks its coding agent
-meko kode ui                      # opens AgentK in your browser
+meko extension install kode       # -- --agent claude picks its coding agent
+meko kode ui                      # opens Kode in your browser
 ```
 
 ## How it works
@@ -157,7 +157,7 @@ first PR links to a page where you sign it once with your GitHub account.
 
 - Meko's docs: [`src/meko/docs/`](src/meko/docs)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
-- AgentK docs: [`src/extensions/agentk/docs`](src/extensions/agentk/docs)
+- Kode docs: [`src/extensions/agentk/docs`](src/extensions/agentk/docs)
 - Questions and ideas: [Meko's Discord](https://mekodata.ai/discord/) or
   [Slack](https://inviter.co/yugabytedb).
 

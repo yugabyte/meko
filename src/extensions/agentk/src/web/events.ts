@@ -49,7 +49,7 @@ export interface EventsHandlers {
  * link gets the time it needs instead of starting over forever; a ping answered within PROBE_MS
  * shows the link is quick again.
  *
- * A socket dropped while Meko installs an update of AgentK (`setUpdateInstalling`, from the job the
+ * A socket dropped while Meko installs an update of Kode (`setUpdateInstalling`, from the job the
  * page follows on Meko: `useMekoUpdate`) retries every UPDATE_RETRY_MS rather than backing off, so
  * the page sees the new version (and reloads into it) as soon as it's up.
  *
@@ -62,10 +62,10 @@ export interface EventsHandlers {
  * lost-connection banner shows once and stays until the server is back instead of going off for
  * every try.
  */
-/** Meko is installing an update of AgentK: every connection retries fast while it does. */
+/** Meko is installing an update of Kode: every connection retries fast while it does. */
 let installing = false;
 
-/** Says whether Meko is installing an update of AgentK (its job, which `useMekoUpdate` follows). */
+/** Says whether Meko is installing an update of Kode (its job, which `useMekoUpdate` follows). */
 export function setUpdateInstalling(on: boolean): void {
   installing = on;
 }

@@ -74,6 +74,21 @@ func TestLaunchSupported(t *testing.T) {
 	}
 	code, _, errs = run("_launch", "frob", "/bin/true", "serve")
 	want(t, "an unknown extension", code, 1, errs, `no extension called "frob"`)
+	// Kode's launcher asks whether this Meko knows it as kode, else names it agentk.
+	for name, wantCode := range map[string]int{"kode": 0, "agentk": 0, "frob": 1} {
+		if code, _, _ := run("_launch", "--supported", name); code != wantCode {
+			t.Errorf("--supported %s: %d, want %d", name, code, wantCode)
+		}
+	}
+}
+
+// Kode was agentk in Meko before: the commands that take an extension's name refuse the old one,
+// saying the new one.
+func TestExtensionCommandsRefuseTheOldName(t *testing.T) {
+	for _, cmd := range []string{"install", "update", "delete"} {
+		code, _, errs := run("extension", cmd, "agentk", "--data-dir", t.TempDir())
+		want(t, cmd+" agentk", code, 1, errs, "AgentK is called Kode now: run meko extension "+cmd+" kode")
+	}
 }
 
 // A new version that keeps failing to start is counted at each start, with MEKO_UPDATED_FROM set,
@@ -106,15 +121,15 @@ func TestLaunchRollsBackAFailingVersion(t *testing.T) {
 	}
 }
 
-// A clean end (exit 0, or a stop Meko passed on) isn't a failed start; AgentK's exit 75 isn't either.
+// A clean end (exit 0, or a stop Meko passed on) isn't a failed start; Kode's exit 75 isn't either.
 func TestLaunchDoesntCountACleanStop(t *testing.T) {
 	const old, next = "0.20261024.0", "0.20261025.0"
-	app, _ := launchApp(t, "agentk", map[string]string{old: "exit 0",
+	app, _ := launchApp(t, "kode", map[string]string{old: "exit 0",
 		next: `[ -n "$EXIT_BUSY" ] && exit 75; exec sleep 30`})
 	if err := app.Switch(old, next, 0); err != nil {
 		t.Fatal(err)
 	}
-	busy := launch(t, app, "agentk", next, "serve")
+	busy := launch(t, app, "kode", next, "serve")
 	busy.Env = append(busy.Env, "EXIT_BUSY=1")
 	if code := exitCode(busy.Run()); code != 75 {
 		t.Fatalf("exit %d", code)
@@ -122,7 +137,7 @@ func TestLaunchDoesntCountACleanStop(t *testing.T) {
 	if p, _ := app.ReadPending(); p == nil || p.Attempts != 0 {
 		t.Fatalf("pending %+v after exit 75", p)
 	}
-	cmd := launch(t, app, "agentk", next, "serve")
+	cmd := launch(t, app, "kode", next, "serve")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -163,12 +178,12 @@ func TestLaunchFinishesAHealthyUpdate(t *testing.T) {
 	}
 }
 
-// A command outside Probation (AgentK's host) runs in meko _launch's place, its version marked in
+// A command outside Probation (Kode's host) runs in meko _launch's place, its version marked in
 // use while it runs, so pruning keeps it.
 func TestLaunchExecsAndMarksTheVersionInUse(t *testing.T) {
 	const v = "0.20261024.0"
-	app, log := launchApp(t, "agentk", map[string]string{v: `echo "pid $$" >> "$(dirname "$0")/pid"; sleep 1`})
-	cmd := launch(t, app, "agentk", v, "host")
+	app, log := launchApp(t, "kode", map[string]string{v: `echo "pid $$" >> "$(dirname "$0")/pid"; sleep 1`})
+	cmd := launch(t, app, "kode", v, "host")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +222,7 @@ func TestLaunchRunsASourceBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	self, _ := os.Executable()
-	if err := exec.Command(self, "_launch", "agentk", exe, "serve").Run(); err != nil { //nolint:gosec // G204: test
+	if err := exec.Command(self, "_launch", "kode", exe, "serve").Run(); err != nil { //nolint:gosec // G204: test
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(out); string(b) != "launched=1 serve\n" { //nolint:gosec // G304: test

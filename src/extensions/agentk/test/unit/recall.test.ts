@@ -206,7 +206,7 @@ describe('RecallStore', () => {
 });
 
 describe("a PR's description in a search", () => {
-  it('drops the Meko lines AgentK ends it with, and keeps everything else', () => {
+  it('drops the Meko lines Kode ends it with, and keeps everything else', () => {
     const body = 'Adds the widget.\n\nSee meko:// docs.\nmeko://0f1e2d3c-1111-4222-8333-444455556666\nmeko_conversation_id:abc123\n';
     expect(withoutMekoLines(body)).toBe('Adds the widget.\n\nSee meko:// docs.');
     expect(withoutMekoLines('https://example.com/a')).toBe('https://example.com/a');

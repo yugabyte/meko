@@ -27,7 +27,7 @@ v=$("$meko" version --json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
 
 # A private HOME and file secrets: nothing of the runner's own is touched. No usage stats: a release
 # build would send them to YugabyteDB. The web listener gets the port after the API listener's, never
-# its default 7777, which an AgentK or a Meko on the machine may hold.
+# its default 7777, which a Kode or a Meko on the machine may hold.
 export HOME="$tmp/home" MEKO_SECRETS=file MEKO_CALL_HOME=false MEKO_WEB_PORT=$((port + 1))
 mkdir -p "$HOME"
 "$meko" start --data-dir "$data" --port "$port"

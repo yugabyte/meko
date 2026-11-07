@@ -28,7 +28,7 @@ interface Item {
   keepOpen?: boolean;
   /** Shown instead of the label while it runs. */
   busy?: string;
-  /** Its label wraps rather than being cut (AgentK's actions, read before they run, and a link's items, whose project ends the label). */
+  /** Its label wraps rather than being cut (Kode's actions, read before they run, and a link's items, whose project ends the label). */
   wrap?: boolean;
   dot?: DotState;
   /** Where in the blink signal the dot is: its session's id. */
@@ -42,7 +42,7 @@ const FIND_MS = 250;
 /** How long each of the placeholder's hints shows. */
 const HINT_MS = 1250;
 
-/** One exchange with AgentK while the palette is open: what was asked, and its answer. */
+/** One exchange with Kode while the palette is open: what was asked, and its answer. */
 interface Exchange extends AskAgentkResult {
   text: string;
   /** What Do all came to, once it ran: a line per action. */
@@ -63,7 +63,7 @@ export function CommandPalette({
   onSessionToTop,
   onSettings,
   onStarted,
-  askAgentk,
+  askKode,
   onEditSession,
   mekoWebUrl,
   onOpenInvite,
@@ -81,7 +81,7 @@ export function CommandPalette({
   currentSession: Session | null;
   onClose: () => void;
   onNewProject: () => void;
-  /** Starts the AgentK tour (or goes to its host when its project is open). */
+  /** Starts the Kode tour (or goes to its host when its project is open). */
   onStartTour: () => void;
   onNewSession: (projectId: string) => void;
   /** Opens the Move to another stage dialog for the session on screen. */
@@ -93,11 +93,11 @@ export function CommandPalette({
   /** Moves the session on screen to the top of its project's list; left out when it's already there. */
   onSessionToTop?: () => void;
   onSettings: () => void;
-  /** A session started from a pasted link (in a project it may just have opened), or one AgentK proposed. */
+  /** A session started from a pasted link (in a project it may just have opened), or one Kode proposed. */
   onStarted: (r: StartFromLinkResult) => void;
-  /** `[ask_agentk] enabled`: offer Ask AgentK. */
-  askAgentk: boolean;
-  /** Opens New session filled in with a task AgentK proposed. */
+  /** `[ask_kode] enabled`: offer Ask Kode. */
+  askKode: boolean;
+  /** Opens New session filled in with a task Kode proposed. */
   onEditSession: (projectId: string, initial: CreateSessionRequest) => void;
   /** Meko's web app: a share link pasted from it can be joined. */
   mekoWebUrl: string | null;
@@ -112,7 +112,7 @@ export function CommandPalette({
   onStartForItem: (item: WorkItem) => void;
   /** Opens the dialog that links the session on screen to a work item. */
   onLinkWorkItem: () => void;
-  /** AgentK talks to Meko (`MekoStatus.configured`): Save learnings is offered. */
+  /** Kode talks to Meko (`MekoStatus.configured`): Save learnings is offered. */
   mekoConfigured: boolean;
   onError: (msg: string) => void;
 }) {
@@ -207,7 +207,7 @@ export function CommandPalette({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [findKey]);
 
-  // Ask AgentK: the exchange so far (forgotten when the palette closes), the ask Claude is answering, and one that failed.
+  // Ask Kode: the exchange so far (forgotten when the palette closes), the ask Claude is answering, and one that failed.
   const [chat, setChat] = useState<Exchange[]>([]);
   const [asking, setAsking] = useState<string | null>(null);
   const [askError, setAskError] = useState<{ text: string; message: string } | null>(null);
@@ -233,7 +233,7 @@ export function CommandPalette({
     const t = window.setInterval(() => setHint((h) => (h + 1) % PALETTE_HINTS.length), HINT_MS);
     return () => window.clearInterval(t);
   }, [still]);
-  const placeholder = chat.length ? 'Reply to AgentK, or type a command…' : still ? PALETTE_HINT_STILL : PALETTE_HINTS[hint];
+  const placeholder = chat.length ? 'Reply to Kode, or type a command…' : still ? PALETTE_HINT_STILL : PALETTE_HINTS[hint];
 
   const go = (a: Extract<AskAgentkAction, { type: 'go' }>) => {
     if (a.view === 'session') navigate({ view: 'project', projectId: a.projectId, sessionId: a.sessionId });
@@ -252,7 +252,7 @@ export function CommandPalette({
     setStartError(null);
     setQ('');
     try {
-      const r = await api.askAgentk(
+      const r = await api.askKode(
         { text, history: chat.map((x) => ({ text: x.text, reply: x.reply })), projectId: currentProjectId, sessionId: currentSession?.id ?? null },
         ac.signal,
       );
@@ -268,7 +268,7 @@ export function CommandPalette({
       }
     }
   };
-  /** Esc while AgentK thinks: the ask stops, and its text comes back to change. */
+  /** Esc while Kode thinks: the ask stops, and its text comes back to change. */
   const cancelAsk = () => {
     askAbort.current?.abort();
     askAbort.current = null;
@@ -345,7 +345,7 @@ export function CommandPalette({
             ...item, keepOpen: true,
             run: () => void (!starting && run(e.id, async () => {
               const [r] = (await api.runActions({ actions: [a] })).results;
-              if (!r?.ok || !r.projectId) throw new Error(r?.text ?? 'AgentK couldn’t open the project.');
+              if (!r?.ok || !r.projectId) throw new Error(r?.text ?? 'Kode couldn’t open the project.');
               if (!mounted.current) return;
               onClose();
               navigate({ view: 'home', projectId: r.projectId });
@@ -456,7 +456,7 @@ export function CommandPalette({
       for (const a of actionsOn(list, 'palette')) {
         const go = run[a.id];
         if (!go || !a.palette) continue;
-        // While AgentK can't take it, the hint says why (and the server's refusal says so again if it's picked).
+        // While Kode can't take it, the hint says why (and the server's refusal says so again if it's picked).
         out.push({ id: a.id, label: a.palette, hint: a.hint ?? a.keys ?? (a.view ? 'View' : 'Action'), keywords: a.keywords ?? '', run: go });
       }
     }
@@ -494,7 +494,7 @@ export function CommandPalette({
       }
     }
     out.push({ id: 'new-project', label: ['Open project'], hint: 'Action', keywords: 'open new create project repo add', run: onNewProject });
-    out.push({ id: 'start-tour', label: ['Start the AgentK tour'], hint: 'Action', keywords: 'tour workshop demo guide tutorial learn agentk meko', run: onStartTour });
+    out.push({ id: 'start-tour', label: ['Start the Kode tour'], hint: 'Action', keywords: 'tour workshop demo guide tutorial learn agentk meko', run: onStartTour });
     out.push({ id: 'work-queue', label: ['Work queue'], hint: 'View', keywords: 'work queue items todo tasks priorities list', run: () => navigate({ view: 'queue' }) });
     out.push({ id: 'work-add', label: ['Add a work item'], hint: 'Action', keywords: 'work queue item add new todo task', run: onAddWorkItem });
     out.push({
@@ -504,7 +504,7 @@ export function CommandPalette({
     out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
     out.push({ id: 'settings', label: ['Settings'], hint: 'Action', keywords: 'settings password update totp', run: onSettings });
     // Still offered after the banner's Not now, while the browser can install it.
-    if (canInstall) out.push({ id: 'install', label: ['Install AgentK as an app'], hint: 'Action', keywords: 'install app window dock home screen pwa', run: () => void install() });
+    if (canInstall) out.push({ id: 'install', label: ['Install Kode as an app'], hint: 'Action', keywords: 'install app window dock home screen pwa', run: () => void install() });
     return out;
   }, [projects, currentProjectId, currentSession, onNewProject, onStartTour, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, mekoConfigured, onError]);
 
@@ -581,18 +581,18 @@ export function CommandPalette({
     // Before typing again, the last answer's actions.
     if (!typed && last) return answerItems;
     // After the commands, and so picked by Enter when none matches (a sentence never does). Not for a pasted link.
-    const askItem: Item[] = askAgentk && typed && !refKey && !join
-      ? [{ id: 'ask', label: [`Ask AgentK: “${typed}”`], hint: `${isMac() ? '⌘' : 'Ctrl'}+Enter`, keywords: '', run: () => void ask(typed), keepOpen: true }]
+    const askItem: Item[] = askKode && typed && !refKey && !join
+      ? [{ id: 'ask', label: [`Ask Kode: “${typed}”`], hint: `${isMac() ? '⌘' : 'Ctrl'}+Enter`, keywords: '', run: () => void ask(typed), keepOpen: true }]
       : [];
     const matched = filterItems(items, q);
-    // After Ask AgentK, so Enter still asks when a sentence matches nothing but finds sessions.
+    // After Ask Kode, so Enter still asks when a sentence matches nothing but finds sessions.
     const more = findItems.filter((f) => !matched.some((m) => m.id === `s-${f.id.slice('find-'.length)}`));
     // A session the work items name isn't offered again among the link's own.
     const links = linkItems.filter((l) => !workLinkItems.some((w) => w.id === `work-go-${l.id.slice('link-go-'.length)}`));
     return [...joinItems, ...workLinkItems, ...links, ...matched, ...askItem, ...more];
     // ask() reads the chat and screen, which change no more often than the deps here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [joinItems, workLinkItems, linkItems, items, q, typed, refKey, join, asking, last, answerItems, askAgentk, findItems]);
+  }, [joinItems, workLinkItems, linkItems, items, q, typed, refKey, join, asking, last, answerItems, askKode, findItems]);
 
   useEffect(() => setIdx(0), [q, plan, last]);
   useEffect(() => {
@@ -611,7 +611,7 @@ export function CommandPalette({
       <div
         className="palette"
         role="dialog"
-        aria-label="Ask AgentK"
+        aria-label="Ask Kode"
         ref={paletteRef}
         onKeyDown={(e) => trapTab(e.nativeEvent, paletteRef.current)}
       >
@@ -621,7 +621,7 @@ export function CommandPalette({
             id="palette-input"
             ref={inputRef}
             className="pal-input"
-            aria-label="Ask AgentK, run a command, or paste a GitHub link"
+            aria-label="Ask Kode, run a command, or paste a GitHub link"
             placeholder={placeholder}
             value={q}
             autoFocus
@@ -636,7 +636,7 @@ export function CommandPalette({
               } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 // Never a pasted share link: its token goes to Meko only.
-                if (askAgentk && !join) void ask(q);
+                if (askKode && !join) void ask(q);
               } else if (e.key === 'Enter') {
                 e.preventDefault();
                 choose(shown[idx]);
@@ -667,7 +667,7 @@ export function CommandPalette({
                 <p className="pal-you">You: {asking}</p>
                 {/* A tap's way to Esc: the ask stops, its text comes back, and the exchange stays. */}
                 <div className="pal-reply muted">
-                  <Busy label="AgentK is thinking" />
+                  <Busy label="Kode is thinking" />
                   <button className="btn small" onClick={cancelAsk}>Cancel</button>
                 </div>
               </div>

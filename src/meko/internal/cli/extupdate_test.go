@@ -73,7 +73,7 @@ func presentTarball(t *testing.T, version, rollBackTo string) []byte {
 	return buf.Bytes()
 }
 
-// presentReleases serves a GitHub API with AgentK's and Meko's releases and Presenter's release of
+// presentReleases serves a GitHub API with Kode's and Meko's releases and Presenter's release of
 // version for this platform, and makes the CLI use it.
 func presentReleases(t *testing.T, version string, tgz []byte) {
 	t.Helper()
@@ -226,8 +226,8 @@ func TestUpdateExtensionRefuses(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	noRealExtensions(t)
 	dir := shortDir(t)
-	code, _, errs := run("extension", "update", "agentk", "--data-dir", dir)
-	want(t, "AgentK", code, 1, errs, "meko extension install agentk installs it")
+	code, _, errs := run("extension", "update", "kode", "--data-dir", dir)
+	want(t, "Kode", code, 1, errs, "meko extension install kode installs it")
 	code, _, errs = run("extension", "update", "present", "--data-dir", dir)
 	want(t, "not installed", code, 1, errs, "meko extension install present installs it")
 	// A build from source on PATH: used as it is, never updated.
@@ -243,7 +243,7 @@ func TestUpdateExtensionRefuses(t *testing.T) {
 	code, _, errs = run("extension", "update", "present", "--data-dir", dir)
 	want(t, "a build from source", code, 1, errs, "isn't a release Meko installed")
 	code, _, errs = run("extension", "update", "--data-dir", dir)
-	want(t, "no name", code, exitUsage, errs, "name the extension (agentk, present)")
+	want(t, "no name", code, exitUsage, errs, "name the extension (kode, present)")
 	code, _, errs = run("extension", "update", "present", "--all", "--data-dir", dir)
 	want(t, "--all and a name", code, exitUsage, errs, "--all takes no name")
 	lock := update.NewLock(dir)
@@ -438,8 +438,8 @@ func TestRunExtensionUpdates(t *testing.T) {
 	if u := w.ExtensionUpdates("present"); u.Version != installedVersion || !u.Updatable || !u.AutoUpdate {
 		t.Errorf("ExtensionUpdates(present) = %+v", u)
 	}
-	if u := w.ExtensionUpdates("agentk"); u.Version != "" || u.Updatable {
-		t.Errorf("ExtensionUpdates(agentk) = %+v", u)
+	if u := w.ExtensionUpdates("kode"); u.Version != "" || u.Updatable {
+		t.Errorf("ExtensionUpdates(kode) = %+v", u)
 	}
 	old := extensions.ListenTimeout
 	extensions.ListenTimeout = 300 * time.Millisecond

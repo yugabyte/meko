@@ -55,10 +55,10 @@ export class MekoApiError extends Error {
 }
 
 /**
- * Meko answered without an error but not in the shape AgentK reads: a 502, since Meko's API
+ * Meko answered without an error but not in the shape Kode reads: a 502, since Meko's API
  * changed (`apiFailure` passes on only Meko's own refusals).
  */
-const badReply = (what: string) => new MekoApiError(200, 'BAD_REPLY', `Meko's answer to ${what} wasn't in a shape AgentK understands.`);
+const badReply = (what: string) => new MekoApiError(200, 'BAD_REPLY', `Meko's answer to ${what} wasn't in a shape Kode understands.`);
 
 /** Meko answers like this when it has no such route (an older or self-hosted Meko): 405, 501, or a 404 with no error code. */
 export function routeMissing(e: unknown): boolean {
@@ -93,7 +93,7 @@ function toShareLink(r: Json | undefined): ShareLinkRow {
   if (!l || typeof l !== 'object' || Array.isArray(l)) throw badReply('the share link');
   const link = l as Json;
   // No role yet (a link never turned on) is Meko's default, viewer, as its web app reads it; a role
-  // AgentK doesn't know is Meko's API changing.
+  // Kode doesn't know is Meko's API changing.
   const grant = link.grant == null || link.grant === '' ? 'viewer' : asLinkGrant(link.grant);
   if (!grant) throw badReply('the share link');
   return {
@@ -267,7 +267,7 @@ export class MekoApi {
     const { baseUrl } = this.creds();
     const ownOrigin = !!baseUrl && originOf(baseUrl) === target.origin;
     if (target.protocol !== 'https:' && !(ownOrigin && target.protocol === 'http:')) {
-      throw new MekoApiError(200, 'BAD_REPLY', `Meko gave an upload address AgentK won't send a file to (${target.protocol}).`);
+      throw new MekoApiError(200, 'BAD_REPLY', `Meko gave an upload address Kode won't send a file to (${target.protocol}).`);
     }
     const form = new FormData();
     for (const [k, v] of upload.fields) form.append(k, v);

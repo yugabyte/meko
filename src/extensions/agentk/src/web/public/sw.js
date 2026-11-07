@@ -1,20 +1,20 @@
-// AgentK's service worker. It shows the notifications (see showNotification in App.tsx):
+// Kode's service worker. It shows the notifications (see showNotification in App.tsx):
 // unlike a page's own `new Notification()`, which Android Chrome refuses, its notifications stay
 // clickable after the page that showed them reloads (as open pages do after an update) or closes,
 // and a click can switch to whichever browser tab already shows the session.
 // It caches nothing and handles no fetches, so the app always loads from the server.
-// main.tsx registers it with AgentK's base path as its scope: `/ext/agentk/` behind Meko, whose own
+// main.tsx registers it with Kode's base path as its scope: `/ext/kode/` behind Meko, whose own
 // pages share the origin, or `/` under `npm run dev`.
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
-/** AgentK's base path, where its pages are: the scope's, always ending in '/'. */
+/** Kode's base path, where its pages are: the scope's, always ending in '/'. */
 const base = () => new URL(self.registration.scope).pathname;
 
 /**
- * The route parts of an AgentK page's URL: `<base>p/<project>[/s/<session>][/…]`, `{}` for its
- * other pages, or null for a page that isn't AgentK's (Meko's, on the same origin).
+ * The route parts of a Kode page's URL: `<base>p/<project>[/s/<session>][/…]`, `{}` for its
+ * other pages, or null for a page that isn't Kode's (Meko's, on the same origin).
  */
 function pageOf(url) {
   let parts;
@@ -50,7 +50,7 @@ function pickWindow(windows, projectId, sessionId) {
 }
 
 // Tapping a notification opens its session (or, for a shared datapack, the Open project dialog for
-// it): in an open AgentK window if there is one, else a new one (where the share's banner is waiting).
+// it): in an open Kode window if there is one, else a new one (where the share's banner is waiting).
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const { projectId, sessionId, datapackId } = event.notification.data || {};

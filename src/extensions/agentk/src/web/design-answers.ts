@@ -1,6 +1,6 @@
-// The user's answers to a design's open questions, and changes to AgentK's own decisions
+// The user's answers to a design's open questions, and changes to Kode's own decisions
 // (DesignQuestions.tsx). They aren't stored on the server: this browser keeps them, per session,
-// until they go to AgentK with an approval or a request to revise the design.
+// until they go to Kode with an approval or a request to revise the design.
 import { useCallback, useEffect, useState } from 'react';
 import { decisionNumbers } from '../shared/decisions';
 import type { DesignAnswerInput, DesignAnswersRequest, DesignQuestion, Session } from '../shared/types';
@@ -17,9 +17,9 @@ export interface Draft {
   custom: boolean;
   text: string;
   /**
-   * For a change to one of AgentK's own decisions: the decision as it stood when the change began
+   * For a change to one of Kode's own decisions: the decision as it stood when the change began
    * (Change this). The change is dropped once the decision is no longer that (sent and recorded,
-   * or AgentK revised it).
+   * or Kode revised it).
    */
   against?: string | null;
 }
@@ -28,7 +28,7 @@ export interface Drafts {
   answers: Record<string, Draft>;
   feedback: string;
   /**
-   * An approval with these answers waits for AgentK's turn to end (`Session.approvalQueued`): they
+   * An approval with these answers waits for Kode's turn to end (`Session.approvalQueued`): they
    * go once it's sent, and are kept if it's dropped.
    */
   approved?: boolean;
@@ -108,7 +108,7 @@ export function saveDrafts(sessionId: string, d: Drafts): void {
   for (const fn of listeners) fn(sessionId);
 }
 
-/** Forgets a session's drafts, once they've gone to AgentK. */
+/** Forgets a session's drafts, once they've gone to Kode. */
 export function clearDrafts(sessionId: string): void {
   saveDrafts(sessionId, EMPTY);
 }
@@ -136,7 +136,7 @@ export function useDesignDrafts(sessionId: string): [Drafts, (fn: (d: Drafts) =>
   return [drafts, update];
 }
 
-/** The answer a question starts with: AgentK's recommendation, nothing, or (without options) the user's own words. */
+/** The answer a question starts with: Kode's recommendation, nothing, or (without options) the user's own words. */
 export function defaultDraft(q: DesignQuestion): Draft {
   if (q.recommended !== null && q.options[q.recommended]) {
     return { choice: q.recommended, label: q.options[q.recommended].label, custom: false, text: '' };
@@ -173,8 +173,8 @@ export function shownDraft(q: DesignQuestion, d: Draft | undefined, answerable: 
 }
 
 /**
- * The option one of AgentK's decisions stands on now: the one its decision names (a change the user
- * made may have moved it off AgentK's pick, which `recommended` still is), else AgentK's pick; null
+ * The option one of Kode's decisions stands on now: the one its decision names (a change the user
+ * made may have moved it off Kode's pick, which `recommended` still is), else Kode's pick; null
  * for a decision in the user's own words.
  */
 export function decidedOption(q: DesignQuestion): number | null {
@@ -185,7 +185,7 @@ export function decidedOption(q: DesignQuestion): number | null {
 }
 
 /**
- * The draft that starts a change to one of AgentK's own decisions (Change this): the decision as it
+ * The draft that starts a change to one of Kode's own decisions (Change this): the decision as it
  * stands (its option, or the user's own words), against that decision.
  */
 export function changeDraft(q: DesignQuestion): Draft {
@@ -200,8 +200,8 @@ export function hasDecisionChanges(questions: DesignQuestion[], drafts: Drafts):
 }
 
 /**
- * The drafts without the answers to questions that are no longer open (AgentK resolved
- * them as they were sent, or AgentK did), and without changes to decisions that have changed
+ * The drafts without the answers to questions that are no longer open (Kode resolved
+ * them as they were sent, or Kode did), and without changes to decisions that have changed
  * since, or null when there are none to drop.
  */
 export function pruneDrafts(questions: DesignQuestion[], drafts: Drafts): Drafts | null {
@@ -218,7 +218,7 @@ export function pruneDrafts(questions: DesignQuestion[], drafts: Drafts): Drafts
 }
 
 /**
- * A change to one of AgentK's decisions that changes something: another option than the one in
+ * A change to one of Kode's decisions that changes something: another option than the one in
  * force, a note, or other words than the decision's.
  */
 function changes(q: DesignQuestion, d: Draft): boolean {
@@ -232,7 +232,7 @@ function changes(q: DesignQuestion, d: Draft): boolean {
 const revisions = new Map<string, RevisionSent>();
 
 /**
- * After answers went to AgentK to revise the design: the feedback is forgotten, and the answers
+ * After answers went to Kode to revise the design: the feedback is forgotten, and the answers
  * are kept until their questions are no longer open (`pruneDrafts`), so they show until the
  * questions come back resolved, and stay for questions that aren't (a markdown design's). When
  * they went (`at`) is kept for the design panel's working line.
@@ -287,7 +287,7 @@ export function useRevision(sessionId: string): RevisionSent | null {
 /**
  * The request for the open questions: the option picked (with any note) or the custom answer.
  * A question with nothing picked, or a custom answer left empty, is left out (unanswered). A
- * change to one of AgentK's decisions goes only when it changes something.
+ * change to one of Kode's decisions goes only when it changes something.
  */
 export function toRequest(questions: DesignQuestion[], drafts: Drafts): DesignAnswersRequest {
   const answers = questions.flatMap((q): DesignAnswerInput[] => {
@@ -318,12 +318,12 @@ export function draftsBlocker(questions: DesignQuestion[], drafts: Drafts): stri
     const d = draftFor(x, drafts.answers[x.id]);
     return d.custom && !d.text.trim();
   });
-  return q ? `Write your answer to ${decisionNumbers(questions).get(q.id)}, or pick one of AgentK’s options.` : null;
+  return q ? `Write your answer to ${decisionNumbers(questions).get(q.id)}, or pick one of Kode’s options.` : null;
 }
 
 /**
  * After an approval went to the server: the drafts are forgotten, or, when the approval waits for
- * AgentK's turn to end, marked to be forgotten once it's sent (`settleApprovals`).
+ * Kode's turn to end, marked to be forgotten once it's sent (`settleApprovals`).
  */
 export function approvalSent(s: Session): void {
   if (s.approvalQueued) saveDrafts(s.id, { ...loadDrafts(s.id), approved: true });
@@ -345,7 +345,7 @@ export function settleApprovals(sessions: Session[]): void {
 }
 
 /**
- * Whether this browser holds a change to one of AgentK's decisions (Change this). It goes only with
+ * Whether this browser holds a change to one of Kode's decisions (Change this). It goes only with
  * the questions, from their footer, so the approvals elsewhere take the user there first.
  */
 export function changingDecisions(sessionId: string): boolean {
@@ -354,11 +354,11 @@ export function changingDecisions(sessionId: string): boolean {
 
 /**
  * Approves a design with no open questions, taking along any other feedback the user wrote. Refused
- * while a change to one of AgentK's decisions waits, which this request couldn't carry.
+ * while a change to one of Kode's decisions waits, which this request couldn't carry.
  */
 export async function approveDesign(sessionId: string): Promise<void> {
   if (changingDecisions(sessionId)) {
-    throw new Error('You started changing one of AgentK’s decisions. Approve from the Questions tab to send it, or keep AgentK’s decision.');
+    throw new Error('You started changing one of Kode’s decisions. Approve from the Questions tab to send it, or keep Kode’s decision.');
   }
   approvalSent(await api.approveDesign(sessionId, toRequest([], loadDrafts(sessionId))));
 }

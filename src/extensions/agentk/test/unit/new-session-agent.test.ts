@@ -185,7 +185,7 @@ describe('Settings › Harness', () => {
     ['Kiro on another Meko', 'kiro' as const, meko({ kiro: { gaps: ['x'], capture: ['x'] } }),
       ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-meko', 'set-kiro-meko-setup', 'set-kiro-trust']],
     ['no Meko', 'claude' as const, meko({ configured: false, url: null }), ['set-claude', 'set-claude-check', 'set-claude-update']],
-  ])("%s: the agent's panel says whether its sessions reach AgentK's Meko, with Meko's setup when they don't", (_, id, m, shown) => {
+  ])("%s: the agent's panel says whether its sessions reach Kode's Meko, with Meko's setup when they don't", (_, id, m, shown) => {
     expect(controls(id, {}, {}, null, m)).toEqual(shown);
   });
 
@@ -259,7 +259,7 @@ describe('Connect to Meko, from the page', () => {
   };
   afterEach(() => vi.unstubAllGlobals());
 
-  it("posts Meko's own route at the origin root with the page's sign-in, then has AgentK read Meko's list again", async () => {
+  it("posts Meko's own route at the origin root with the page's sign-in, then has Kode read Meko's list again", async () => {
     const harnesses = [status('kiro', { meko: { state: 'connected', url: 'http://127.0.0.1:7778/mcp' } })];
     const calls = stubFetch({
       '/api/v1/agents/kiro/connect': { status: 200, body: { data: { agent: {}, notes: ['It replaced the meko server at https://meko.example.com/mcp'] } } },
@@ -280,7 +280,7 @@ describe('Connect to Meko, from the page', () => {
 
   it.each([
     ['connects it when the server says this page goes first', true, { status: 200, body: { data: { agent: {}, notes: [] } } }, 200, 'Connected Kiro to Meko.', 3],
-    ["still says it connected when AgentK's refresh after it fails", true, { status: 200, body: { data: { agent: {}, notes: [] } } }, 503, 'Connected Kiro to Meko.', 3],
+    ["still says it connected when Kode's refresh after it fails", true, { status: 200, body: { data: { agent: {}, notes: [] } } }, 503, 'Connected Kiro to Meko.', 3],
     ['leaves it to the page that claimed it', false, null, 200, null, 1],
     ['says why it failed, with the fix', true, { status: 502, body: { error: { code: 'AGENT_CLI_FAILED', message: "Kiro's mcp.json isn't JSON." } } }, 200,
       "Couldn’t connect Kiro to Meko: Kiro's mcp.json isn't JSON. Connect it in Settings › Harness.", 2],
@@ -288,7 +288,7 @@ describe('Connect to Meko, from the page', () => {
     const made = stubFetch({
       '/api/harnesses/kiro/auto-connect': { status: 200, body: { go } },
       ...(reply ? { '/api/v1/agents/kiro/connect': reply } : {}),
-      '/api/harnesses/refresh': { status: refresh, body: refresh === 200 ? [] : { error: 'AgentK is restarting.' } },
+      '/api/harnesses/refresh': { status: refresh, body: refresh === 200 ? [] : { error: 'Kode is restarting.' } },
     });
     const run = autoConnectToMeko('kiro');
     if (reply && reply.status !== 200) await expect(run).rejects.toThrow(line!);

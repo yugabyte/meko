@@ -97,14 +97,14 @@ export function promptByDefault(from: Stage, to: MoveTarget): boolean {
 export function moveEffect(from: { stage: Stage; prNumber: number | null }, to: MoveTarget, task = false): string {
   const out: string[] = [];
   const work = task ? 'the task you typed' : 'what this session has worked out so far';
-  if (to === 'design') out.push(`AgentK designs ${work}, and blocks edits to the repo until you approve a design.`);
+  if (to === 'design') out.push(`Kode designs ${work}, and blocks edits to the repo until you approve a design.`);
   else if (to === 'code' && promptByDefault(from.stage, to)) {
-    out.push(`${from.stage === 'design' ? 'Skips design approval. ' : ''}AgentK implements ${work}.`);
-  } else if (to === 'review') out.push("AgentK picks up the branch's open PR, or opens one: with the code review on, it reviews the change in Code first.");
-  else if (to === 'explore') out.push('AgentK runs no design, PR or merge while the session is in Explore.');
+    out.push(`${from.stage === 'design' ? 'Skips design approval. ' : ''}Kode implements ${work}.`);
+  } else if (to === 'review') out.push("Kode picks up the branch's open PR, or opens one: with the code review on, it reviews the change in Code first.");
+  else if (to === 'explore') out.push('Kode runs no design, PR or merge while the session is in Explore.');
   else out.push('The session keeps its worktree, branch and conversation.');
   if (from.prNumber && (from.stage === 'pr' || from.stage === 'review')) {
-    out.push(`PR #${from.prNumber} stays open. AgentK stops handling its reviews and CI until you come back to Pull Request.`);
+    out.push(`PR #${from.prNumber} stays open. Kode stops handling its reviews and CI until you come back to Pull Request.`);
   }
   return out.join(' ');
 }

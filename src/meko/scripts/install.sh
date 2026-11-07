@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install or upgrade Meko for the current user; no root needed. It installs Meko alone: a first
-# install ends by offering the extensions (AgentK, Presenter), which meko extension install adds.
+# install ends by offering the extensions (Kode, Presenter), which meko extension install adds.
 #
 #   curl -fsSL https://mekodata.ai/install.sh | sh
 #
@@ -115,7 +115,7 @@ die() {
   exit 1
 }
 
-agentk_hint="To add AgentK, install Meko and then run: meko extension install agentk (pass its options after --, such as -- --agent kiro)"
+kode_hint="To add Kode, install Meko and then run: meko extension install kode (pass its options after --, such as -- --agent kiro)"
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -125,7 +125,7 @@ while [ $# -gt 0 ]; do
     --no-service) no_service=true; shift ;;
     --non-interactive) non_interactive=true; shift ;;
     -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0" >&2 2>/dev/null || true; exit 0 ;;
-    *) die "unknown option $1. Meko's installer takes --version, --reinstall, --no-service and --non-interactive. $agentk_hint" ;;
+    *) die "unknown option $1. Meko's installer takes --version, --reinstall, --no-service and --non-interactive. $kode_hint" ;;
   esac
 done
 

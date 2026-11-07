@@ -46,9 +46,9 @@ jobs:
           cat "$RUNNER_TEMP/scope" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/scope"
 
-  # AgentK (src/extensions/agentk).
+  # Kode (src/extensions/agentk).
   agentk:
-    name: AgentK (${{ matrix.os }})
+    name: Kode (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.agentk == 'true'
     strategy:
@@ -57,14 +57,14 @@ jobs:
         os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    # AgentK lives in src/extensions/agentk; its package.json and scripts are there.
+    # Kode lives in src/extensions/agentk; its package.json and scripts are there.
     defaults:
       run:
         working-directory: src/extensions/agentk
     steps:
       - uses: actions/checkout@v7
 
-      # AgentK needs no tmux. Linux gets it only for the tests of moving older installs off
+      # Kode needs no tmux. Linux gets it only for the tests of moving older installs off
       # it (src/extensions/agentk/test/integration/move-off-tmux.test.ts, skipped without tmux); drop
       # it with them.
       - name: Install system packages

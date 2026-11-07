@@ -1,15 +1,15 @@
 # Releases and updates
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
-- **CI (on PRs that change AgentK, and every push to `main`).** Typecheck, lint and unit tests, on
+- **CI (on PRs that change Kode, and every push to `main`).** Typecheck, lint and unit tests, on
   Linux and macOS, run in `src/extensions/agentk` (the workflows, `scripts/check-title.sh`,
   `scripts/ci-scope.sh` and Dependabot's config are at the repo root). `scripts/ci-scope.sh` decides
-  from a PR's changed paths whether AgentK's jobs run: `src/extensions/agentk/`, the root `scripts/` and
-  `.github/` (which AgentK's tests read) and any root file outside the known components do, root
+  from a PR's changed paths whether Kode's jobs run: `src/extensions/agentk/`, the root `scripts/` and
+  `.github/` (which Kode's tests read) and any root file outside the known components do, root
   Markdown, `.claude/`, `assets/`, `src/meko/` and `src/extensions/present/` don't. Nor does Markdown only people read: `README.md`,
   `CONTRIBUTING.md`, the `AGENTS.md`, `CLAUDE.md` and `REVIEW.md` files and `docs/`. Markdown the
-  tests read (`test/`) or the release ships (`src/tools/skill/SKILL.md`) runs AgentK's jobs.
+  tests read (`test/`) or the release ships (`src/tools/skill/SKILL.md`) runs Kode's jobs.
   Integration tests run against a real session host and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
   A separate `PR title` workflow checks the title with the repo root's `scripts/check-title.sh` and reruns when
   the PR is edited. Changes reach `main` only through PRs, squash-merged once the `CI gate` check (over
@@ -21,24 +21,25 @@ Part of the [AgentK design](../design.md).
   with one of nine types and one of the repo's components (`agentk`, `meko`, `present`, `repo`:
   `scripts/check-title.sh`), or several comma-separated for a change that ships in more than one
   (`feat(agentk,meko): …`), and PRs are squash-merged with the PR title
-  as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit for AgentK since its last
+  as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit for Kode since its last
   release runs the tests and cuts the next version, and those subjects become the release notes;
   `ci`, `test`, `docs`, `nit` and `chore` don't release. Releases are scoped by component: Meko
   (`src/meko`) releases on its own, from its own tags (`meko-v…`), and subjects naming only `meko`
-  never release AgentK. Presenter (`src/extensions/present`) releases on its own too
+  never release Kode. Presenter (`src/extensions/present`) releases on its own too
   (`present-release.yml`, tags `present-v…`): subjects naming only `present` (or `meko` and
-  `present`) release nothing for AgentK. Every other subject
+  `present`) release nothing for Kode. Every other subject
   (`agentk`, `repo`, lists such as `agentk,meko`, and older ones with no component or a free-form
-  one) counts for AgentK, and every subject naming `meko`, alone or in a list, counts for Meko: a PR
+  one) counts for Kode, and every subject naming `meko`, alone or in a list, counts for Meko: a PR
   titled `feat(agentk,meko): …` releases both. The repo root's `scripts/release/` holds the scripts both
   products use, with `--product agentk|meko|present`: `next-version.sh`, `release-notes.sh` and
   `prune-releases.sh` (`product.sh` names each product's tags and components).
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
   node-pty (built from source: gcc-toolset-13 on Linux, Xcode's clang on macOS) and the web assets.
-  Each is published twice: as `agentk-<version>-<platform>-<arch>.tar.gz` (in `agentk-<version>/`,
+  Each is published twice: as `kode-<version>-<platform>-<arch>.tar.gz` (in `kode-<version>/`;
+  `agentk-<version>-…` in `agentk-<version>/` before Meko called it Kode, which Meko still finds),
   with `bin/me_kode`), and as `agent-k-local-<version>-…` (in `agent-k-local-<version>/`), the name
-  and layout that the updaters and installers from before the rename to AgentK look for. An
+  and layout that the updaters and installers from before the rename to Kode look for. An
   updater from then skips any release without its name, so without the second copy those installs
   would never update again. Both hold `bin/me_koder`, `bin/agentk` and `bin/agent-k-local`, links
   to `bin/me_kode`, which the services installed then start. Meko reads only the new name. The copy goes a week after the first release that has it (#238): an install still on a release from before the rename by then needs a reinstall.
@@ -49,14 +50,14 @@ Part of the [AgentK design](../design.md).
   only `main` can use; Meko refuses a release whose signature doesn't verify, and by default one
   with none: `src/meko/docs/install.md`, "Signed releases"), a build provenance attestation
   and `install.sh`, which only says that Meko installs
-  AgentK (`meko extension install agentk`): the Mekos from before Meko installed AgentK ran the
-  newest release's `install.sh`, and an older AgentK's own instructions still name it. Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
+  Kode (`meko extension install kode`): the Mekos from before Meko installed Kode ran the
+  newest release's `install.sh`, and an older Kode's own instructions still name it. Afterwards, Kode's releases beyond the newest 5 in each lane (`stable`, or the
   prerelease identifier such as `beta`, per tag prefix) are deleted, except the newest `v…` one;
   their tags stay, and Meko's are left alone.
-- **By hand.** Run the AgentK release workflow (`agentk-release.yml`) with **force** to release
-  without `feat`/`fix`/`perf`/`deps` commits, or with a **tag** (`agentk-v…` or `v…`) to rebuild the
+- **By hand.** Run the Kode release workflow (`agentk-release.yml`) with **force** to release
+  without `feat`/`fix`/`perf`/`deps` commits, or with a **tag** (`kode-v…`, `agentk-v…` or `v…`) to rebuild the
   assets of an existing release.
-- **Dependencies.** Dependabot (`.github/dependabot.yml`) checks AgentK's npm packages and GitHub
+- **Dependencies.** Dependabot (`.github/dependabot.yml`) checks Kode's npm packages and GitHub
   Actions every Monday (and Meko's Go modules, context engine and web UI packages: see
   `src/meko/AGENTS.md`) and assigns its PRs to the maintainer. Packages that must move together
   (fastify, react, xterm, vite, typescript with typescript-eslint, eslint) come in one PR per
@@ -70,16 +71,16 @@ Part of the [AgentK design](../design.md).
   release; `test/unit/dependabot.test.ts` checks both. Mark a breaking major with `!` when merging
   it. Node itself (`.nvmrc`, `NODE_VERSION` in `agentk-release.yml`) is bumped by hand.
 
-The tarball (`agentk-<version>-<linux|darwin>-<arch>.tar.gz`):
+The tarball (`kode-<version>-<linux|darwin>-<arch>.tar.gz`):
 
 ```
-agentk-<version>/
+kode-<version>/
   bin/me_kode              launcher (packaging/me_kode), what `meko kode` runs: hands serve and host to Meko's launcher (meko _launch), which runs an update's probation and rollback
   bin/me_koder             a link to it, by its name before, which services installed then and older Mekos run
   bin/agentk               a link to it, by its name before me_koder, run the same way; the services' launcher falls back to it
-  bin/agent-k-local        a link to it, by its name before the rename to AgentK
-  node/bin/me_kode         bundled Node runtime, so AgentK's processes are me_kode, not node
-  node/bin/node            a link to it, which the MCP configs AgentK writes for sessions name (tools.ts)
+  bin/agent-k-local        a link to it, by its name before the rename to Kode
+  node/bin/me_kode         bundled Node runtime, so Kode's processes are me_kode, not node
+  node/bin/node            a link to it, which the MCP configs Kode writes for sessions name (tools.ts)
   lib/                     package.json, dist/, node_modules/, packaging/{systemd,launchd}/, scripts/deps.sh
   VERSION
 ```
@@ -90,15 +91,15 @@ agentk-<version>/
 ```sh
 # The repo's one-line install (curl -fsSL https://mekodata.ai/install.sh | sh, which redirects to
 # its latest release's install.sh, Meko's) installs Meko. Then:
-meko extension install agentk                      # or Install on Meko's Extensions page
-meko extension install agentk -- --agent kiro      # options after -- go to `meko kode install`
+meko extension install kode                      # or Install on Meko's Extensions page
+meko extension install kode -- --agent kiro      # options after -- go to `meko kode install`
 
 # what it does (Meko's extension install, src/meko/docs/install.md)
-#  0. downloads the newest agentk-<version>-<platform>-<arch>.tar.gz and SHA256SUMS (with
+#  0. downloads the newest kode-<version>-<platform>-<arch>.tar.gz and SHA256SUMS (with
 #     GITHUB_TOKEN, else gh's token, else no token), checks it, unpacks it owner-only into
-#     <Meko's data folder>/extensions/agentk/app/<version>, checks that it runs (`meko kode version
+#     <Meko's data folder>/extensions/kode/app/<version>, checks that it runs (`meko kode version
 #     --json`, `meko kode selftest`), and points app/current at it; an
-#     install AgentK already has (one still in ~/.agent-k-local too) is set up again in place
+#     install Kode already has (one still in ~/.agent-k-local too) is set up again in place
 # then `meko kode install --meko-url … --meko-key …`, on the terminal it was started from:
 #  1. scripts/deps.sh (lib/scripts/deps.sh in a release): checks for git, curl, gh and a coding
 #     agent (Claude Code, OpenCode or Kiro CLI; one is enough); offers to install whatever is
@@ -115,7 +116,7 @@ meko extension install agentk -- --agent kiro      # options after -- go to `mek
 #     and from Meko's Extensions page (--non-interactive) nothing is installed without
 #     --install-deps
 #  2. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
-#     Meko on this computer serves AgentK to browsers (at /ext/agentk/) and signs people in
+#     Meko on this computer serves Kode to browsers (at /ext/kode/) and signs people in
 #  3. Meko: uses the Meko running on this computer, and stores nothing of it (no key is asked for;
 #     --meko-url and --meko-key, which Meko passes, go unused; --no-meko skips the next step) and
 #     offers to run Meko's setup for Claude Code if its plugin, MCP server or key is missing
@@ -128,45 +129,49 @@ meko extension install agentk -- --agent kiro      # options after -- go to `mek
 #  6. prints the address Meko serves it at
 ```
 
-**Tags.** The repo releases three products. AgentK's releases are tagged `agentk-v<version>`
-(`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`, and
+**Tags.** The repo releases three products. Kode's releases are tagged `kode-v<version>`
+(`agentk-v<version>` before Meko called it Kode, and `v<version>` before releases were tagged by
+product). A Meko from before Kode was called Kode reads only `agentk-v` and `v` tags, so it finds
+Kode's releases once `meko update` has updated Meko itself, which it does before the extensions;
+an install still on AgentK's own updater from before Meko served it (reading `agentk-v`) needs
+`meko extension install kode`; Meko's are `meko-v<version>`, and
 Presenter's `present-v<version>` (`present-release.yml`; Meko installs and updates them). Versions stay
 bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and Meko's `bad-versions` use them, and on the day of
 the switch `next-version.sh` counted both prefixes so no version was used twice. AgentKs installed
 before the switch read only `v…` tags; the last `v…` release (the bridge) reads both, so they reach
 the `agentk-v…` releases through it, and pruning never deletes the newest `v…` release (the old
 prefix is a lane of its own that stops growing). Meko's
-releases are the repo's "latest", since its installer is the one-line install, so AgentK's are
-published with `--latest=false`. Meko finds AgentK's releases by their tags (its catalog lists
+releases are the repo's "latest", since its installer is the one-line install, so Kode's are
+published with `--latest=false`. Meko finds Kode's releases by their tags (its catalog lists
 both prefixes), and What's new compares two versions by their tags, trying each prefix
 (`TAG_PREFIXES` in `updates.ts`), since pruning deletes releases but keeps their tags.
 
-**Updates are Meko's.** Meko checks GitHub for AgentK's releases with its own (one list for Meko
+**Updates are Meko's.** Meko checks GitHub for Kode's releases with its own (one list for Meko
 and every extension, at its start and every `[update] interval_hours` of Meko's `config.toml`),
-installs them, and rolls back one that keeps failing; AgentK has no updater of its own and ignores
-an `[update]` table in its `config.toml`. Meko's design is in `src/meko/docs/install.md`. What AgentK
+installs them, and rolls back one that keeps failing; Kode has no updater of its own and ignores
+an `[update]` table in its `config.toml`. Meko's design is in `src/meko/docs/install.md`. What Kode
 sees of it:
 
-1. **The offer.** The page reads AgentK's row from Meko's own routes, on Meko's origin
+1. **The offer.** The page reads Kode's row from Meko's own routes, on Meko's origin
    (`GET /api/v1/extensions`; `src/web/mekoupdate.ts`): the version installed, the newest one, the
-   last check, a job Meko runs on AgentK, and **Update automatically** (on by default; Meko then
+   last check, a job Meko runs on Kode, and **Update automatically** (on by default; Meko then
    installs an update when its check finds one). When a newer version is there, the rail shows a
    "Version X is available" banner with **Update to the latest version**; Settings › Updates has the
-   same button, **Check now** (`POST /api/v1/extensions/agentk/check`) and the switch (`PATCH
-   /api/v1/extensions/agentk`). A version that was rolled back is never offered again. When the row isn't `updatable`,
-   Settings says why: Meko's `not_updatable` (a build from source, or an AgentK still in
+   same button, **Check now** (`POST /api/v1/extensions/kode/check`) and the switch (`PATCH
+   /api/v1/extensions/kode`). A version that was rolled back is never offered again. When the row isn't `updatable`,
+   Settings says why: Meko's `not_updatable` (a build from source, or a Kode still in
    `~/.agent-k-local`, which Meko updates once it has moved), else, under a Meko too old to say,
-   to update Meko first. An old `[update] channel = "off"` in AgentK's `config.toml` keeps Meko's
-   **Update automatically** off for AgentK until that switch is set; AgentK keeps that one key when
+   to update Meko first. An old `[update] channel = "off"` in Kode's `config.toml` keeps Meko's
+   **Update automatically** off for Kode until that switch is set; Kode keeps that one key when
    it saves its config.
-2. **The update.** `POST /api/v1/extensions/agentk/update` starts Meko's job: it downloads the
+2. **The update.** `POST /api/v1/extensions/kode/update` starts Meko's job: it downloads the
    tarball, checks `SHA256SUMS`'s signature and then the tarball against `SHA256SUMS`, unpacks it
    next to the current version, checks that
    it runs (`meko kode version --json`, `meko kode selftest`), writes its record
    (`app/update-pending.json`) and points `app/current` at it, then runs `meko kode restart`. That
    restarts only the server's service, and waits up to 100 s for the server to answer as the
    version `app/current` names. Sessions keep running. The job lives in Meko, so it outlasts
-   AgentK's restart; the page follows it (every 2 s while it runs) and shows the Installing banner.
+   Kode's restart; the page follows it (every 2 s while it runs) and shows the Installing banner.
 3. **The restart.** Stopping, the server sees that `app/current` no longer names the version it
    runs from (`switchedAway()`), and sends every open page a `restarting` event first, so the page
    shows only the Installing banner while it waits, and not the lost-connection banner (which it
@@ -202,7 +207,7 @@ start the server deletes the database copies of versions no longer in `app/`. Ea
 180 MB, most of it the bundled Node runtime. The "Updated to" notice shows from the new version's
 first start, without waiting for the 5 minutes.
 
-The first release that brings the move of AgentK's home into Meko's data folder (#236) moves an
+The first release that brings the move of Kode's home into Meko's data folder (#236) moves an
 older home as soon as it has proved healthy, ending every session and resuming it in the new
 place: [Moving the home into Meko's data folder](recovery.md#moving-the-home-into-mekos-data-folder).
 The launcher finds the home from its own folder (`<home>/app/<version>`), so a rollback after the

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Stand-in for the `opencode` CLI (OpenCode 2) in integration tests. A session loads the plugin
-// folders its OPENCODE_CONFIG_CONTENT names (AgentK's, for real: their default `{ id, setup }`)
+// folders its OPENCODE_CONFIG_CONTENT names (Kode's, for real: their default `{ id, setup }`)
 // and drives their hooks the way OpenCode 2.1 does: the session `prompt` hook for a prompt, tool
 // `execute.before` (whose throw denies the call) and `.after` around a tool, the session `context`
 // hook before a response, and the `session.created`, `permission.asked`/`.replied`,
 // `session.step.started`/`.ended`, `session.execution.started` and `.succeeded` (or `.interrupted`)
 // and `shell.created`/`.exited`/`.deleted` events, as `{ id, type, data }`.
-// Each stdin line is a prompt. Like OpenCode 2 under AgentK, every command but `--version` and
+// Each stdin line is a prompt. Like OpenCode 2 under Kode, every command but `--version` and
 // `upgrade` needs `--standalone`. Everything it does is recorded in $FAKE_OPENCODE_DIR.
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -31,7 +31,7 @@ if (args[0] === 'upgrade') {
   process.exit(0);
 }
 // Without it, OpenCode 2 runs the command on its shared background service, which never sees the
-// variables AgentK gives it.
+// variables Kode gives it.
 if (!args.includes('--standalone')) {
   process.stderr.write(`fake opencode: ${args.join(' ')} would run on the shared background service (no --standalone)\n`);
   process.exit(2);
@@ -46,7 +46,7 @@ if (args[0] === 'session' && args[1] === 'delete') {
   log('deleted.jsonl', { id: args.at(-1), cwd: process.cwd(), xdg: process.env.XDG_CONFIG_HOME ?? null });
   process.exit(0);
 }
-// Like `opencode run --format json` (Ask AgentK): records what it got, with the global config it
+// Like `opencode run --format json` (Ask Kode): records what it got, with the global config it
 // would read ($XDG_CONFIG_HOME/opencode), and prints `ask-reply.jsonl` from the fake's dir; exits 1
 // after an error event, as OpenCode does.
 if (args[0] === 'run') {
@@ -64,7 +64,7 @@ const opt = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.l
 const known = join(dir, 'sessions.json');
 const sessions = existsSync(known) ? JSON.parse(readFileSync(known, 'utf8')) : [];
 const resumed = opt('session');
-// OpenCode 2 starts an empty session under an id it doesn't have; AgentK resumes only ones it has.
+// OpenCode 2 starts an empty session under an id it doesn't have; Kode resumes only ones it has.
 if (resumed && !sessions.includes(resumed)) {
   process.stderr.write(`fake opencode: resumed ${resumed}, which it never made\n`);
   process.exit(1);
@@ -74,7 +74,7 @@ if (!resumed) writeFileSync(known, JSON.stringify([...sessions, sessionId]));
 const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT || '{}');
 log('argv.jsonl', {
   args, cwd: process.cwd(), config,
-  env: Object.fromEntries(['MEKO_AGENT_ID', 'AK_SESSION', 'AK_OPENCODE_SOURCE', 'OPENCODE_CONFIG', 'OPENCODE_DISABLE_PROJECT_CONFIG'].map((k) => [k, process.env[k] ?? null])),
+  env: Object.fromEntries(['MEKO_AGENT_ID', 'KODE_SESSION', 'KODE_OPENCODE_SOURCE', 'OPENCODE_CONFIG', 'OPENCODE_DISABLE_PROJECT_CONFIG'].map((k) => [k, process.env[k] ?? null])),
 });
 
 // The plugins' hooks, by domain and name, and the event streams they subscribed to.

@@ -7,7 +7,7 @@ commands below from `src/extensions/present`.
 
 Presenter is a server on a unix socket in its home, `<Meko's data folder>/extensions/present`.
 Meko's web listener shows its pages at `/ext/present/`, behind Meko's one login, as it shows
-AgentK at `/ext/agentk/`. The server runs Claude Code headless for each deck (one persisted session
+Kode at `/ext/kode/`. The server runs Claude Code headless for each deck (one persisted session
 per deck), keeps each deck's draft, saves decks to their Meko datapacks in pieces, and holds the
 rooms of live talks.
 
@@ -78,7 +78,7 @@ on this computer (`meko start`), and through it the Meko Cloud link it keeps (`m
 
 ## Conventions
 
-- TypeScript strict, ES modules, Node 22, AgentK's style. `src/shared` has no Node or DOM imports.
+- TypeScript strict, ES modules, Node 22, Kode's style. `src/shared` has no Node or DOM imports.
 - User-facing text: plain, direct, active voice; errors say what went wrong and how to fix it.
 - Tests: new behavior gets one test, in an `it.each` table when it's cases of one rule. Tests never
   touch the real Meko, Claude Code or home (`test/setup.ts`).

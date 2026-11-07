@@ -88,7 +88,7 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
   const actingWait = ctx.acting ? 'Another action is under way' : undefined;
   const r = s.codeReview;
 
-  if (s.asking) add({ id: 'answer', group: 'you', label: `Answer AgentK: ${s.asking.questions[0]?.question ?? ''}`, opens: true, primary: true, on: ['sheet'] });
+  if (s.asking) add({ id: 'answer', group: 'you', label: `Answer Kode: ${s.asking.questions[0]?.question ?? ''}`, opens: true, primary: true, on: ['sheet'] });
   if (s.status === 'exited') add({ id: 'resume', group: 'you', label: `Resume ${agentName(s)}`, primary: true, hint: actingWait, disabled: ctx.acting, on: ['sheet'] });
 
   if (child) {
@@ -107,7 +107,7 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
     if (r) add({ id: 'review-open', group: 'review', label: reviewSegmentLabel(r), opens: true, on: ['menu', 'sheet'] });
     if (r && reviewWaitsOnYou(r)) {
       add({
-        id: 'review-send', group: 'review', label: 'Send the findings to AgentK', palette: ['Send the code review findings of ', name, ' to AgentK'],
+        id: 'review-send', group: 'review', label: 'Send the findings to Kode', palette: ['Send the code review findings of ', name, ' to Kode'],
         keywords: 'code review findings send triage notes', primary: true, hint: actingWait, disabled: ctx.acting, on: review,
       });
     }
@@ -131,7 +131,7 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
     }
     const run = canRunReview(s);
     if (run.offered) {
-      // While AgentK can't take it, the hint says why (and the server's refusal says so again).
+      // While Kode can't take it, the hint says why (and the server's refusal says so again).
       add({
         id: 'review-run', group: 'review', label: 'Run code review', palette: ['Run the code review of ', name],
         hint: run.wait ?? actingWait, keywords: 'code review run again findings', disabled: ctx.acting || !run.ready, on: ALL,
@@ -157,7 +157,7 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
   if (s.stage === 'code' && !ctx.noPr) {
     const queued = s.queued === 'open-pr';
     const reason = queued ? null : openPrGate(s).reason;
-    // Review Changes when the press starts AgentK's code review first, as the gate says.
+    // Review Changes when the press starts Kode's code review first, as the gate says.
     const gate = s.openPrReview === 'new' ? 'Review Changes' : 'Open PR';
     // While the code review holds Open PR, its gate has no instructions button; the palette keeps it.
     add({

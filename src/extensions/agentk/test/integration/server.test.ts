@@ -8,7 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
 import type { HarnessStatus } from '../../src/shared/types.js';
-import { buildServer, stampPage } from '../../src/server/server.js';
+import { buildServer, pageBase, stampPage } from '../../src/server/server.js';
 import { shortHost } from '../../src/server/core.js';
 
 describe('HTTP API: origin checks, projects', () => {
@@ -170,20 +170,20 @@ describe('HTTP API: origin checks, projects', () => {
     expect(env.core.state().harnesses.find((h) => h.id === 'kiro')?.version).toBe('2.0.0');
   });
 
-  it("writes Kiro 3.0's agentk-trusted as trust_tools turns on in Settings, and removes it at once as it turns off", async () => {
+  it("writes Kiro 3.0's kode-trusted as trust_tools turns on in Settings, and removes it at once as it turns off", async () => {
     env.core.updateConfig((c) => {
       c.kiro.enabled = true;
     });
     mkdirSync(process.env.FAKE_KIRO_DIR!, { recursive: true });
     writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'version'), 'kiro-cli 3.0.0\n');
     await env.core.harnesses.refresh(env.core.config, true);
-    const trusted = join(process.env.KIRO_HOME!, 'agents', 'agentk-trusted.json');
+    const trusted = join(process.env.KIRO_HOME!, 'agents', 'kode-trusted.json');
     const put = (on: boolean) => app.inject({ method: 'PUT', url: '/api/settings', payload: { kiroTrustTools: on } });
     expect((await put(true)).statusCode).toBe(200);
-    await waitFor(() => existsSync(trusted), Boolean, 10000, 'agentk-trusted to be written');
-    // Not at the next launch: a chat started as agentk-trusted by hand must stop trusting now.
+    await waitFor(() => existsSync(trusted), Boolean, 10000, 'kode-trusted to be written');
+    // Not at the next launch: a chat started as kode-trusted by hand must stop trusting now.
     expect((await put(false)).statusCode).toBe(200);
-    await waitFor(() => existsSync(trusted), (there) => !there, 10000, 'agentk-trusted to be removed');
+    await waitFor(() => existsSync(trusted), (there) => !there, 10000, 'kode-trusted to be removed');
   });
 
   it("Check again reads Meko's list of agents: a harness Meko hasn't connected isn't offered, and says why", async () => {
@@ -461,8 +461,8 @@ describe('web app: manifest and icons for the installed app', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/^application\/manifest\+json/);
     const manifest = res.json() as { name: string; short_name: string; icons: { src: string; sizes: string; purpose: string }[] };
-    // Relative, so the installed app and its icons stay under wherever Meko serves AgentK.
-    expect(manifest).toMatchObject({ name: 'AgentK', short_name: 'AgentK', start_url: './', scope: './', display: 'standalone' });
+    // Relative, so the installed app and its icons stay under wherever Meko serves Kode.
+    expect(manifest).toMatchObject({ name: 'Kode', short_name: 'Kode', start_url: './', scope: './', display: 'standalone' });
     expect(manifest.icons.map((i) => `${i.sizes} ${i.purpose}`)).toEqual(['192x192 any', '512x512 any', '512x512 maskable']);
     for (const icon of manifest.icons) {
       const img = await app.inject({ url: new URL(icon.src, 'http://x/manifest.webmanifest').pathname });
@@ -541,6 +541,13 @@ describe('web app: manifest and icons for the installed app', () => {
 describe('stampPage', () => {
   it("bases the page where Meko serves it, and escapes the version for the attribute", () => {
     expect(stampPage('<head></head>', '1"<x>&'))
-      .toBe('<head>\n    <base href="/ext/agentk/" />  <meta name="ak-version" content="1&#34;&#60;x&#62;&#38;" />\n  </head>');
+      .toBe('<head>\n    <base href="/ext/kode/" />  <meta name="ak-version" content="1&#34;&#60;x&#62;&#38;" />\n  </head>');
+  });
+
+  it('takes the base from the path Meko served the page under, else the one a Meko from before serves it at', () => {
+    expect(pageBase('/ext/kode/')).toBe('/ext/kode/');
+    expect(pageBase(['/ext/agentk/'])).toBe('/ext/agentk/');
+    expect(pageBase(undefined)).toBe('/ext/agentk/');
+    expect(pageBase('/ext/kode/"><script>')).toBe('/ext/agentk/');
   });
 });

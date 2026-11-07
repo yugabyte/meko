@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// ServerName is Meko's MCP server's name in every agent: AgentK recognizes Meko's tools by it
+// ServerName is Meko's MCP server's name in every agent: Kode recognizes Meko's tools by it
 // (mcp__meko__*).
 const ServerName = "meko"
 

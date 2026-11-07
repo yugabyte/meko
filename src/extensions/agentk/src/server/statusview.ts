@@ -2,7 +2,7 @@
  * `meko kode status`'s output, from what it found: shaped like `meko status`. A marked headline,
  * then a row per part that runs (the server, the session host, the services), then the links in a
  * box, as Meko's summary draws them.
- * Meko shows the headline in its own status row, without the mark and "AgentK" (src/meko/docs/install.md),
+ * Meko shows the headline in its own status row, without the mark and "Kode" (src/meko/docs/install.md),
  * so its marks are always ✓, ! and ✗, whatever the locale.
  */
 import type { Probe } from './health.js';
@@ -61,9 +61,9 @@ export function formatStatus(f: StatusFacts, paint: (k: Kind, mark: string) => s
   const pid = (f.probe.ok ? f.probe.pid : undefined) ?? f.leasePid ?? undefined;
   const started = f.probe.ok && f.probe.startedAt ? Date.parse(f.probe.startedAt) : NaN;
   const about = [pid ? `pid ${pid}` : '', Number.isNaN(started) ? '' : `up ${upFor(f.now - started)}`].filter(Boolean).join(', ');
-  if (f.probe.ok) lines.push(`${MARKS.ok} AgentK ${f.version} is running${about ? ` (${about})` : ''}`);
-  else if (runs) lines.push(`${MARKS.warn} AgentK ${f.version} is running${about ? ` (${about})` : ''}, but isn't answering`);
-  else lines.push(`${MARKS.fail} AgentK ${f.version} isn't running`);
+  if (f.probe.ok) lines.push(`${MARKS.ok} Kode ${f.version} is running${about ? ` (${about})` : ''}`);
+  else if (runs) lines.push(`${MARKS.warn} Kode ${f.version} is running${about ? ` (${about})` : ''}, but isn't answering`);
+  else lines.push(`${MARKS.fail} Kode ${f.version} isn't running`);
 
   if (f.probe.ok) row('ok', 'Server', 'healthy');
   else if (runs) row('warn', 'Server', `not answering (${f.probe.error})`);
@@ -85,7 +85,7 @@ export function formatStatus(f: StatusFacts, paint: (k: Kind, mark: string) => s
   }
 
   lines.push('');
-  lines.push(...box(`AgentK ${f.version}`, [['Web UI', f.webUrl ?? `none (${f.webWhy ?? 'unknown'})`], ['Home', f.home], ['Logs', f.logs]]));
+  lines.push(...box(`Kode ${f.version}`, [['Web UI', f.webUrl ?? `none (${f.webWhy ?? 'unknown'})`], ['Home', f.home], ['Logs', f.logs]]));
   if (!runs) {
     lines.push('');
     lines.push('  Start it: meko kode start');

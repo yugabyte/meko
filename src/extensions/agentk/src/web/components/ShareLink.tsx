@@ -60,7 +60,7 @@ export function ShareLink({ datapackId }: { datapackId: string }) {
     }
     urlInput.current?.select();
     setNote(null);
-    setError("The browser didn't let AgentK copy it. It's selected in the field: copy it from there.");
+    setError("The browser didn't let Kode copy it. It's selected in the field: copy it from there.");
   };
 
   if (loadError) {

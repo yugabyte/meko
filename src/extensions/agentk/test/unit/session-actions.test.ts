@@ -32,7 +32,7 @@ describe('sessionActions', () => {
   it('offers Run code review on the menu, the sheet and the palette, waiting with the reason', () => {
     for (const on of ['menu', 'sheet', 'palette'] as Surface[]) expect(ids(session(), on)).toContain('review-run');
     expect(item(session(), 'review-run')).toMatchObject({ disabled: false, hint: undefined });
-    expect(item(session({ status: 'working' }), 'review-run')).toMatchObject({ disabled: true, hint: "After AgentK's turn" });
+    expect(item(session({ status: 'working' }), 'review-run')).toMatchObject({ disabled: true, hint: "After Kode's turn" });
     expect(item(session({ stage: 'design' }), 'review-run')).toBeUndefined();
   });
 
@@ -164,7 +164,7 @@ describe('SessionMenuItems', () => {
   it('renders menu items in groups, with the reason a disabled one waits', () => {
     const items = actionsOn(sessionActions(session({ status: 'working', prUrl: 'https://github.com/acme/demo-repo/pull/7', prNumber: 7 }), ctx()), 'menu');
     const html = renderToStaticMarkup(createElement(SessionMenuItems, { items, cur: 1, onPick: () => {} }));
-    expect(html).toContain('<button role="menuitem" tabindex="-1" class="session-menu-item" type="button" aria-disabled="true"><span class="session-menu-label">Run code review</span><span class="session-menu-hint">After AgentK&#x27;s turn</span>');
+    expect(html).toContain('<button role="menuitem" tabindex="-1" class="session-menu-item" type="button" aria-disabled="true"><span class="session-menu-label">Run code review</span><span class="session-menu-hint">After Kode&#x27;s turn</span>');
     expect(html).toContain('<button role="menuitem" tabindex="0" class="session-menu-item cur" type="button">');
     expect(html).toContain('href="https://github.com/acme/demo-repo/pull/7" target="_blank"');
     expect(html).toContain('<div role="separator" class="session-menu-sep"></div>');

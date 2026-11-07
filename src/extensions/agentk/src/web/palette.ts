@@ -107,9 +107,9 @@ export function linkEntries(plan: LinkPlan): LinkEntry[] {
 }
 
 /** The palette input's placeholder, one at a time, so it shows everything the palette takes. */
-export const PALETTE_HINTS = ['Ask AgentK to start a task…', 'Type a command…', 'Find a session by what it’s about…', 'Paste a GitHub PR or issue link…', 'Paste a Jira or Slack link to find its session…'];
+export const PALETTE_HINTS = ['Ask Kode to start a task…', 'Type a command…', 'Find a session by what it’s about…', 'Paste a GitHub PR or issue link…', 'Paste a Jira or Slack link to find its session…'];
 /** The placeholder with reduced motion, which doesn't rotate. */
-export const PALETTE_HINT_STILL = 'Ask AgentK, run a command, find a session by what it’s about or paste a GitHub, Jira or Slack link…';
+export const PALETTE_HINT_STILL = 'Ask Kode, run a command, find a session by what it’s about or paste a GitHub, Jira or Slack link…';
 
 /**
  * The palette item for a Meko share link pasted on its own: only one on this Meko's web app, so a
@@ -128,7 +128,7 @@ export function joinedText(r: JoinByLinkResult): string {
   return `${did}. Pick it in Open project, or attach it to a project from the project’s Datapacks box.`;
 }
 
-/** A palette item for an action AgentK proposed; `edit` opens New session with the task instead of starting it. */
+/** A palette item for an action Kode proposed; `edit` opens New session with the task instead of starting it. */
 export interface AskEntry {
   id: string;
   label: LabelPart[];
@@ -144,7 +144,7 @@ function preview(s: string, max: number): string {
 }
 
 /**
- * The palette items for AgentK's proposed actions, named as the rest of the palette names them; a
+ * The palette items for Kode's proposed actions, named as the rest of the palette names them; a
  * task also gets an item that opens it in New session to change it first.
  */
 export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSessions[]): AskEntry[] {
@@ -187,7 +187,7 @@ export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSess
 }
 
 /**
- * The steps **Do all** runs (POST /api/actions/run), when AgentK's answer is the steps of one
+ * The steps **Do all** runs (POST /api/actions/run), when Kode's answer is the steps of one
  * instruction (`together`) and two or more of them do something: every action but `go`, which only
  * navigates. Empty when there's no Do all to offer.
  */

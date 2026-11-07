@@ -13,7 +13,7 @@ import { assertFree, InstanceBusyError } from './instance.js';
 import { openBrowser } from './browser.js';
 import { tryMekoToken } from './meko.js';
 import { probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
-import { AGENTK_PATH, MEKO_INSTALL_COMMAND } from '../shared/mekourls.js';
+import { KODE_PATH, MEKO_INSTALL_COMMAND } from '../shared/mekourls.js';
 import {
   MekoSetupError, ensureMekoSetup, latestMekoSetup, mekoClaudeGaps, readClaudeMeko, runMekoSetup,
 } from './mekosetup.js';
@@ -137,7 +137,7 @@ function installServices(paths: Paths): boolean {
   for (const [old, now] of dropOldNames(svc)) ui.ok(now, `replaces ${old}, its name before`);
   try {
     writeServiceLauncher(paths.home);
-    svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, HOST: hostname() }));
+    svc.install(renderServiceFiles(svc, { KODE_HOME: paths.home, HOST: hostname() }));
   } catch (e) {
     if (e instanceof ServiceError) throw new ServiceError(serviceFailure(svc, e.message, paths.logs), { cause: e });
     throw e;
@@ -180,18 +180,18 @@ function hostOf(url: string): string {
 }
 
 /**
- * The installer's Meko step. AgentK uses the Meko running on this computer (`meko token --json`)
+ * The installer's Meko step. Kode uses the Meko running on this computer (`meko token --json`)
  * and stores nothing of it: that Meko serves its own datapacks and passes the rest on to Meko Cloud
  * once Meko Cloud is linked in Meko (Settings › Meko Cloud, or `meko cloud-link`). `--no-meko` skips
  * Meko's setup for the agents. Declining Meko's setup for Claude Code or Kiro (each offered only
  * where it's installed) is a warning, not a stop. Returns whether there's a Meko to use.
  */
 export async function installMeko(o: { noMeko: boolean }, d: InstallMekoDeps): Promise<boolean> {
-  if (o.noMeko) d.ui.warn('--no-meko', "Meko can't be turned off any more: AgentK uses the Meko on this computer. Meko isn't set up for the agents.");
+  if (o.noMeko) d.ui.warn('--no-meko', "Meko can't be turned off any more: Kode uses the Meko on this computer. Meko isn't set up for the agents.");
   const local = d.probe ? (await d.probe()).meko : null;
   d.ui.section('Checks');
   if (!local) {
-    d.ui.warn('Meko', "not running on this computer: AgentK uses it once it runs (meko start).");
+    d.ui.warn('Meko', "not running on this computer: Kode uses it once it runs (meko start).");
     return false;
   }
   d.ui.ok('Meko', `on this computer (${hostOf(local.url)})`);
@@ -204,7 +204,7 @@ export async function installMeko(o: { noMeko: boolean }, d: InstallMekoDeps): P
       d.ui.ok('Meko in Claude', 'plugin, MCP server and key in place');
     } catch (e) {
       if (!(e instanceof MekoSetupError)) throw e;
-      d.ui.warn('Meko in Claude', `${e.message} AgentK uses Meko; Claude Code sessions do once it's set up (AgentK's Settings › Harness › Claude Code can do it).`);
+      d.ui.warn('Meko in Claude', `${e.message} Kode uses Meko; Claude Code sessions do once it's set up (Kode's Settings › Harness › Claude Code can do it).`);
     }
   }
   if (ensureInKiro) {
@@ -213,7 +213,7 @@ export async function installMeko(o: { noMeko: boolean }, d: InstallMekoDeps): P
       d.ui.ok('Meko in Kiro', 'MCP server and agent in place');
     } catch (e) {
       if (!(e instanceof MekoSetupError)) throw e;
-      d.ui.warn('Meko in Kiro', `${e.message} AgentK uses Meko; Kiro sessions do once it's set up (AgentK's Settings › Harness › Kiro can do it).`);
+      d.ui.warn('Meko in Kiro', `${e.message} Kode uses Meko; Kiro sessions do once it's set up (Kode's Settings › Harness › Kiro can do it).`);
     }
   }
   return true;
@@ -235,7 +235,7 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
     throw new InstallError(
       `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later `
         + `(https://opencode.ai; from an older one, ${HARNESS_CAPS.opencode.upgrade}) `
-        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run meko extension install agentk again.`,
+        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run meko extension install kode again.`,
     );
   }
   if (!found.includes(cfg.agents.default)) cfg.agents.default = found[0];
@@ -243,7 +243,7 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
 }
 
 /**
- * AgentK's prerequisites check (git, curl, gh, a coding agent and their sign-ins; it installs what's
+ * Kode's prerequisites check (git, curl, gh, a coding agent and their sign-ins; it installs what's
  * missing after asking): scripts/deps.sh, which a release has as lib/scripts/deps.sh beside lib/dist.
  */
 export function depsScript(here = dirname(fileURLToPath(import.meta.url))): string {
@@ -258,12 +258,12 @@ function checkTools(args: string[]): void {
     return;
   }
   const r = spawnSync('sh', [script, ...args], { stdio: 'inherit' });
-  if (r.status !== 0) throw new InstallError(r.error ? `couldn't check the tools: ${r.error.message}` : 'the tools AgentK needs aren\'t all there (see above).');
+  if (r.status !== 0) throw new InstallError(r.error ? `couldn't check the tools: ${r.error.message}` : 'the tools Kode needs aren\'t all there (see above).');
 }
 
 /**
  * The repos folder the install was given, made when it isn't there yet (with its parents), since
- * AgentK clones into it. It says whether it made it, or why it couldn't.
+ * Kode clones into it. It says whether it made it, or why it couldn't.
  */
 export function reposFolder(root: string): { created: boolean; error?: string } {
   const dir = expandHome(root);
@@ -277,7 +277,7 @@ export function reposFolder(root: string): { created: boolean; error?: string } 
 }
 
 /**
- * A fresh install starts the AgentK tour at the server's first start (`[welcome] tour`); an upgrade
+ * A fresh install starts the Kode tour at the server's first start (`[welcome] tour`); an upgrade
  * or a reinstall doesn't, and keeps the user's projects as they are.
  */
 export function welcomeTour(cfg: Config, fresh: boolean): void {
@@ -285,7 +285,7 @@ export function welcomeTour(cfg: Config, fresh: boolean): void {
 }
 
 /**
- * Whether the install opens AgentK in the browser at its end: only a fresh, interactive install
+ * Whether the install opens Kode in the browser at its end: only a fresh, interactive install
  * whose server answers, so a new user lands in the tour. `--non-interactive` (Meko's Extensions
  * page, which is already in a browser) and upgrades open nothing.
  */
@@ -299,8 +299,8 @@ export async function runInstall(args: string[]): Promise<void> {
     options: {
       'non-interactive': { type: 'boolean', default: false },
       'repos-root': { type: 'string' },
-      // Meko's `meko extension install agentk` passes its own URL and token, and refuses an AgentK
-      // without --meko-url (its `tooOld`). AgentK reads the Meko on this computer itself, so both go unused.
+      // Meko's `meko extension install kode` passes its own URL and token, and refuses a Kode
+      // without --meko-url (its `tooOld`). Kode reads the Meko on this computer itself, so both go unused.
       'meko-key': { type: 'string' },
       'meko-url': { type: 'string' },
       'no-meko': { type: 'boolean', default: false },
@@ -336,7 +336,7 @@ export async function runInstall(args: string[]): Promise<void> {
     else if (process.env.MEKO_HOME) cfg.meko.home = resolve(process.env.MEKO_HOME);
 
     // 1. The tools: git, curl, gh and a coding agent, installed after asking when missing.
-    ui.title('AgentK setup');
+    ui.title('Kode setup');
     checkTools([
       ...(interactive ? [] : ['--non-interactive']),
       ...(values['install-deps'] ? ['--install-deps'] : []),
@@ -351,11 +351,11 @@ export async function runInstall(args: string[]): Promise<void> {
     cfg.repos.roots = fresh ? [reposRoot] : [reposRoot, ...cfg.repos.roots.filter((r) => r !== reposRoot)];
     if (fresh) cfg.repos.cloneInto = reposRoot;
     if (!(interactive && process.stdin.isTTY)) ui.row('Repos folder', reposRoot);
-    // Browsers reach AgentK only through the Meko on this computer, which serves it at /ext/agentk/
+    // Browsers reach Kode only through the Meko on this computer, which serves it at /ext/kode/
     // with its own sign-in; with no Meko here, nothing could.
     if ((await probeLocalMeko(cfg.meko.home || null)).state === 'none') {
-      throw new InstallError('AgentK runs behind the Meko on this computer, which serves it to your browser, and there is ' +
-        `no meko command here. Install Meko first (${MEKO_INSTALL_COMMAND}), then run: meko extension install agentk`);
+      throw new InstallError('Kode runs behind the Meko on this computer, which serves it to your browser, and there is ' +
+        `no meko command here. Install Meko first (${MEKO_INSTALL_COMMAND}), then run: meko extension install kode`);
     }
 
     // 3. The coding agents: at least one, or nothing can run.
@@ -415,10 +415,10 @@ export async function runInstall(args: string[]): Promise<void> {
     const tmpWarning = tmpHomeWarning(paths.home);
     if (tmpWarning) ui.warn('Home', tmpWarning);
     const move = checkMove(paths, cfg);
-    if (move && 'plan' in move) ui.note(`AgentK's home moves to ${tildify(move.plan.to)} once the server has started: every session ends and resumes there.`);
+    if (move && 'plan' in move) ui.note(`Kode's home moves to ${tildify(move.plan.to)} once the server has started: every session ends and resumes there.`);
     else if (move) ui.warn('Home', `stays in ${tildify(paths.home)} for now: ${move.skip}`);
 
-    // 7. Services: rows only for what needs a look (the summary's "AgentK is running" says the rest).
+    // 7. Services: rows only for what needs a look (the summary's "Kode is running" says the rest).
     let running = false;
     if (values['no-service']) {
       ui.warn('Services', 'skipped (--no-service). Start the server with: meko kode serve');
@@ -432,22 +432,22 @@ export async function runInstall(args: string[]): Promise<void> {
     const meko = await probeLocalMeko(cfg.meko.home || null);
     ui.blank();
     if (meko.meko?.webUrl) {
-      ui.text(style.bold(running ? 'Done. AgentK is running:' : 'Done. AgentK will be at:'));
+      ui.text(style.bold(running ? 'Done. Kode is running:' : 'Done. Kode will be at:'));
       ui.blank();
-      ui.text(`    ${style.blue(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
+      ui.text(`    ${style.blue(`${meko.meko.webUrl}${KODE_PATH}`)}`);
       ui.blank();
       // A new user lands in the tour; over SSH or with no display there's nothing to open here.
-      if (opensBrowser({ fresh, interactive, running }) && (await openBrowser(`${meko.meko.webUrl}${AGENTK_PATH}`))) {
-        ui.note('Opened it in your browser, where the AgentK tour starts.');
+      if (opensBrowser({ fresh, interactive, running }) && (await openBrowser(`${meko.meko.webUrl}${KODE_PATH}`))) {
+        ui.note('Opened it in your browser, where the Kode tour starts.');
       }
     } else {
-      ui.text(style.bold(running ? 'Done. AgentK is running.' : 'Done.'));
+      ui.text(style.bold(running ? 'Done. Kode is running.' : 'Done.'));
       ui.blank();
       ui.row('Browser', meko.meko?.webOff
-        ? "Meko's web UI is off: turn it on with meko ui start, then open AgentK with meko kode ui"
+        ? "Meko's web UI is off: turn it on with meko ui start, then open Kode with meko kode ui"
         : meko.meko
-          ? 'the Meko on this computer is too old to serve AgentK: update it with meko update'
-          : "Meko isn't running: start it with meko start, then open AgentK with meko kode ui");
+          ? 'the Meko on this computer is too old to serve Kode: update it with meko update'
+          : "Meko isn't running: start it with meko start, then open Kode with meko kode ui");
     }
     if (meko.meko?.webUrl) ui.row('Open', 'meko kode ui');
     ui.row('Status', 'meko kode status');
@@ -491,7 +491,7 @@ function hasUncommittedWork(dir: string): boolean {
 }
 
 /**
- * Deletes everything in the AgentK home, except the session worktrees and design files
+ * Deletes everything in the Kode home, except the session worktrees and design files
  * unless `all`. Returns the folders it kept (empty ones are removed, and then the home too).
  */
 export function purgeHome(paths: Paths, all: boolean): string[] {
@@ -566,7 +566,7 @@ export async function runUninstall(args: string[]): Promise<void> {
   const { ask, close } = makePrompter(asked);
   try {
     // Run by Meko (non-interactive), a purge's explanation is Meko's, which it gave before asking.
-    if (asked || !purge) say('This stops AgentK and ends every running session it hosts (Claude Code or Kiro).');
+    if (asked || !purge) say('This stops Kode and ends every running session it hosts (Claude Code or Kiro).');
     if (purge && asked) say(`--purge deletes ${tildify(paths.home)}: config, database, certificates, logs and installed versions.`);
     const wt = tildify(paths.worktrees);
     if (purge && !asked) {
@@ -601,7 +601,7 @@ export async function runUninstall(args: string[]): Promise<void> {
         // not installed there
       }
     }
-    // The Kiro agent AgentK wrote is its own: Kiro sessions ran as it.
+    // The Kiro agent Kode wrote is its own: Kiro sessions ran as it.
     removeKiroAgent();
     if (purge) {
       const db = dbPath(paths, loadConfig(paths));
@@ -613,7 +613,7 @@ export async function runUninstall(args: string[]): Promise<void> {
       if (deleteWork) say('Run `git worktree prune` in each repo to forget the deleted worktrees.');
     } else if (asked || !mekoDirOf(paths.home)) {
       // Run by Meko, its own last line says where the data stays, but only for a home in its data
-      // folder (`extensions/agentk`): one that hasn't moved there yet is AgentK's to name.
+      // folder (`extensions/kode`): one that hasn't moved there yet is Kode's to name.
       say(`State kept in ${tildify(paths.home)} (use --purge to delete it).`);
     }
   } finally {

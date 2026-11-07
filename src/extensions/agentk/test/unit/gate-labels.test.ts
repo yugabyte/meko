@@ -15,7 +15,7 @@ describe('openPrGate', () => {
     expect(openPrGate(session())).toEqual({ label: 'Open PR', reason: null, title: 'Commit, push and open a pull request' });
   });
 
-  it('queues it for the turn end while AgentK works, Claude starts, or Claude asks mid-turn', () => {
+  it('queues it for the turn end while Kode works, Claude starts, or Claude asks mid-turn', () => {
     for (const over of [{ status: 'working' }, { status: 'starting' }, { status: 'needs_input', midTurn: true }] as Partial<Session>[]) {
       expect(openPrGate(session(over))).toMatchObject({ label: 'Open PR after this turn', reason: null });
     }
@@ -23,10 +23,10 @@ describe('openPrGate', () => {
 
   it('reads Review Changes when the press starts the code review first', () => {
     expect(openPrGate(session({ openPrReview: 'new' }))).toEqual({
-      label: 'Review Changes', reason: null, title: "Run AgentK's code review, then commit, push and open a pull request",
+      label: 'Review Changes', reason: null, title: "Run Kode's code review, then commit, push and open a pull request",
     });
     expect(openPrGate(session({ openPrReview: 'new', status: 'working' }))).toEqual({
-      label: 'Review Changes after this turn', reason: null, title: 'AgentK is mid-turn: the code review starts when the turn ends', queues: true,
+      label: 'Review Changes after this turn', reason: null, title: 'Kode is mid-turn: the code review starts when the turn ends', queues: true,
     });
     expect(openPrGate(session({ openPrReview: 'new', status: 'exited' }))).toMatchObject({ label: 'Review Changes', reason: 'Claude has exited. Resume the session first.' });
     // Review settings Off, or a review that runs, holds the PR or goes out with it: no review starts.
@@ -36,7 +36,7 @@ describe('openPrGate', () => {
 
   it('is closed when Claude exited, waits on the user with no turn behind it, or holds prompts', () => {
     expect(openPrGate(session({ status: 'exited' }))).toMatchObject({ label: 'Open PR', reason: 'Claude has exited. Resume the session first.' });
-    expect(openPrGate(session({ status: 'needs_input' })).reason).toBe('AgentK is waiting on you in the terminal. Answer it first.');
+    expect(openPrGate(session({ status: 'needs_input' })).reason).toBe('Kode is waiting on you in the terminal. Answer it first.');
     expect(openPrGate(session({ promptsHeld: 1 })).reason).toMatch(/prompts from you/);
   });
 });
@@ -72,9 +72,9 @@ describe('mergeGate', () => {
   });
 
   it('offers Merge when ready while only blockers that clear by themselves are left', () => {
-    const gate = mergeGate(session({ mergeQueueable: true, mergeBlockers: ['CI is still running.', 'AgentK is addressing review findings.'] }));
+    const gate = mergeGate(session({ mergeQueueable: true, mergeBlockers: ['CI is still running.', 'Kode is addressing review findings.'] }));
     expect(gate).toMatchObject({ label: 'Merge when ready', reason: null });
-    expect(gate.title).toContain('CI is still running.\nAgentK is addressing review findings.');
+    expect(gate.title).toContain('CI is still running.\nKode is addressing review findings.');
   });
 
   it('is closed, with the blockers, otherwise', () => {
@@ -89,8 +89,8 @@ describe('queuedText', () => {
     expect(queuedText(session())).toBeNull();
     expect(queuedText(session({ queued: 'open-pr' }))).toBe('✓ Open PR queued: goes when the turn ends');
     expect(queuedText(session({ queued: 'merge', mergeBlockers: ['CI is still running.'] }))).toBe('✓ Merge queued: waiting on CI');
-    expect(queuedText(session({ queued: 'merge', mergeBlockers: ['AgentK is waiting on you in the terminal.'] }))).toBe('✓ Merge queued: waiting on you in the terminal');
-    expect(queuedText(session({ queued: 'merge', mergeBlockers: ['AgentK is still working.', 'CI is still running.'] }))).toBe('✓ Merge queued: waiting on AgentK');
+    expect(queuedText(session({ queued: 'merge', mergeBlockers: ['Kode is waiting on you in the terminal.'] }))).toBe('✓ Merge queued: waiting on you in the terminal');
+    expect(queuedText(session({ queued: 'merge', mergeBlockers: ['Kode is still working.', 'CI is still running.'] }))).toBe('✓ Merge queued: waiting on Kode');
   });
 
   it.each([
@@ -98,7 +98,7 @@ describe('queuedText', () => {
     [{ queued: 'merge', mergeBlockers: ['CI is failing.'] }, '✓ Run to merge: waiting on a CI fix'],
     [{ queued: 'merge', mergeBlockers: ['Changes were requested.'] }, '✓ Run to merge: waiting on you'],
     [{ queued: 'merge', mergeQueueable: true, mergeBlockers: ["GitHub's required checks haven't reported on the latest push yet."] }, '✓ Run to merge: waiting on CI'],
-    [{ queued: 'merge', mergeQueueable: true, mergeBlockers: ['AgentK is still working.'] }, '✓ Run to merge: waiting on AgentK'],
+    [{ queued: 'merge', mergeQueueable: true, mergeBlockers: ['Kode is still working.'] }, '✓ Run to merge: waiting on Kode'],
   ] as [Partial<Session>, string][])('says what Run to merge waits for: %o', (over, text) => {
     expect(queuedText(session({ autoRun: true, ...over }))).toBe(text);
   });
@@ -112,7 +112,7 @@ describe('headerApproves', () => {
     ['takes the user to the open questions', design(2), 'hidden', true],
     ['leaves it to the footer while the open questions show', design(2), 'shown', false],
     ['leaves it out while the open questions can’t be shown', design(2), 'none', false],
-    // A change to one of AgentK's decisions goes with the questions, like an answer.
+    // A change to one of Kode's decisions goes with the questions, like an answer.
     ['takes the user to a change to a decision', design(0), 'hidden', true, true],
     ['leaves a change to a decision to the footer while the questions show', design(0), 'shown', false, true],
     ['leaves it out while a change to a decision can’t be shown', design(0), 'none', false, true],

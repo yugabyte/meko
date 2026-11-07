@@ -5,7 +5,7 @@ const MAX_KEY = 200;
 
 /**
  * The Meko calls under way in each session as its CLI's hooks report them (Kiro's, OpenCode's: the
- * ones without AgentK's mod, whose calls `ModLinks` keeps), for the dot's Meko m. A call opens at
+ * ones without Kode's mod, whose calls `ModLinks` keeps), for the dot's Meko m. A call opens at
  * its `PreToolUse` and closes at its `PostToolUse`, matched by the key the harness gives
  * (`Harness.mekoTool`). Kiro's calls have no id, so a key can be open more than once and is counted.
  * The turn's end and a relaunch clear the session's calls, for an end that never came (Kiro runs

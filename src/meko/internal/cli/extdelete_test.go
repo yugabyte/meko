@@ -10,18 +10,18 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/update"
 )
 
-// withAgentKData is installedAgentK with a file of AgentK's data in its folder, which is returned.
+// withAgentKData is installedAgentK with a file of Kode's data in its folder, which is returned.
 func withAgentKData(t *testing.T, dir string) (update.App, string) {
 	t.Helper()
 	app := installedAgentK(t, dir, "0.20261030.0")
-	data := filepath.Join(extensions.Dir(dir, "agentk"), "state.db")
+	data := filepath.Join(extensions.Dir(dir, "kode"), "state.db")
 	if err := os.WriteFile(data, []byte("sessions"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return app, data
 }
 
-// extension delete asks first, then runs AgentK's own uninstall keeping its data, removes the release
+// extension delete asks first, then runs Kode's own uninstall keeping its data, removes the release
 // Meko installed and the command it linked, and forgets it; its data stays.
 func TestExtensionDeleteKeepsTheData(t *testing.T) {
 	dir, _ := setup(t)
@@ -38,20 +38,20 @@ func TestExtensionDeleteKeepsTheData(t *testing.T) {
 
 	stdin = strings.NewReader("n\n")
 	t.Cleanup(func() { stdin = os.Stdin })
-	code, out, errs := run("extension", "delete", "agentk", "--data-dir", dir)
+	code, out, errs := run("extension", "delete", "kode", "--data-dir", dir)
 	want(t, "answered no", code, 1, errs, "Nothing was removed")
-	want(t, "answered no", code, 1, out, "Deleting AgentK stops it (every session it runs ends)")
-	want(t, "answered no", code, 1, out, "Its data in "+extensions.Dir(dir, "agentk"))
+	want(t, "answered no", code, 1, out, "Deleting Kode stops it (every session it runs ends)")
+	want(t, "answered no", code, 1, out, "Its data in "+extensions.Dir(dir, "kode"))
 	want(t, "answered no", code, 1, out, "Delete it? [y/N]")
 	if _, err := os.Stat(app.Root); err != nil || readLog(t, uninstalled) != "" {
 		t.Errorf("a no removed something: %v, %q", err, readLog(t, uninstalled))
 	}
 
 	stdin = strings.NewReader("y\n")
-	code, out, errs = run("extension", "delete", "agentk", "--data-dir", dir)
-	want(t, "answered yes", code, 0, out+errs, "Deleted AgentK. Its data stays in "+extensions.Dir(dir, "agentk"))
+	code, out, errs = run("extension", "delete", "kode", "--data-dir", dir)
+	want(t, "answered yes", code, 0, out+errs, "Deleted Kode. Its data stays in "+extensions.Dir(dir, "kode"))
 	if got := readLog(t, uninstalled); got != "uninstall --non-interactive\n" {
-		t.Errorf("AgentK's uninstall ran %q", got)
+		t.Errorf("Kode's uninstall ran %q", got)
 	}
 	if _, err := os.Stat(app.Root); !os.IsNotExist(err) {
 		t.Errorf("the releases are still there: %v", err)
@@ -67,33 +67,33 @@ func TestExtensionDeleteKeepsTheData(t *testing.T) {
 	if reg, _ := extensions.Load(dir); len(reg.Entries) != 0 {
 		t.Errorf("still registered: %v", reg.Entries)
 	}
-	code, _, errs = run("extension", "delete", "agentk", "--data-dir", dir)
-	want(t, "deleted again", code, 1, errs, "AgentK isn't installed; its data stays in "+extensions.Dir(dir, "agentk"))
+	code, _, errs = run("extension", "delete", "kode", "--data-dir", dir)
+	want(t, "deleted again", code, 1, errs, "Kode isn't installed; its data stays in "+extensions.Dir(dir, "kode"))
 }
 
-// --purge runs AgentK's uninstall that deletes its data, and removes its folder; --force doesn't ask.
+// --purge runs Kode's uninstall that deletes its data, and removes its folder; --force doesn't ask.
 func TestExtensionDeletePurge(t *testing.T) {
 	dir, _ := setup(t)
 	noRealExtensions(t)
 	withAgentKData(t, dir)
 	stdin = strings.NewReader("")
 	t.Cleanup(func() { stdin = os.Stdin })
-	code, out, errs := run("extension", "delete", "agentk", "--purge", "--force", "--data-dir", dir)
-	want(t, "--purge --force", code, 0, out+errs, "--purge also deletes its data in "+extensions.Dir(dir, "agentk"))
-	want(t, "--purge --force", code, 0, out, "AgentK's sessions and worktrees")
-	want(t, "--purge --force", code, 0, out, "Deleted AgentK\n")
+	code, out, errs := run("extension", "delete", "kode", "--purge", "--force", "--data-dir", dir)
+	want(t, "--purge --force", code, 0, out+errs, "--purge also deletes its data in "+extensions.Dir(dir, "kode"))
+	want(t, "--purge --force", code, 0, out, "Kode's sessions and worktrees")
+	want(t, "--purge --force", code, 0, out, "Deleted Kode\n")
 	if strings.Contains(out, "Delete it?") {
 		t.Errorf("--force asked:\n%s", out)
 	}
 	if got := readLog(t, filepath.Join(dir, "agentk-uninstall.log")); got !=
-		strings.Join(extensions.Known["agentk"].UninstallArgs, " ")+"\n" {
-		t.Errorf("AgentK's uninstall ran %q", got)
+		strings.Join(extensions.Known["kode"].UninstallArgs, " ")+"\n" {
+		t.Errorf("Kode's uninstall ran %q", got)
 	}
-	if _, err := os.Stat(extensions.Dir(dir, "agentk")); !os.IsNotExist(err) {
+	if _, err := os.Stat(extensions.Dir(dir, "kode")); !os.IsNotExist(err) {
 		t.Errorf("its folder is still there: %v", err)
 	}
-	code, _, errs = run("extension", "delete", "agentk", "--purge", "--force", "--data-dir", dir)
-	want(t, "nothing left", code, 1, errs, "AgentK isn't installed\n")
+	code, _, errs = run("extension", "delete", "kode", "--purge", "--force", "--data-dir", dir)
+	want(t, "nothing left", code, 1, errs, "Kode isn't installed\n")
 }
 
 // An uninstall that fails leaves everything; one that's running holds off; a damaged one has no
@@ -109,7 +109,7 @@ func TestExtensionDeleteFailsSafely(t *testing.T) {
 	if !lock.TryLock() {
 		t.Fatal("lock")
 	}
-	code, _, errs := run("extension", "delete", "agentk", "--force", "--data-dir", dir)
+	code, _, errs := run("extension", "delete", "kode", "--force", "--data-dir", dir)
 	lock.Unlock()
 	want(t, "another update running", code, 1, errs, "another update is running")
 
@@ -118,8 +118,8 @@ func TestExtensionDeleteFailsSafely(t *testing.T) {
 	if err := os.WriteFile(broken, []byte("#!/bin/sh\necho \"can't uninstall\" >&2\nexit 4\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs = run("extension", "delete", "agentk", "--force", "--data-dir", dir)
-	want(t, "a failing uninstall", code, 1, errs, "uninstalling AgentK failed")
+	code, _, errs = run("extension", "delete", "kode", "--force", "--data-dir", dir)
+	want(t, "a failing uninstall", code, 1, errs, "uninstalling Kode failed")
 	if reg, _ := extensions.Load(dir); len(reg.Entries) != 1 {
 		t.Errorf("unregistered: %v", reg.Entries)
 	}
@@ -133,20 +133,20 @@ func TestExtensionDeleteFailsSafely(t *testing.T) {
 	}
 	missing := filepath.Join(t.TempDir(), "agentk")
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: missing, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: missing, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs = run("extension", "delete", "agentk", "--purge", "--force", "--data-dir", dir)
+	code, _, errs = run("extension", "delete", "kode", "--purge", "--force", "--data-dir", dir)
 	want(t, "damaged, --purge", code, 1, errs, "so its own uninstall can't run, and a service it installed may "+
-		"still use "+extensions.Dir(dir, "agentk")+". Nothing was removed")
+		"still use "+extensions.Dir(dir, "kode")+". Nothing was removed")
 	if _, err := os.Stat(data); err != nil {
 		t.Errorf("a refused purge deleted the data: %v", err)
 	}
-	code, out, errs := run("extension", "delete", "agentk", "--force", "--data-dir", dir)
-	want(t, "damaged", code, 0, out, "AgentK is damaged ("+missing+" is missing), so its own uninstall can't run")
+	code, out, errs := run("extension", "delete", "kode", "--force", "--data-dir", dir)
+	want(t, "damaged", code, 0, out, "Kode is damaged ("+missing+" is missing), so its own uninstall can't run")
 	want(t, "damaged", code, 0, errs, "so its own uninstall can't run; any service it installed stays")
-	want(t, "damaged", code, 0, out, "Deleted AgentK.")
+	want(t, "damaged", code, 0, out, "Deleted Kode.")
 	if reg, _ = extensions.Load(dir); len(reg.Entries) != 0 {
 		t.Errorf("still registered: %v", reg.Entries)
 	}
@@ -156,7 +156,7 @@ func TestExtensionDeleteFailsSafely(t *testing.T) {
 	}
 }
 
-// A release a live process still runs from (AgentK's session host, when its stop failed) is kept,
+// A release a live process still runs from (Kode's session host, when its stop failed) is kept,
 // with the registration, and delete says what still runs.
 func TestExtensionDeleteKeepsAReleaseInUse(t *testing.T) {
 	dir, _ := setup(t)
@@ -166,8 +166,8 @@ func TestExtensionDeleteKeepsAReleaseInUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs := run("extension", "delete", "agentk", "--force", "--data-dir", dir)
-	want(t, "in use", code, 1, errs, "AgentK's uninstall ran, but something still runs from AgentK "+app.Current())
+	code, _, errs := run("extension", "delete", "kode", "--force", "--data-dir", dir)
+	want(t, "in use", code, 1, errs, "Kode's uninstall ran, but something still runs from Kode "+app.Current())
 	if _, serr := os.Stat(app.Root); serr != nil {
 		t.Errorf("the releases went: %v", serr)
 	}
@@ -175,8 +175,8 @@ func TestExtensionDeleteKeepsAReleaseInUse(t *testing.T) {
 		t.Errorf("unregistered: %v", reg.Entries)
 	}
 	_ = f.Close()
-	code, out, errs := run("extension", "delete", "agentk", "--force", "--data-dir", dir)
-	want(t, "once it stopped", code, 0, out+errs, "Deleted AgentK")
+	code, out, errs := run("extension", "delete", "kode", "--force", "--data-dir", dir)
+	want(t, "once it stopped", code, 0, out+errs, "Deleted Kode")
 }
 
 // A registered extension Meko doesn't know is only forgotten: nothing is run or removed.

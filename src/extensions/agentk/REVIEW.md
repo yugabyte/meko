@@ -1,7 +1,7 @@
 # REVIEW.md
 
-What to check when reviewing a change to **AgentK**, whether you're a person or an agent
-(AgentK). Background and invariants are in [AGENTS.md](AGENTS.md); the design is in
+What to check when reviewing a change to **Kode**, whether you're a person or an agent
+(Kode). Background and invariants are in [AGENTS.md](AGENTS.md); the design is in
 [docs/design.md](docs/design.md).
 
 Order findings by severity: **blocker** (breaks an invariant, loses work, or opens a security
@@ -11,7 +11,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 - [ ] Nothing makes the session host or a session's Claude a child of the server process or its
       service (systemd unit or launchd job). One-shot `claude` commands that end with their request
-      (`--version`, `update`, Ask AgentK's `claude -p`) are the server's own. Code that manages the
+      (`--version`, `update`, Ask Kode's `claude -p`) are the server's own. Code that manages the
       services goes through `src/server/service.ts`.
 - [ ] Server restarts and updates leave running sessions untouched. The one exception is the
       one-time move of an older home into Meko's data folder (`src/server/movehome.ts`, AGENTS.md
@@ -32,7 +32,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       the New session dialog run before that, never a worktree checkout. A failure after the answer
       is a failed start or an exited session with its error, never silent.
 - [ ] Values in the launcher are set after the login shell's profile runs, and inherited
-      `AK_HOME`/`MEKO_CHECKPOINT_INTERVAL` are cleared.
+      `KODE_HOME`/`MEKO_CHECKPOINT_INTERVAL` are cleared.
 - [ ] Auto-continue guards hold (once per 15 minutes; after two auto-continues in an hour the next
       mid-turn recovery is parked).
 - [ ] Status changes come from hook events or pane checks, not guesses (the one fallback: a starting
@@ -45,7 +45,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `ConditionHost=`, and nothing removes a socket or file another server may own.
 - [ ] The status line relay stays fast and quiet: it reports in the background, always runs the
       user's own status line with the same input, and never prints anything of its own.
-- [ ] AgentK's mod (`src/mod/agentk`) never gets in Claude's way: every failure is swallowed, and
+- [ ] Kode's mod (`src/mod/agentk`) never gets in Claude's way: every failure is swallowed, and
       sessions work without it (Claude Code too old, `[claude] mod = false`, hooks modules off). A
       prompt runs once at most: the mod submits it only on the server's 204 to its ack, a send it
       doesn't ack in time fails as a failed paste does (and a late ack gets 410), and a prompt
@@ -57,37 +57,37 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       mod: answers wait in Claude (the status is left alone, and the mod reports which it still
       holds), and an approval waits on the server for the turn's end and is dropped if the turn
       changed the design or its questions; the stage never moves to Code mid-turn or while Claude
-      holds answers. Status details can quote Claude's own words (`AgentK asks: …`), so code that
+      holds answers. Status details can quote Claude's own words (`Kode asks: …`), so code that
       recognizes a state matches the server's fixed text exactly, not a pattern. Changes to the mods pass `claude plugin validate` and
       `claude plugin test` (`src/mod/agentk`, `src/mod/agentk-view`), and keep to the API of the oldest Claude Code
       `MIN_MOD_CLAUDE` allows. Only the view mod can draw the rows of the mod's prompts: Claude Code
       never shows a plugin the rows of the prompts it submitted itself.
 - [ ] A session's agent is its harness (`Session.harness`): code that launches, reads hooks,
       answers the guard or context hooks, reads a transcript, usage or conversation id, or runs Ask
-      AgentK goes through its adapter (`Harness` in `src/server/harness/types.ts`), never straight to
+      Kode goes through its adapter (`Harness` in `src/server/harness/types.ts`), never straight to
       Claude Code's, OpenCode's or Kiro's files or flags, and what only some harnesses have (the mod, Artifacts,
       usage as tokens or credits, a minimum version) is read from `HARNESS_CAPS` or an optional
       adapter method, not from the harness's name (no new `harness === 'kiro'` outside the adapters;
       `docs/design/harnesses.md` lists the few that stay on purpose). Text about the process and its
       terminal names the session's agent (`agentName()`), not "Claude", in error messages and
-      screen-reader labels too. Anything AgentK
-      writes in the user's Kiro home (the `agentk` agent) is marked as AgentK's, inert without
-      AgentK's variables, grants nothing the user's own agent doesn't (trust goes on AgentK's
-      launch), and is removed by `uninstall`. The one exception is `agentk-trusted`, which allows
+      screen-reader labels too. Anything Kode
+      writes in the user's Kiro home (the `kode` agent) is marked as Kode's, inert without
+      Kode's variables, grants nothing the user's own agent doesn't (trust goes on Kode's
+      launch), and is removed by `uninstall`. The one exception is `kode-trusted`, which allows
       every tool: it's there only while `[kiro] trust_tools` is on with Kiro 3.0 or later (whose
-      engine ignores `--trust-tools`), only AgentK's launches use it, and it's removed as soon as
+      engine ignores `--trust-tools`), only Kode's launches use it, and it's removed as soon as
       that's turned off in Settings (`prepare` runs when a harness's settings change), else at the
       next Kiro launch or server start. A version read that gives nothing never removes it. A Kiro session reads and resumes only its own
       conversation: worktrees are pooled, and Kiro keeps earlier sessions' under the same folder.
-      Nothing is written to the user's OpenCode config: AgentK's plugin and Meko server reach only
-      AgentK's sessions, through their environment (`OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`), and
+      Nothing is written to the user's OpenCode config: Kode's plugin and Meko server reach only
+      Kode's sessions, through their environment (`OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`), and
       a secret (Meko's key) goes in an owner-only file, never the session's environment. Every
-      OpenCode command AgentK runs that needs a server (the session's TUI, `run`, `session`, `auth`)
+      OpenCode command Kode runs that needs a server (the session's TUI, `run`, `session`, `auth`)
       passes `--standalone`: OpenCode 2's shared background service has another environment, and
       must never be started with a session's. Only `--version` and `upgrade` go without it: they're
       one-shot commands in the server's own environment that neither start nor reach a server. A plugin folder a session
       loaded is never written again (OpenCode reloads a plugin whose files change).
-      No harness is assumed installed, Claude Code included: AgentK starts, and every feature that
+      No harness is assumed installed, Claude Code included: Kode starts, and every feature that
       needs an agent asks the registry for an available one (`Harnesses.defaultFor`/`pick`) and
       says what to install when there's none, rather than running `claude` regardless.
 - [ ] A change to `src/server/host/` that an older host or server can't read bumps `PROTOCOL`, and the
@@ -95,7 +95,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       updates). Nothing restarts the host by itself (the home's one-time move aside), and the program
       never waits on a viewer. `serve` and `host` keep going through Meko's launcher
       (`packaging/me_kode`: `meko _launch`), which runs an update's probation and locks the host's
-      version folder against Meko's pruning; nothing in AgentK writes Meko's update records
+      version folder against Meko's pruning; nothing in Kode writes Meko's update records
       (`app/update-pending.json`, `bad-versions`).
 - [ ] The prerequisites check (`scripts/deps.sh`) never installs a tool (or runs Meko's setup) without first showing what it
       will run and asking (or `--install-deps`), verifies downloads by checksum or integrity hash
@@ -107,13 +107,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 2. Security
 
 - [ ] The server listens only on its unix socket and has no login of its own: Meko decides who gets in
-      and serves AgentK at `/ext/agentk/` (AGENTS.md invariant 3). Nothing adds a TCP listener, a
+      and serves Kode at `/ext/kode/` (AGENTS.md invariant 3). Nothing adds a TCP listener, a
       login, or trust in a forwarding header. Access checks key on the matched route, never the raw
       URL (the router decodes `/%61pi/`).
 - [ ] Request bodies are type-checked before use (a wrong type is a 4xx, never a 500), and nothing
       re-adds a `text/plain` or form body parser (HTML forms must not be able to post to the API).
 - [ ] Writes and WebSocket upgrades still pass the origin check. The page builds every URL of
-      AgentK's own under its base (`src/web/base.ts`), and calls Meko's routes (`/api/v1/auth/*`)
+      Kode's own under its base (`src/web/base.ts`), and calls Meko's routes (`/api/v1/auth/*`)
       root-absolute.
 - [ ] Nothing from a session's worktree that its repo's author controls (settings, scripts, prompts,
       agent or MCP config) runs or is used unless `repoConfigTrusted(row)` says so (`headtrust.ts`):
@@ -139,7 +139,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       IP address, no customer names, nothing a user wrote or stored (prompts, transcripts,
       memories), and no unscrubbed logs or screenshots. Tests and docs use made-up values
       (`alice@example.com`, `github.com/acme/demo-repo`). Any found is a **blocker**. The
-      description's Meko lines from AgentK's PR prompt (`<Meko host>://<datapack id>;<name>`,
+      description's Meko lines from Kode's PR prompt (`<Meko host>://<datapack id>;<name>`,
       `meko_design:`, `meko_conversation_id:`) are allowed and stay as written.
 - [ ] Pasted images (`POST /api/sessions/:id/images`) are checked by their bytes, size-capped, and
       saved owner-only under the session's `pastes/` folder with a name the server picks; the
@@ -172,11 +172,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] A reviewed PR's design (`prdesign.ts`) is another person's content: it's used only when its
       bytes hash to the PR line's hash, size-capped like any design, rendered by the same sandboxed
       frame or sanitizer, never sent to Meko again, and the prompts call it content to review, not
-      instructions. AgentK's edits to a PR description change only its own `meko_design:` line.
+      instructions. Kode's edits to a PR description change only its own `meko_design:` line.
 - [ ] The Design-stage guard denies edits inside the worktree and main checkout, by its stored
       path and by the spelling Claude is given (`claudePath()`), and fails open (no answer means
       allow) so a slow or restarting server never blocks Claude.
-- [ ] Ask AgentK (`askagentk.ts`) only proposes: its `claude -p` keeps `--tools ""`,
+- [ ] Ask Kode (`askagentk.ts`) only proposes: its `claude -p` keeps `--tools ""`,
       `--strict-mcp-config` and hooks off, the answer's actions are checked against the state
       (`checkActions()`), and the browser runs one only when the user picks it (a lone `go`
       too), through the route the UI already uses. Names, branches and PR titles in its context stay
@@ -187,7 +187,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       sign-in part of the user's settings (`signInSettings()`: no allow rules or default mode),
       hooks off, only `[work_queue] slack_tools` allowed and the Slack connector's writes denied; its
       prompt calls the list's rows data. What it returns only adds items to the queue.
-- [ ] AgentK's session tools (`actions.ts`, `mcp.ts`) act only through `runActions()`, the same core
+- [ ] Kode's session tools (`actions.ts`, `mcp.ts`) act only through `runActions()`, the same core
       calls the UI's routes make, after `checkActions()`: the hook socket's `/tools` names the caller
       by its token, refuses a PR head `repoConfigTrusted()` doesn't trust (not checked yet included)
       and the tools turned off, never opens the caller's own PR, holds the caller's own move for its
@@ -195,9 +195,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       leaves a `tools` event on both sessions. Only read-only tools (`readOnly` in `tooldefs.ts`) are
       pre-allowed, and never in the user's Kiro agent; `me_kode mcp` checks nothing itself and loads
       nothing of the server's.
-- [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
+- [ ] Every path Kode hands Claude (launcher arguments, `HOME`, `KODE_HOOK_SOCK`, allow rules,
       file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make
-      Claude Code ask before every file or refuse the mod's socket; what AgentK stores keeps its
+      Claude Code ask before every file or refuse the mod's socket; what Kode stores keeps its
       own spelling.
 
 ## 3. Lifecycle and GitHub
@@ -227,7 +227,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       kind reads it through `kindOf()` (comparing with `review-pr` directly is fine).
 - [ ] A move by hand leaves the session consistent: the Review
       queue dropped when leaving Pull Request, the edit guard on when entering Design, and no move
-      out of Merge & Close or while AgentK is mid-turn. A move's prompt carries on from the conversation
+      out of Merge & Close or while Kode is mid-turn. A move's prompt carries on from the conversation
       (`move-design`, `move-code`): it doesn't restate the session's first prompt, which the work may have moved on from. The
       exceptions name a task on purpose: a move that gives a session without one its task sends the stage's start prompt, and
       an older page's `prompt: true` on a move to Explore sends `explore`.
@@ -240,10 +240,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       blockers that clear by themselves let it be queued (`MergeInfo.queueable`); any other one drops
       a queued merge, and the user is told (Run to merge's merge waits instead, and the user is told
       once per new set of blockers only they can clear). Under Run to merge, notifications are only
-      for what needs the user and for the merge; progress AgentK handles itself goes through
+      for what needs the user and for the merge; progress Kode handles itself goes through
       `notifyProgress`, which skips it. What only the user can clear is decided once, in
       `mergeInfo()` (`MergeInfo.yours`), which both that notification and the Needs you dot in Pull
-      Request (`Session.waitsOnYou`) read; a blocker AgentK still works on is never in it.
+      Request (`Session.waitsOnYou`) read; a blocker Kode still works on is never in it.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
@@ -258,7 +258,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Nothing from someone without a role on the repo (`authorAssociation` other than OWNER,
       MEMBER or COLLABORATOR, and not an allowed bot or the user) starts a turn: such a review is
       only held, and reaches Claude only when the user sends it, marked as from someone with no
-      role. Nothing waits for, or asks for, a GitHub reviewer of AgentK's own. Prompts that put PR text in front of
+      role. Nothing waits for, or asks for, a GitHub reviewer of Kode's own. Prompts that put PR text in front of
       Claude call it untrusted, not instructions. Where a review goes in each mode is
       `reviewRoute()` in `heldreviews.ts`; don't route reviews anywhere else.
 - [ ] CI-fix prompts go out once per PR head, never ahead of a queued review prompt, and stop after
@@ -313,7 +313,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       every 30 s). A new port or token reconnects without forgetting the account's invites; a change
       of the account behind that Meko (its link's `account`: linked, unlinked or relinked) forgets
       them (`mekoChanged`), even on the same URL and token.
-- [ ] Meko owns the Meko Cloud link, and AgentK uses only the Meko on this computer. AgentK has no
+- [ ] Meko owns the Meko Cloud link, and Kode uses only the Meko on this computer. Kode has no
       route or UI that sets or shows a Meko key, reads no key of its own (`[meko]` keys, `MEKO_*`,
       Claude Code's settings), and has no code that branches on whether Meko is linked, local or
       Meko Cloud: REST goes to that Meko's `/api/v1` (`mekoApiBase`), datapack links to its own
@@ -328,13 +328,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, a change of the
       Meko on this computer, Settings open, session launch, after Claude Code's setup, Claude Code becoming available or not after a
       version read), only while Claude Code is available, in the background, only for a token that isn't
-      AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
-- [ ] A new place AgentK calls Meko for a session passes the session's agent id
+      Kode's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
+- [ ] A new place Kode calls Meko for a session passes the session's agent id
       (`launchedAgentId(row)`), so Meko files the call under the session's agent with the agent's
-      own; AgentK keeps no log of what its Meko calls send or get back. The usage read of Kiro's and OpenCode's own files counts their Meko calls in
+      own; Kode keeps no log of what its Meko calls send or get back. The usage read of Kiro's and OpenCode's own files counts their Meko calls in
       `meko_calls`, once per call, and passes nothing on.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
-      one, and on the mod path never a fact that names this machine (home, AgentK's home,
+      one, and on the mod path never a fact that names this machine (home, Kode's home,
       worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies
       on the saving rule in its prompt. It
       never holds Merge & Close or Discard past its timeout on the mod path (writes included), and
@@ -346,29 +346,29 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       per session. Its model calls' usage is
       recorded (`usage_messages`, agent `agentk:learn`), and the usage report carries counts and
       tokens only, never a fact's text.
-- [ ] Meko owns the searches it couldn't answer (its Context Gaps): AgentK never judges a search
+- [ ] Meko owns the searches it couldn't answer (its Context Gaps): Kode never judges a search
       or keeps a query again. It reaches them only through `MekoQuestions` (`mekoquestions.ts`),
-      on the Meko on this computer with the client token, only while AgentK uses that Meko (the
+      on the Meko on this computer with the client token, only while Kode uses that Meko (the
       local token goes nowhere else), and a 404, a failure or no Meko is no list: never a reason a
       project home, a learn step, a move or a close fails or waits long. A learn step marks only
       questions still open in Meko when it writes, in the session's own conversation, for the
       datapack it wrote to; a learn session's seeding asks are forgotten once, when it leaves
-      Explore. AgentK's own MCP client keeps sending `X-Meko-Client: agentk`, so its own searches
+      Explore. Kode's own MCP client keeps sending `X-Meko-Client: kode`, so its own searches
       (at start, the learn step's lookups) never become questions.
 - [ ] Nothing changes Claude Code's Meko setup (its settings, `~/.claude.json`, the plugin) unless
       the user asked: the installer's question (or `--install-deps`), **Connect to Meko** or **Set
-      up Claude Code with this Meko**. A Claude Code token is only ever sent to AgentK's server, and
+      up Claude Code with this Meko**. A Claude Code token is only ever sent to Kode's server, and
       only when Claude Code's settings name that server; messages name hosts, never full URLs or tokens.
-- [ ] Meko owns the agents' connections (AGENTS.md invariant 7). AgentK's server only reads `GET
+- [ ] Meko owns the agents' connections (AGENTS.md invariant 7). Kode's server only reads `GET
       /api/v1/agents` with the client token (`mekoagents.ts`), on events (startup, Settings open,
       Check again, after an agent's setup, a change of the local Meko or its link, a page's claim
       to connect Kiro or OpenCode by itself), never on a timer, and never posts to Meko's agent
       routes; Connect, and that automatic connect, are the page's own call to Meko, with the
-      owner's sign-in. No new check of an agent's `meko` MCP server in AgentK: that's Meko's list.
+      owner's sign-in. No new check of an agent's `meko` MCP server in Kode: that's Meko's list.
       Only new sessions are gated (`Harnesses.statusOf`, through `pick` and `defaultFor`), never a
       running or resumed one; a Meko that doesn't answer leaves the last list read in force (kept
       in `state.db`), and with none ever read, or a 404, nothing is gated; nor is an agent Meko
-      didn't find (`missing`: Meko never sees AgentK's `[<id>] command`). Before refusing one, `pick`
+      didn't find (`missing`: Meko never sees Kode's `[<id>] command`). Before refusing one, `pick`
       reads Meko's list again. A refusal names the fix (`notConnectedText`).
 - [ ] The Meko search at session start (`recall.ts`) never holds up a session: `create()` doesn't
       wait for it, the SessionStart context hook answers within its limit and prints nothing when
@@ -395,9 +395,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The UI only calls routes in `src/shared/types.ts`, and types match on both sides.
 - [ ] Both light and dark themes work; state is shown with shape as well as color.
 - [ ] Copy is plain and specific; errors say how to fix the problem.
-- [ ] The product is called **AgentK** in visible text (never AgentK Local, its old name), and so
+- [ ] The product is called **Kode** in visible text (never AgentK Local, its old name), and so
       is the agent doing the work. Where one sentence needs both, name the part of the product
-      (the AgentK UI, the AgentK server). **Claude** is only for the Claude Code process and its
+      (the Kode UI, the Kode server). **Claude** is only for the Claude Code process and its
       terminal.
 - [ ] The change works on a phone: see [src/web/REVIEW.md](src/web/REVIEW.md) for the phone and touch checks.
 
@@ -415,12 +415,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       changes need no new tests.
 - [ ] **Docs are updated in the same change** (see the table in AGENTS.md): the part of
       `docs/design/` that covers the change (and the contents table in `docs/design.md` for a new
-      part), `docs/features.md`, `docs/install.md`, `README.md` (kept short: the major features, the requirements, the basic install and the common commands), `AGENTS.md` (AgentK's,
+      part), `docs/features.md`, `docs/install.md`, `README.md` (kept short: the major features, the requirements, the basic install and the common commands), `AGENTS.md` (Kode's,
       `src/server/AGENTS.md` or `src/web/AGENTS.md`, or the repo root's for the repo layout), `REVIEW.md` and `src/shared/types.ts`. Stale
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.
 - [ ] The PR title (the squash-merge commit subject) passes the repo root's `scripts/check-title.sh`, its component
-      names where the change is (`agentk` for AgentK, `repo` for root-only changes, a list such as
+      names where the change is (`agentk` for Kode, `repo` for root-only changes, a list such as
       `agentk,meko` only when the change ships in each, since it releases each), and its type
       fits the whole change: `feat`/`fix`/`perf`/`deps` ship a release, `ci`/`test`/`docs`/`nit`/
       `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type or which component fits.

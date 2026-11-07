@@ -147,7 +147,7 @@ export function andList(names: string[]): string {
 /** The merge blocker while reviews are held: the user decides on each first. */
 export function heldBlocker(authors: string[]): string {
   const one = authors.length === 1;
-  return `Send the held ${one ? 'review' : 'reviews'} from ${andList(authors)} to AgentK or dismiss ${one ? 'it' : 'them'}.`;
+  return `Send the held ${one ? 'review' : 'reviews'} from ${andList(authors)} to Kode or dismiss ${one ? 'it' : 'them'}.`;
 }
 
 const STATE_WORDS: Record<string, string> = { CHANGES_REQUESTED: 'requested changes', COMMENTED: 'commented' };

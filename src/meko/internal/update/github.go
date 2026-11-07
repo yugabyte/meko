@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-// DefaultRepo is where Meko's and AgentK's releases are published.
+// DefaultRepo is where Meko's and Kode's releases are published.
 const DefaultRepo = "yugabyte/meko"
 
 // Release is one GitHub release.

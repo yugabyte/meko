@@ -12,7 +12,7 @@ import (
 var forwarded = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Real-Ip"}
 
 // LocalAccess reports whether a request to the web listener with local access is let in (the rule
-// AgentK had for its own local access, which Meko took over with its port):
+// Kode had for its own local access, which Meko took over with its port):
 //   - the connection comes from loopback, and Host names this computer (localhost, 127.0.0.1 or
 //     [::1]), so a DNS-rebound page, which sends its own host name, gets nothing;
 //   - no proxy says it forwarded the request;

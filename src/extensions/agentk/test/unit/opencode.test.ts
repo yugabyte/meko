@@ -16,9 +16,9 @@ import type { SessionRow } from '../../src/server/store.js';
 import { ingestOpenCodeUsage } from '../../src/server/usage.js';
 import { tempDir } from '../helpers.js';
 
-describe("OpenCode's events as AgentK's", () => {
+describe("OpenCode's events as Kode's", () => {
   it.each([
-    ['the plugin loading', { hook_event_name: 'agentk.start', source: 'resume', session_id: 'ses_1' }, { hook_event_name: 'SessionStart', source: 'resume', agent_session_id: 'ses_1' }],
+    ['the plugin loading', { hook_event_name: 'kode.start', source: 'resume', session_id: 'ses_1' }, { hook_event_name: 'SessionStart', source: 'resume', agent_session_id: 'ses_1' }],
     ['a prompt', { hook_event_name: 'chat.message', session_id: 'ses_1' }, { hook_event_name: 'UserPromptSubmit', agent_session_id: 'ses_1' }],
     ['an edit the guard checks', { hook_event_name: 'tool.execute.before', tool: 'write', args: { path: 'a.ts' }, session_id: 'ses_1' },
       { hook_event_name: 'PreToolUse', tool_name: 'write', tool_input: { path: 'a.ts' }, agent_session_id: 'ses_1' }],
@@ -29,7 +29,7 @@ describe("OpenCode's events as AgentK's", () => {
     ['its answer', { hook_event_name: 'permission.replied' }, { hook_event_name: 'PostToolUse' }],
     ['the end of a turn', { hook_event_name: 'session.idle', session_id: 'ses_1' }, { hook_event_name: 'Stop', agent_session_id: 'ses_1' }],
     ['the end of a turn the user interrupted', { hook_event_name: 'session.idle', interrupted: true, session_id: 'ses_1' }, { hook_event_name: 'Stop', interrupted: true, agent_session_id: 'ses_1' }],
-    ['background work ending between turns', { hook_event_name: 'agentk.background', background_tasks: [], session_id: 'ses_1' },
+    ['background work ending between turns', { hook_event_name: 'kode.background', background_tasks: [], session_id: 'ses_1' },
       { hook_event_name: 'BackgroundTasks', background_tasks: [], agent_session_id: 'ses_1' }],
     ['anything else', { hook_event_name: 'session.compacted' }, null],
   ])('%s', (_, raw, expected) => {
@@ -46,15 +46,15 @@ describe("an OpenCode session's command line", () => {
     expect(openCodeArgs(o)).toEqual(expected);
   });
 
-  it('leaves a PR head’s own config out, and gives AgentK’s plugin, instructions and design folder, and its session tools to a trusted session', () => {
+  it('leaves a PR head’s own config out, and gives Kode’s plugin, instructions and design folder, and its session tools to a trusted session', () => {
     const paths = getPaths(tempDir('akl-oc-'));
     const h = openCodeHarness({ paths, log: silentLogger, changed: () => undefined });
     const row = { id: 's1', worktree_path: '/w', agent_session_id: null } as SessionRow;
     const spec = h.launcher(paths, structuredClone(DEFAULT_CONFIG), {
-      row, resume: false, prompt: 'hi', model: null, systemPrompt: 'This OpenCode session is managed by AgentK.', addDirs: ['/designs/s1'], modDir: null, planMode: false,
-      env: { AK_SESSION: 's1' }, termTheme: 'dark', unsetEnv: [], untrusted: true, tools: false,
+      row, resume: false, prompt: 'hi', model: null, systemPrompt: 'This OpenCode session is managed by Kode.', addDirs: ['/designs/s1'], modDir: null, planMode: false,
+      env: { KODE_SESSION: 's1' }, termTheme: 'dark', unsetEnv: [], untrusted: true, tools: false,
     });
-    expect(spec.env).toMatchObject({ AK_SESSION: 's1', AK_OPENCODE_SOURCE: 'startup', OPENCODE_DISABLE_PROJECT_CONFIG: '1' });
+    expect(spec.env).toMatchObject({ KODE_SESSION: 's1', KODE_OPENCODE_SOURCE: 'startup', OPENCODE_DISABLE_PROJECT_CONFIG: '1' });
     // Meko is off here: no Meko server for it.
     expect(spec.env).not.toHaveProperty('OPENCODE_CONFIG');
     // OpenCode's session tabs off, by its 2.0.20+ key and the legacy one before it.
@@ -64,18 +64,18 @@ describe("an OpenCode session's command line", () => {
       plugin: [openCodePluginPath(paths)], instructions: [expect.stringMatching(/sessions\/s1\/system\.md$/)],
       permission: { external_directory: { '/designs/s1/*': 'allow' } },
     });
-    expect(readFileSync(cfg.instructions[0], 'utf8')).toBe('This OpenCode session is managed by AgentK.\n');
+    expect(readFileSync(cfg.instructions[0], 'utf8')).toBe('This OpenCode session is managed by Kode.\n');
     // The session tools: their MCP server, their skill's folder, and an ask before each tool that changes something.
     const trusted = h.launcher(paths, structuredClone(DEFAULT_CONFIG), {
       row, resume: false, prompt: 'hi', model: null, systemPrompt: '', addDirs: ['/designs/s1'], modDir: null, planMode: false,
       env: {}, termTheme: 'dark', unsetEnv: [], untrusted: false, tools: true,
     });
     expect(JSON.parse(trusted.env.OPENCODE_CONFIG_CONTENT)).toMatchObject({
-      mcp: { agentk_sessions: { type: 'local', command: expect.arrayContaining([process.execPath, expect.stringMatching(/mcpmain\.ts$/)]) } },
+      mcp: { kode_sessions: { type: 'local', command: expect.arrayContaining([process.execPath, expect.stringMatching(/mcpmain\.ts$/)]) } },
       skills: { paths: [join(paths.run, 'tools', 'skills')] },
       permission: {
         external_directory: { '/designs/s1/*': 'allow' },
-        agentk_sessions_start_sessions: 'ask', agentk_sessions_move_session: 'ask', agentk_sessions_open_pr: 'ask', agentk_sessions_open_project: 'ask',
+        kode_sessions_start_sessions: 'ask', kode_sessions_move_session: 'ask', kode_sessions_open_pr: 'ask', kode_sessions_open_project: 'ask',
       },
     });
   });
@@ -100,20 +100,20 @@ describe("an OpenCode session's command line", () => {
       row: { id: 's1', worktree_path: '/w', agent_session_id: null } as SessionRow, resume: false, prompt: null, model: null, systemPrompt: '', addDirs: [],
       modDir: null, planMode: false, env: {}, termTheme: 'dark', unsetEnv: [], untrusted: false, tools: false,
       review: { runDir: '/run/reviews/r1', agents: [
-        { name: 'agentk-review-large', tier: 'large', description: 'A step.', prompt: 'Do the step.', model: 'anthropic/big' },
-        { name: 'agentk-review-small', tier: 'small', description: 'A step.', prompt: 'Do the step.', model: '' },
+        { name: 'kode-review-large', tier: 'large', description: 'A step.', prompt: 'Do the step.', model: 'anthropic/big' },
+        { name: 'kode-review-small', tier: 'small', description: 'A step.', prompt: 'Do the step.', model: '' },
       ] },
     });
     const cfg = JSON.parse(spec.env.OPENCODE_CONFIG_CONTENT);
     const readOnly = { edit: 'deny', bash: 'deny', webfetch: 'deny' };
     expect(cfg.agent).toEqual({
-      'agentk-review-large': { description: 'A step.', mode: 'subagent', prompt: 'Do the step.', model: 'anthropic/big', permission: readOnly },
-      'agentk-review-small': { description: 'A step.', mode: 'subagent', prompt: 'Do the step.', permission: readOnly },
+      'kode-review-large': { description: 'A step.', mode: 'subagent', prompt: 'Do the step.', model: 'anthropic/big', permission: readOnly },
+      'kode-review-small': { description: 'A step.', mode: 'subagent', prompt: 'Do the step.', permission: readOnly },
     });
     expect(cfg.permission).toMatchObject(readOnly);
   });
 
-  it.each([false, true])("sends no telemetry, checks for no update and offers no free models, in sessions and Ask AgentK, only while [opencode] disable_tracking is %s", (off) => {
+  it.each([false, true])("sends no telemetry, checks for no update and offers no free models, in sessions and Ask Kode, only while [opencode] disable_tracking is %s", (off) => {
     const paths = getPaths(tempDir('akl-oc-'));
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.opencode.disableTracking = off;
@@ -255,7 +255,7 @@ describe('OpenCode outside its sessions', () => {
     expect(openCodeCanResume(log, 'ses_gone', data)).toBe(false);
   });
 
-  it("reads an Ask AgentK run's answer, session and error", () => {
+  it("reads an Ask Kode run's answer, session and error", () => {
     const ev = (e: object) => JSON.stringify({ timestamp: 1, sessionID: 'ses_a', ...e });
     expect(readOpenCodeRun([ev({ type: 'step_start', part: {} }), ev({ type: 'text', part: { text: '{"reply":' } }), ev({ type: 'text', part: { text: '"ok"}' } }), 'noise'].join('\n')))
       .toEqual({ text: '{"reply":\n"ok"}', sessionId: 'ses_a', error: null });
@@ -263,9 +263,9 @@ describe('OpenCode outside its sessions', () => {
       .toEqual({ text: '', sessionId: 'ses_a', error: 'No API key' });
   });
 
-  it("writes AgentK's plugin once, never over a copy a session loaded, and the plugin does nothing without a session's variables", async () => {
+  it("writes Kode's plugin once, never over a copy a session loaded, and the plugin does nothing without a session's variables", async () => {
     const paths = getPaths(tempDir('akl-oc-plugin-'));
-    // The plugin file of AgentK before OpenCode 2.
+    // The plugin file of Kode before OpenCode 2.
     mkdirSync(join(paths.run, 'opencode'), { recursive: true });
     writeFileSync(join(paths.run, 'opencode', 'agentk-plugin.js'), '');
     writeOpenCodePlugin(paths);
@@ -276,7 +276,7 @@ describe('OpenCode outside its sessions', () => {
     expect(statSync(file)).toMatchObject({ ino: before.ino, mtimeMs: before.mtimeMs });
     expect(existsSync(join(paths.run, 'opencode', 'agentk-plugin.js'))).toBe(false);
     const mod = (await import(pathToFileURL(file).href)) as { default: { id: string; setup: (ctx: object) => Promise<unknown> } };
-    expect(mod.default.id).toBe('agentk');
+    expect(mod.default.id).toBe('kode');
     expect(await mod.default.setup({ location: { directory: '/w' } })).toBeUndefined();
   });
 });

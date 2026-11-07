@@ -18,20 +18,20 @@ func TestExtensionListShowsEachExtension(t *testing.T) {
 	noRealExtensions(t)
 	code, out, errs := run("extension", "list", "--data-dir", dir)
 	want(t, "nothing installed", code, 0, out+errs, "EXTENSION   STATE           VERSION   UPDATES\n"+
-		"AgentK      not installed\nPresenter   not installed\n")
+		"Kode        not installed\nPresenter   not installed\n")
 
 	const version = "0.20261030.0"
 	installedAgentK(t, dir, version)
 	code, out, _ = run("extension", "list", "--data-dir", dir)
-	want(t, "AgentK stopped", code, 0, out, "AgentK      not running     "+version+"   automatic")
-	if err := os.WriteFile(filepath.Join(extensions.Dir(dir, "agentk"), "running"), nil, 0o600); err != nil {
+	want(t, "Kode stopped", code, 0, out, "Kode        not running     "+version+"   automatic")
+	if err := os.WriteFile(filepath.Join(extensions.Dir(dir, "kode"), "running"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out, _ = run("extension", "update", "agentk", "--auto=off", "--data-dir", dir)
+	code, out, _ = run("extension", "update", "kode", "--auto=off", "--data-dir", dir)
 	want(t, "--auto=off", code, 0, out, "")
 	code, out, _ = run("extension", "list", "--data-dir", dir)
-	want(t, "AgentK running", code, 0, out,
-		"AgentK      running         "+version+"   by hand (meko extension update agentk)")
+	want(t, "Kode running", code, 0, out,
+		"Kode        running         "+version+"   by hand (meko extension update kode)")
 
 	// Presenter from source: no version, and why Meko doesn't update it.
 	src := filepath.Join(t.TempDir(), "me_present")
@@ -46,9 +46,9 @@ func TestExtensionListShowsEachExtension(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &rows); err != nil || code != 0 || len(rows) != 2 {
 		t.Fatalf("--json: exit %d, %v, %q", code, err, out)
 	}
-	if r := rows[0]; r.Name != "agentk" || !r.Installed || r.State != extRunning || r.Version != version ||
+	if r := rows[0]; r.Name != "kode" || !r.Installed || r.State != extRunning || r.Version != version ||
 		r.AutoUpdate || !r.Updatable {
-		t.Errorf("AgentK's row %+v", r)
+		t.Errorf("Kode's row %+v", r)
 	}
 	if r := rows[1]; r.Name != "present" || r.State != extRunning || r.Command != src || r.Updatable ||
 		r.NotUpdatable == "" || r.RolledBack == nil {
@@ -65,12 +65,12 @@ func TestExtensionListDamagedAndSlow(t *testing.T) {
 	extensions.StatusTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { extensions.StatusTimeout = old })
 	missing := filepath.Join(t.TempDir(), "gone", "me_present")
-	// AgentK's command moved into its release install in the data folder, where Find looks.
-	moved := filepath.Join(extensions.Dir(dir, "agentk"), "app", "current", "bin", "agentk")
+	// Kode's command moved into its release install in the data folder, where Find looks.
+	moved := filepath.Join(extensions.Dir(dir, "kode"), "app", "current", "bin", "agentk")
 	fakeExtension(t, moved)
 	reg, _ := extensions.Load(dir)
 	reg.Entries["present"] = extensions.Entry{Command: missing}
-	reg.Entries["agentk"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "agentk")}
+	reg.Entries["kode"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "agentk")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestExtensionListDamagedAndSlow(t *testing.T) {
 	code, out, _ := run("extension", "list", "--data-dir", dir)
 	want(t, "damaged", code, 0, out, "Presenter   damaged ("+missing+" is missing)")
 	want(t, "damaged", code, 0, out, "meko extension delete present forgets it")
-	want(t, "found again", code, 0, out, "AgentK      running")
+	want(t, "found again", code, 0, out, "Kode        running")
 	if after, _ := os.ReadFile(extensions.File(dir)); string(after) != string(before) {
 		t.Errorf("list changed the registry:\n%s", after)
 	}

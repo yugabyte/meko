@@ -161,7 +161,7 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
-    // Back to schema 16: undo 50 (workshop projects), 49 (a session's model), 48 (agents stopped for sitting idle), 43 (code reviews), 42 (the work queue), 41 (Run to merge), 40 (a session's purpose), 39 (positions), 38 (untrusted PR heads), 37 (harnesses and Kiro's credits), 36 (held reviews), 34 (What Meko doesn't know, which 45 dropped again), 33 (share contacts), 32 (Ask AgentK's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
+    // Back to schema 16: undo 50 (workshop projects), 49 (a session's model), 48 (agents stopped for sitting idle), 43 (code reviews), 42 (the work queue), 41 (Run to merge), 40 (a session's purpose), 39 (positions), 38 (untrusted PR heads), 37 (harnesses and Kiro's credits), 36 (held reviews), 34 (What Meko doesn't know, which 45 dropped again), 33 (share contacts), 32 (Ask Kode's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
     // (sessions.meko_agent_id, project_events), 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*)
     // and 17 (Meko calls), then upgrade again.
     db.exec('DROP TABLE code_review_steps; DROP TABLE code_reviews; DROP TABLE work_item_links; DROP TABLE work_items; DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs; DROP TABLE agentk_asks; DROP TABLE share_contacts; DROP TABLE held_reviews');
@@ -307,7 +307,7 @@ describe('what Meko saved', () => {
     expect(projectUsage(db, 'p').total.output).toBe(300);
   });
 
-  it('credits a seed AgentK passed at start like a search by the first response, once there is one', () => {
+  it('credits a seed Kode passed at start like a search by the first response, once there is one', () => {
     const { dir, db } = setup();
     recordPreload(db, 's1', { outcome: 'found', results: 2, chars: 4000, ms: 900 });
     // No response yet: nothing to credit it against.
@@ -433,7 +433,7 @@ describe('Meko in the first turn', () => {
     expect(endAt(db, 's2')).toBe(Date.parse(at(2)));
   });
 
-  it('counts the tokens Meko brought into first turns: searches before the turn ended, and what AgentK passed at startup', () => {
+  it('counts the tokens Meko brought into first turns: searches before the turn ended, and what Kode passed at startup', () => {
     const { dir, db } = setup();
     addDatapack(db);
     for (const id of ['s2', 's3', 's4', 's5', 's6']) addSession(db, id);
@@ -446,8 +446,8 @@ describe('Meko in the first turn', () => {
       ingestSessionUsage(db, id, f);
     };
     // s1: a search in the first turn, and one that found nothing. s2: a search only after it. s3:
-    // nothing, but AgentK's search passed something. s4: both. s5: its first turn hasn't ended. s6:
-    // from before AgentK searched at start.
+    // nothing, but Kode's search passed something. s4: both. s5: its first turn hasn't ended. s6:
+    // from before Kode searched at start.
     write('s1', call('m1', [['a', 'mcp__meko__context_search'], ['z', 'mcp__meko__memory_search']], { at: at(0) }) + result('a', found) +
       result('z', wrapped({ results: [] })) + reply('m2', at(1), 'end_turn'));
     write('s2', reply('m1', at(0), 'end_turn') + call('m2', [['b', 'mcp__meko__context_search']], { at: at(5) }) + result('b', found));

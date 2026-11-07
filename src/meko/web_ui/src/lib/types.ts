@@ -84,7 +84,7 @@ export interface MekoCall {
   conversation_n: number;
   // Whether the tool only reads, as its definition says; in a turn's trace only.
   read_only?: boolean;
-  // On the Calls page's calls only: its ids, "agentk" for AgentK's own calls, and whether what it sent
+  // On the Calls page's calls only: its ids, "kode" for Kode's own calls, and whether what it sent
   // and got back is kept.
   datapack_id?: string;
   conversation_id?: string;
@@ -529,6 +529,8 @@ export interface AuthStatus {
 // installed, web_ui or description.
 export interface Extension {
   name: string;
+  // On a row under an old name: the extension's name now. Such rows are left out.
+  renamed_to?: string;
   title: string;
   description?: string;
   installed?: boolean;

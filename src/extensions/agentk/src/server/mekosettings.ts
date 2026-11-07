@@ -8,7 +8,7 @@ import { kiroMekoGaps } from './mekokiro.js';
 import { HttpError } from './projects.js';
 
 /**
- * What Settings › Harness needs to set Meko's capture up in the agents with AgentK's Meko; tests swap
+ * What Settings › Harness needs to set Meko's capture up in the agents with Kode's Meko; tests swap
  * them out. Their `meko` MCP server is Meko's: the page connects it through Meko's own route first.
  */
 export interface MekoTools {
@@ -56,9 +56,9 @@ function manualFor(core: Core, url: string, client: MekoSetupClient): string {
 const NO_MEKO = "Meko isn't running on this computer: start it with meko start.";
 
 /**
- * Runs Meko's setup for Claude Code with AgentK's Meko, only while what Meko's capture needs is
+ * Runs Meko's setup for Claude Code with Kode's Meko, only while what Meko's capture needs is
  * missing (`MekoStatus.claude.capture`, checked again first); false when it had nothing to do.
- * AgentK keeps no key of its own: Meko owns the link.
+ * Kode keeps no key of its own: Meko owns the link.
  */
 export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<boolean> {
   const meko = resolveMeko();
@@ -81,10 +81,10 @@ export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<boo
 }
 
 /**
- * Runs Meko's setup for Kiro with AgentK's Meko, only while the agent Kiro sessions are built from
+ * Runs Meko's setup for Kiro with Kode's Meko, only while the agent Kiro sessions are built from
  * doesn't load Kiro's MCP config (`kiroMekoGaps`); false when it had nothing to do. It makes its own
- * agent, with the capture hooks, Kiro's default (which Kiro sessions' `agentk` agent is built from),
- * and writes its MCP server and key in Kiro's MCP config too. AgentK's own config is left as it is:
+ * agent, with the capture hooks, Kiro's default (which Kiro sessions' `kode` agent is built from),
+ * and writes its MCP server and key in Kiro's MCP config too. Kode's own config is left as it is:
  * Kiro keeps its key in its own file.
  */
 export async function setUpKiroMeko(core: Core, tools: MekoTools): Promise<boolean> {

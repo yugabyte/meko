@@ -1,6 +1,6 @@
 // Package callhome sends Meko's usage stats to YugabyteDB's call home service
 // (DefaultURL): a heartbeat of counts once a day, every hour in
-// an install's first day, on AgentK's schedule (src/extensions/agentk/src/server/callhome.ts). The body
+// an install's first day, on Kode's schedule (src/extensions/agentk/src/server/callhome.ts). The body
 // is yugabyted's envelope with Meko's report as its payload; the service routes it by callhome_type
 // to a table of its own.
 //
@@ -29,7 +29,7 @@ import (
 // names another.
 const DefaultURL = "https://diagnostics.meko.yugabyte.com"
 
-// The schedule, AgentK's.
+// The schedule, Kode's.
 const (
 	// CheckEvery is how often the sender checks whether a report is due.
 	CheckEvery = time.Hour
@@ -67,7 +67,7 @@ const (
 const OffByWebUI = "web UI"
 
 // Clients are the agent_id prefixes reported by name; the rest are "other", and no agent_id is "none".
-var Clients = []string{"claude_code", "claude_desktop", "cursor", "codex", "kiro", "agentk", "meko_cli", "meko_web_ui"}
+var Clients = []string{"claude_code", "claude_desktop", "cursor", "codex", "kiro", "kode", "meko_cli", "meko_web_ui"}
 
 // Install is what the report says about the install.
 type Install struct {
@@ -159,8 +159,8 @@ func Client(agentID string) string {
 	switch c {
 	case "", "meko_agent":
 		return "none"
-	case "agent-k-local": // the agent_id AgentK has always sent
-		return "agentk"
+	case "agent-k-local", "agentk": // the agent_id Kode has always sent, and its name in Meko before
+		return "kode"
 	}
 	for _, k := range Clients {
 		if c == k {

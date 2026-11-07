@@ -8,8 +8,8 @@ import type { ReviewOverrides } from '../../shared/codereview';
 import { inheritedReview, useReviewDefaults } from '../reviewdefaults';
 
 /**
- * Open PR with instructions for AgentK, sent after the PR prompt (`OpenPrRequest`); Review Changes
- * with instructions when the press starts AgentK's code review first, as its Code review fields stand
+ * Open PR with instructions for Kode, sent after the PR prompt (`OpenPrRequest`); Review Changes
+ * with instructions when the press starts Kode's code review first, as its Code review fields stand
  * (`openPrReviews`). Mid-turn it
  * queues, as the gate does, and the instructions wait with it. With an Open PR queued already, it
  * opens on the instructions it goes with (`Session.queuedInstructions`), and saving replaces them:
@@ -37,7 +37,7 @@ export function OpenPrDialog({ session, projectReview, onClose }: {
   const queued = session.queued === 'open-pr' && waits;
   const blocker =
     (session.stage !== 'code' ? 'Open PR is only available in the Code stage.' : null) ??
-    (session.busy ? 'Wait for AgentK to finish.' : null) ??
+    (session.busy ? 'Wait for Kode to finish.' : null) ??
     pr.reason ??
     instructionsBlocker(instructions);
 
@@ -86,13 +86,13 @@ export function OpenPrDialog({ session, projectReview, onClose }: {
           autoFocus={!touch}
           hint={
             queued
-              ? 'They go after the PR prompt when AgentK finishes its turn. Empty the box to send none.'
+              ? 'They go after the PR prompt when Kode finishes its turn. Empty the box to send none.'
               : waits
                 ? reviews
-                  ? 'AgentK is mid-turn: its code review starts when the turn ends, and these go with the PR prompt after it.'
-                  : 'AgentK is mid-turn: the PR prompt and these go when the turn ends.'
+                  ? 'Kode is mid-turn: its code review starts when the turn ends, and these go with the PR prompt after it.'
+                  : 'Kode is mid-turn: the PR prompt and these go when the turn ends.'
                 : reviews
-                  ? "Sent after the PR prompt, which goes once AgentK's code review is done and commits, pushes and opens (or updates) the pull request."
+                  ? "Sent after the PR prompt, which goes once Kode's code review is done and commits, pushes and opens (or updates) the pull request."
                   : 'Sent after the PR prompt, which commits, pushes and opens (or updates) the pull request.'
           }
           placeholder="e.g. Open it as a draft, and target release-2.4."

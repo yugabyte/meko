@@ -49,7 +49,7 @@ function setup() {
 }
 
 describe("Kiro's plan reading", () => {
-  it('reads only once Kiro has been used in AgentK, keeps the last reading through a failure and a restart', async () => {
+  it('reads only once Kiro has been used in Kode, keeps the last reading through a failure and a restart', async () => {
     const t = setup();
     const store = t.make();
     t.session('c', 'claude');
@@ -58,8 +58,8 @@ describe("Kiro's plan reading", () => {
     t.session('k', 'kiro');
     await store.refresh();
     // As an inert agent written in the run's folder, never the user's default one.
-    expect(t.runs).toEqual([['chat', '--no-interactive', '--output-format', 'stream-json', '--agent', 'agentk-usage', '/usage']]);
-    expect(existsSync(join(t.cwd, '.kiro', 'agents', 'agentk-usage.json'))).toBe(true);
+    expect(t.runs).toEqual([['chat', '--no-interactive', '--output-format', 'stream-json', '--agent', 'kode-usage', '/usage']]);
+    expect(existsSync(join(t.cwd, '.kiro', 'agents', 'kode-usage.json'))).toBe(true);
     expect(store.current()).toMatchObject({ used: 10, covered: 50, plan: 'Free' });
     expect(t.changes()).toBe(1);
     // Signed out, say: the last reading stays.

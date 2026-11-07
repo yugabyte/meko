@@ -7,9 +7,9 @@ import { Busy, Dialog, ErrorText, Field, InstructionsField } from './common';
 
 /** What the instructions box says it does, by whether the move sends the new stage's prompt. */
 function instructionsHint(stage: MoveTarget, sendsPrompt: boolean): string {
-  if (stage === 'review') return 'Sent after the PR prompt (which waits for the code review, when it’s on), or on their own if AgentK picks up the branch’s open PR.';
-  if (sendsPrompt) return `AgentK gets the ${STAGE_LABELS[stage]} instructions; anything you write here goes after them.`;
-  return 'Tell AgentK what to do now. Left empty, AgentK isn’t sent anything.';
+  if (stage === 'review') return 'Sent after the PR prompt (which waits for the code review, when it’s on), or on their own if Kode picks up the branch’s open PR.';
+  if (sendsPrompt) return `Kode gets the ${STAGE_LABELS[stage]} instructions; anything you write here goes after them.`;
+  return 'Tell Kode what to do now. Left empty, Kode isn’t sent anything.';
 }
 
 /** Where the dialog starts: a stage clicked in the stage bar. */
@@ -33,7 +33,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
   const blocker =
     moveBlockedIn(session.stage) ??
     moveError(session, stage) ??
-    (midTurn ? 'Wait for AgentK to finish its turn.' : null) ??
+    (midTurn ? 'Wait for Kode to finish its turn.' : null) ??
     (types ? promptBlocker(session) : null) ??
     instructionsBlocker(instructions);
 
@@ -98,7 +98,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
           </div>
         </div>
         {asksTask && (
-          <Field label="Task (optional)" hint="This session has no task yet. AgentK works on this from now on; left empty, it carries on from the conversation.">
+          <Field label="Task (optional)" hint="This session has no task yet. Kode works on this from now on; left empty, it carries on from the conversation.">
             <textarea id="mv-task" className="input" rows={3} value={task} onChange={(e) => setTask(e.target.value)} />
           </Field>
         )}

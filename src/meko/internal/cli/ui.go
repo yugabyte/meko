@@ -65,7 +65,7 @@ func runUI(l paths.Layout, stdout, stderr io.Writer) int {
 		return fail(stderr, errWebOff)
 	}
 	if !w.Listening {
-		// Another program may hold the port (an AgentK from before Meko served it): don't open its page.
+		// Another program may hold the port (a Kode from before Meko served it): don't open its page.
 		why := w.Error
 		if why == "" {
 			why = "it's starting"

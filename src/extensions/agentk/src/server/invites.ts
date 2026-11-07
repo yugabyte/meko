@@ -73,10 +73,10 @@ export class InviteService {
   /**
    * Refuses when there's no Meko to share through. Whether that Meko shares (one not linked to Meko
    * Cloud doesn't) is Meko's to say: its refusal is the error (`apiFailure`). `what` finishes
-   * "AgentK can't …".
+   * "Kode can't …".
    */
   requireSharing(what: string): void {
-    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko isn't running on this computer, so AgentK can't ${what}. Start it with meko start.`);
+    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko isn't running on this computer, so Kode can't ${what}. Start it with meko start.`);
   }
 
   /**
@@ -86,7 +86,7 @@ export class InviteService {
    */
   apiFailure(e: unknown, prefix: string): Error {
     if (!(e instanceof MekoApiError)) return e instanceof Error ? e : new Error(String(e));
-    if (e.status === 401) return new HttpError(502, `${prefix}: AgentK's token wasn't accepted (${e.message}). Run meko restart, then try again.`);
+    if (e.status === 401) return new HttpError(502, `${prefix}: Kode's token wasn't accepted (${e.message}). Run meko restart, then try again.`);
     const status = e.status === 422 ? 400 : [400, 403, 404, 409].includes(e.status) ? e.status : 502;
     return new HttpError(status, `${prefix}: ${e.message}`);
   }

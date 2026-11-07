@@ -1,17 +1,18 @@
-name: AgentK release
+name: Kode release
 
 # Versions are 0.<UTC date YYYYMMDD>.<n>, n counting from 0 for each release that day, tagged
-# agentk-v<version> (v<version> before releases were tagged by product).
-# A push to main cuts a release when it contains AgentK's feat/fix/perf/deps commits (component
+# kode-v<version> (agentk-v<version> before Meko called it Kode, v<version> before releases were
+# tagged by product).
+# A push to main cuts a release when it contains Kode's feat/fix/perf/deps commits (component
 # agentk or repo, alone or in a list such as agentk,meko; commits naming only meko release Meko, in
 # meko-release.yml, only present release Presenter, in present-release.yml, and only meko and present
-# both of those, never AgentK) since the last
+# both of those, never Kode) since the last
 # release tag and the tests pass. The release scripts are the repo
 # root's scripts/release/*.sh --product agentk.
 # Run the workflow by hand to force a release, or to rebuild the assets of an existing tag (one
 # from after the move to src/extensions/agentk).
 #
-# AgentK lives in src/extensions/agentk: jobs that run its scripts or npm work there.
+# Kode lives in src/extensions/agentk: jobs that run its scripts or npm work there.
 
 on:
   push:
@@ -23,7 +24,7 @@ on:
         type: boolean
         default: false
       tag:
-        description: Rebuild assets for this existing agentk-v or v tag instead (one from after the move to src/extensions/agentk)
+        description: Rebuild assets for this existing kode-v, agentk-v or v tag instead (one from after the move to src/extensions/agentk)
         required: false
 
 # Read-only by default: only publish, which runs none of the dependency installs or tests,
@@ -65,19 +66,20 @@ jobs:
         run: |
           set -eu
           if [ -n "${DISPATCH_TAG:-}" ]; then
-            # Only AgentK's own tags: agentk-v<version>, or v<version> from before releases were tagged by
-            # product. A meko-v… tag is Meko's release (meko-release.yml), and this would replace its
-            # installer and checksums.
+            # Only Kode's own tags: kode-v<version>; agentk-v<version> from before Meko called it
+            # Kode, or v<version> from before releases were tagged by product. A meko-v… tag is
+            # Meko's release (meko-release.yml), and this would replace its installer and checksums.
             case $DISPATCH_TAG in
-              agentk-v[0-9]*|v[0-9]*) ;;
-              *) echo "$DISPATCH_TAG isn't an AgentK release tag (agentk-v<version> or v<version>)"; exit 1 ;;
+              kode-v[0-9]*|agentk-v[0-9]*|v[0-9]*) ;;
+              *) echo "$DISPATCH_TAG isn't a Kode release tag (kode-v<version>, agentk-v<version> or v<version>)"; exit 1 ;;
             esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
-            # This workflow builds from src/extensions/agentk; older tags have AgentK in extensions/agentk
+            # This workflow builds from src/extensions/agentk; older tags have it in extensions/agentk
             # or at the repo root.
             git cat-file -e "$DISPATCH_TAG:src/extensions/agentk/package.json" 2>/dev/null ||
-              { echo "$DISPATCH_TAG is from before AgentK moved to src/extensions/agentk and can't be rebuilt"; exit 1; }
-            version=${DISPATCH_TAG#agentk-v}
+              { echo "$DISPATCH_TAG is from before Kode moved to src/extensions/agentk and can't be rebuilt"; exit 1; }
+            version=${DISPATCH_TAG#kode-v}
+            version=${version#agentk-v}
             version=${version#v}
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=$version"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
             exit 0
@@ -85,7 +87,7 @@ jobs:
           if sh ../../../scripts/release/release-notes.sh --product agentk > /dev/null || [ "${FORCE:-false}" = "true" ]; then
             version=$(sh ../../../scripts/release/next-version.sh --product agentk)
             echo "Releasing $version"
-            { echo "release=true"; echo "rebuild=false"; echo "tag=agentk-v$version"; echo "version=$version"; echo "ref=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
+            { echo "release=true"; echo "rebuild=false"; echo "tag=kode-v$version"; echo "version=$version"; echo "ref=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
           else
             echo "Nothing to release: no feat/fix/perf/deps commits since the last release."
             echo "release=false" >> "$GITHUB_OUTPUT"
@@ -215,13 +217,16 @@ jobs:
         run: |
           set -eu
           mkdir -p /tmp/smoke
-          tar -xzf out/agentk-*.tar.gz -C /tmp/smoke
-          v=$(/tmp/smoke/agentk-*/bin/me_kode version)
+          # kode-<version>; agentk-<version> in a rebuild of a release from before Meko called it Kode.
+          pkg=kode
+          ls out/kode-*.tar.gz >/dev/null 2>&1 || pkg=agentk
+          tar -xzf out/"$pkg"-*.tar.gz -C /tmp/smoke
+          v=$(/tmp/smoke/"$pkg"-*/bin/me_kode version)
           test "$v" = "$VERSION"
-          /tmp/smoke/agentk-*/bin/me_kode selftest
+          /tmp/smoke/"$pkg"-*/bin/me_kode selftest
           # Its name before, which services installed then and older Mekos run.
-          /tmp/smoke/agentk-*/bin/agentk selftest
-          # The copy under the old name, by the path installs from before the rename to AgentK run.
+          /tmp/smoke/"$pkg"-*/bin/agentk selftest
+          # The copy under the old name, by the path installs from before the rename to Kode run.
           tar -xzf out/agent-k-local-*.tar.gz -C /tmp/smoke
           /tmp/smoke/agent-k-local-*/bin/agent-k-local selftest
 
@@ -295,13 +300,16 @@ jobs:
           set -eu
           smoke="$RUNNER_TEMP/smoke"
           mkdir -p "$smoke"
-          tar -xzf out/agentk-*.tar.gz -C "$smoke"
-          v=$("$smoke"/agentk-*/bin/me_kode version)
+          # kode-<version>; agentk-<version> in a rebuild of a release from before Meko called it Kode.
+          pkg=kode
+          ls out/kode-*.tar.gz >/dev/null 2>&1 || pkg=agentk
+          tar -xzf out/"$pkg"-*.tar.gz -C "$smoke"
+          v=$("$smoke"/"$pkg"-*/bin/me_kode version)
           test "$v" = "$VERSION"
-          "$smoke"/agentk-*/bin/me_kode selftest
+          "$smoke"/"$pkg"-*/bin/me_kode selftest
           # Its name before, which services installed then and older Mekos run.
-          "$smoke"/agentk-*/bin/agentk selftest
-          # The copy under the old name, by the path installs from before the rename to AgentK run.
+          "$smoke"/"$pkg"-*/bin/agentk selftest
+          # The copy under the old name, by the path installs from before the rename to Kode run.
           tar -xzf out/agent-k-local-*.tar.gz -C "$smoke"
           "$smoke"/agent-k-local-*/bin/agent-k-local selftest
 
@@ -403,7 +411,7 @@ jobs:
           set -eu
           sh scripts/release/release-notes.sh --product agentk > notes.md || echo "Maintenance release." > notes.md
           # Not "latest": the repo's latest release is Meko's (meko-release.yml), whose installer
-          # is the one-line install. Meko installs AgentK from these tarballs; install.sh is a stub
+          # is the one-line install. Meko installs Kode from these tarballs; install.sh is a stub
           # that tells an older Meko, which still runs it, to update first.
           gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY" \
             dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/SHA256SUMS.sig dist-release/install.sh

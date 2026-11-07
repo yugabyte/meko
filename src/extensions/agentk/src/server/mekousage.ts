@@ -248,7 +248,7 @@ interface CallRow {
   project_id: string;
   session_id: string;
   tool: string;
-  /** `seed`: what AgentK's search at session start passed to Claude, which counts only toward the savings. */
+  /** `seed`: what Kode's search at session start passed to Claude, which counts only toward the savings. */
   kind: MekoKind | 'seed';
   outcome: MekoOutcome | null;
   result_chars: number | null;
@@ -265,7 +265,7 @@ interface CallRow {
 const SEARCH_LIST = [...SEARCH_TOOLS].map((t) => `'${t}'`).join(', ');
 
 /**
- * Every Meko call, for one project, one session or all of them, plus a `seed` row for each session that AgentK's
+ * Every Meko call, for one project, one session or all of them, plus a `seed` row for each session that Kode's
  * search at start passed something to. A seed is credited like a search made by the session's first
  * response: its context (less the seed itself, which a search's context doesn't hold yet), model, and
  * the responses after it. A seed waits for that first response. A found search with no context
@@ -344,8 +344,8 @@ export function summarizeMeko(rows: CallRow[]): MekoUsage {
 /**
  * Sessions whose first turn has ended, for one project or all of them, and about how many tokens
  * Meko brought into it: Claude's own lookups (from any agent) that found something up to the
- * turn's end, and what AgentK's search at start passed over. Also how many had a search at start at
- * all, since sessions from before AgentK searched at start had none. Only sessions in projects with
+ * turn's end, and what Kode's search at start passed over. Also how many had a search at start at
+ * all, since sessions from before Kode searched at start had none. Only sessions in projects with
  * datapacks count, since the others had no Meko to search.
  */
 export function firstTurnMeko(db: Db, projectId?: string): MekoFirstTurn {
@@ -513,7 +513,7 @@ export function learningOf(runs: LearnRun[]): MekoLearning {
   return l;
 }
 
-/** One of AgentK's own Meko calls (meko_agentk_calls). */
+/** One of Kode's own Meko calls (meko_agentk_calls). */
 export interface AgentkCall {
   at: number;
   tool: string;
@@ -526,11 +526,11 @@ export function agentkCalls(db: Db): AgentkCall[] {
   return all<AgentkCall>(db, 'SELECT at, tool, input_chars, ok, ms FROM meko_agentk_calls');
 }
 
-/** How many tools AgentK's own calls are counted by: the rest are summed as `other`. */
+/** How many tools Kode's own calls are counted by: the rest are summed as `other`. */
 const AGENTK_TOOLS = 10;
 
 /**
- * AgentK's own Meko calls as the usage report has them: a tool name that isn't a plain one counts
+ * Kode's own Meko calls as the usage report has them: a tool name that isn't a plain one counts
  * as `other`, and so do all but the AGENTK_TOOLS - 1 most called tools.
  */
 export function summarizeAgentk(rows: AgentkCall[]): CallHomeAgentkMeko {
@@ -573,7 +573,7 @@ export interface MekoStart {
   ms: number;
 }
 
-/** AgentK's searches at session start (`src/server/recall.ts`). */
+/** Kode's searches at session start (`src/server/recall.ts`). */
 export function mekoStarts(db: Db): MekoStart[] {
   return all<MekoStart>(db, 'SELECT at, outcome, ms FROM meko_preloads');
 }
@@ -606,7 +606,7 @@ export function aboutTokens(n: number): string {
 }
 
 /**
- * What Meko did for one session so far, for a workshop's host (GuideEvents): AgentK's search at
+ * What Meko did for one session so far, for a workshop's host (GuideEvents): Kode's search at
  * start, Claude's lookups and what they found, and the estimated tokens saved, by the formula the
  * Usage page uses. Empty when the session made no Meko lookup and got nothing at start.
  */
@@ -616,7 +616,7 @@ export function sessionMekoLine(db: Db, sessionId: string): string {
   const seeded = rows.some((r) => r.kind === 'seed');
   if (!seeded && !u.lookups) return '';
   const parts = [
-    ...(seeded ? ['AgentK passed it what Meko knew at its start'] : []),
+    ...(seeded ? ['Kode passed it what Meko knew at its start'] : []),
     ...(u.lookups ? [`${u.lookups} ${u.lookups === 1 ? 'lookup' : 'lookups'}, ${u.found} found something, ${u.empty} found nothing`] : []),
     `est. ${aboutTokens(u.savings.tokens)} tokens saved`,
   ];

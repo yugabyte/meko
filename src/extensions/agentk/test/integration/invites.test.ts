@@ -60,7 +60,7 @@ describe('datapacks shared with us', () => {
     expect(pending()).toEqual([]);
     expect(events).toEqual([]);
 
-    rows = [...rows, shared('dp-new', 'adlc/proj/demo-repo/new-work', 'contributor', 'AgentK project "new-work" · repo git@github.com:corp/demo-repo.git')];
+    rows = [...rows, shared('dp-new', 'adlc/proj/demo-repo/new-work', 'contributor', 'Kode project "new-work" · repo git@github.com:corp/demo-repo.git')];
     await env.core.invites.sync();
     expect(pending()).toEqual([['dp-new', 'shared', null]]);
     expect(env.core.invites.pending()[0]).toMatchObject({ grant: 'contributor', ownerName: 'Alice Ng', repoRemote: 'git@github.com:corp/demo-repo.git' });
@@ -314,14 +314,14 @@ describe('datapacks shared with us', () => {
     if (upstream) execFileSync('git', ['remote', 'add', 'upstream', upstream], { cwd: env.repo });
     await env.core.projects.create({ repoPath: env.repo, name: 'fresh', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/fresh' } });
     const call = env.meko.calls.find((c) => c.name === 'setDatapackDescription');
-    expect(call?.args).toEqual(['dp-adlc-proj-demo-repo-fresh', `AgentK project "fresh"${want ? ` · repo ${want}` : ''}`]);
+    expect(call?.args).toEqual(['dp-adlc-proj-demo-repo-fresh', `Kode project "fresh"${want ? ` · repo ${want}` : ''}`]);
   });
 
   it("writes a fork's upstream remote into the description, not the fork", async () => {
     execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:hari90/demo-repo.git'], { cwd: env.repo });
     execFileSync('git', ['remote', 'add', 'upstream', 'git@github.com:corp/demo-repo.git'], { cwd: env.repo });
     await env.core.projects.create({ repoPath: env.repo, name: 'fresh', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/fresh' } });
-    expect(env.meko.calls.find((c) => c.name === 'setDatapackDescription')?.args[1]).toBe('AgentK project "fresh" · repo git@github.com:corp/demo-repo.git');
+    expect(env.meko.calls.find((c) => c.name === 'setDatapackDescription')?.args[1]).toBe('Kode project "fresh" · repo git@github.com:corp/demo-repo.git');
     const listed = (await env.core.projects.repos()).repos.find((r) => r.path === env.repo);
     expect(listed).toMatchObject({ remote: 'github.com/hari90/demo-repo', upstream: 'github.com/corp/demo-repo' });
   });

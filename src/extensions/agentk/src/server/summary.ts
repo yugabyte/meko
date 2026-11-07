@@ -14,7 +14,7 @@ export function summaryRow(mark: Mark, title: string, text: string, color = colo
 }
 
 /**
- * What AgentK's row of `meko stop` says. Its sessions resume when the server starts again: at `meko
+ * What Kode's row of `meko stop` says. Its sessions resume when the server starts again: at `meko
  * start` with services, but without them `meko start`'s `me_kode start` can't, and `meko kode serve` does.
  */
 export function stopRowText(stopped: boolean, sessions: number, services: boolean): string {

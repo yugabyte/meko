@@ -15,7 +15,7 @@ import { SidePanel } from './SidePanel';
  * prompt, not the panel). Fetched again whenever the review moves on. While the review runs it reads
  * Reviewing, under the findings so far, with a bar along its header and no counts yet. While a
  * round's findings wait on the user (`triage`), each of that round's kept findings takes a note or
- * a dismissal (saved as it's made), and the header sends them to AgentK (`review-send`). A finding's
+ * a dismissal (saved as it's made), and the header sends them to Kode (`review-send`). A finding's
  * `file:line`, with `onOpenFile`, opens the task's Changes panel on that line.
  */
 export function ReviewFindings({ session, onClose, onTerminal, onAct, onOpenFile, initialScroll }: {
@@ -169,10 +169,10 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct, onOpenFile
       {triage !== null && (
         <div className="rv-triage">
           <span className="gate-pill warn">Waits on you</span>
-          <span className="muted small rv-triage-text">Add notes or dismiss findings, then send the rest to AgentK.</span>
+          <span className="muted small rv-triage-text">Add notes or dismiss findings, then send the rest to Kode.</span>
           {onAct && (
-            <button className="btn small primary" disabled={!!saveError} onClick={() => void send()} title={saveError ? 'Save your note or dismissal again first' : 'AgentK gets the findings left, with your notes'}>
-              {toSend ? `Send ${toSend} to AgentK` : 'Finish review'}
+            <button className="btn small primary" disabled={!!saveError} onClick={() => void send()} title={saveError ? 'Save your note or dismissal again first' : 'Kode gets the findings left, with your notes'}>
+              {toSend ? `Send ${toSend} to Kode` : 'Finish review'}
             </button>
           )}
         </div>
@@ -297,8 +297,8 @@ export function FindingRow({ f, onOpen, onChoose, draft, onDraft }: {
       {editing ? (
         <textarea
           className="input rv-note-input"
-          aria-label={dismissed ? 'Why you dismissed it' : 'Your note for AgentK'}
-          placeholder={dismissed ? 'Why you dismissed it (optional)' : 'Your note for AgentK'}
+          aria-label={dismissed ? 'Why you dismissed it' : 'Your note for Kode'}
+          placeholder={dismissed ? 'Why you dismissed it (optional)' : 'Your note for Kode'}
           autoFocus={!touch}
           rows={2}
           maxLength={MAX_FINDING_NOTE}

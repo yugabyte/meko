@@ -19,7 +19,7 @@ const (
 )
 
 // listCalls is GET /calls: the call log, newest first, this Meko's calls and the ones it sent on to
-// a linked Meko Cloud alike, filtered by agent, conversation, datapack, tool, client (agentk) and failed=true, a
+// a linked Meko Cloud alike, filtered by agent, conversation, datapack, tool, client (kode) and failed=true, a
 // page at a time (before: the last id of the page before).
 func (a *api) listCalls(c echo.Context) error {
 	limit, ok, err := queryInt(c, "limit", defaultCallPage)

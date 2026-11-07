@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getPaths, homeIn, mekoDirOf, mekoHome, refuseOtherMeko, samePath } from '../../src/server/paths.js';
 import { tempDir } from '../helpers.js';
 
-/** Where Meko's data folder is: the cases Meko's own paths.Resolve and AgentK are tested against too. */
+/** Where Meko's data folder is: the cases Meko's own paths.Resolve and Kode are tested against too. */
 const CASES = (JSON.parse(readFileSync(join(__dirname, '../../../../../src/meko/internal/paths/testdata/resolve-cases.json'), 'utf8')) as {
   cases: { name: string; env: Record<string, string>; networkDirs: string[]; want?: string; error?: boolean }[];
 }).cases;

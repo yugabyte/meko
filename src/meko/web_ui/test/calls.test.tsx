@@ -56,13 +56,13 @@ afterEach(() => {
 test("an agent in the address opens its calls, and Load older pages back from the last one", async () => {
   const q = `agent=${encodeURIComponent(AGENT)}`;
   serve({
-    [`/api/v1/calls?${q}`]: { calls: [call(9, "context_search", { client: "agentk" }), call(7, "memory_add")], more: true },
+    [`/api/v1/calls?${q}`]: { calls: [call(9, "context_search", { client: "kode" }), call(7, "memory_add")], more: true },
     [`/api/v1/calls?${q}&before=7`]: { calls: [call(3, "conversation_create")], more: false },
   });
   await open(`/calls?${q}`);
   expect(document.querySelector<HTMLInputElement>("#calls-agent")?.value).toBe(AGENT);
   expect(main()).toContain("context_search");
-  expect(main()).toContain("AgentK");
+  expect(main()).toContain("Kode");
   await act(async () => button("Load older")!.click());
   expect(urls).toContain(`/api/v1/calls?${q}&before=7`);
   expect(main()).toContain("conversation_create");

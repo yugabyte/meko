@@ -12,7 +12,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/testenv"
 )
 
-// The search tools record the searches Meko answered poorly for Context Gaps, except AgentK's own
+// The search tools record the searches Meko answered poorly for Context Gaps, except Kode's own
 // and the web UI's.
 func TestSearchesRecordContextGaps(t *testing.T) {
 	e := testenv.Start(t, testenv.Options{})
@@ -37,7 +37,7 @@ func TestSearchesRecordContextGaps(t *testing.T) {
 
 	search("context_search", "Where is the deploy key?", "claude_code:a")
 	search("knowledgebase_search", "Who reviews releases?", "kiro:b")
-	search("context_search", "AgentK's own search", "claude_code:a", "X-Meko-Client", "agentk")
+	search("context_search", "Kode's own search", "claude_code:a", "X-Meko-Client", "kode")
 	search("context_search", "A person's search", memory.WebUIAgent)
 	qs := open()
 	if len(qs) != 2 || qs[0].Query != "Who reviews releases?" || qs[0].Tool != "knowledgebase_search" ||
@@ -121,7 +121,7 @@ func TestCloudSearchesRecordContextGaps(t *testing.T) {
 	search("context_search", "Who owns the pager?", nil)
 	search("memory_search", "Where are the runbooks?", nil)
 	search("knowledgebase_search", "What does the deploy do?", nil)
-	search("context_search", "AgentK's own search", nil, "X-Meko-Client", "agentk")
+	search("context_search", "Kode's own search", nil, "X-Meko-Client", "agentk")
 	search("context_search", "Cloud's default datapack", map[string]any{"datapack_id": ""})
 	qs, err := e.Service.ListQuestions(context.Background(), dp, memory.QuestionFilter{State: "all", Cloud: true})
 	if err != nil {

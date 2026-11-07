@@ -232,7 +232,7 @@ func removePathLines(home string) ([]string, error) {
 // the service would be written and then fail to start. A port a Meko server holds is fine: this
 // data folder's (install restarts it), or the installed service's other data folder's (installing
 // the service moves it to this one). The web port isn't checked, since Meko takes it over from an
-// AgentK on this computer.
+// Kode on this computer.
 func checkAPIPort(l paths.Layout, m service.Manager, home string, r report, stderr io.Writer) int {
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil {
@@ -291,7 +291,7 @@ func portInUse(r report, port int, config string) {
 }
 
 // addLater is what a first install says in place of the picker, where it can't ask.
-const addLater = "Add an extension at any time: meko extension install agentk"
+const addLater = "Add an extension at any time: meko extension install kode"
 
 // pickExtension is a first install's last question, asked after the links: which of the known
 // extensions not installed yet to add, or none. The one picked is installed as meko extension
@@ -316,9 +316,9 @@ func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r re
 		if len(names) == 0 {
 			return ""
 		}
-		// AgentK first: it's what most people add.
+		// Kode first: it's what most people add.
 		for i, n := range names {
-			if n == "agentk" && i > 0 {
+			if n == "kode" && i > 0 {
 				names[0], names[i] = names[i], names[0]
 				choices[0], choices[i] = choices[i], choices[0]
 				details[0], details[i] = details[i], details[0]

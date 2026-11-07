@@ -58,6 +58,16 @@ describe('config and db', () => {
     expect(back.server.port).toBe(7777);
   });
 
+  it("reads [ask_agentk], Ask Kode's section before it was called Ask Kode, and saves it as [ask_kode]", () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    writeFileSync(paths.config, '[ask_agentk]\nenabled = false\n');
+    const cfg = loadConfig(paths, () => undefined);
+    expect(cfg.askKode.enabled).toBe(false);
+    saveConfig(paths, cfg);
+    expect(readFileSync(paths.config, 'utf8')).toContain('[ask_kode]');
+    expect(readFileSync(paths.config, 'utf8')).not.toContain('ask_agentk');
+  });
+
   it('writes only settings that differ from the defaults', () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     const cfg = structuredClone(DEFAULT_CONFIG);
@@ -65,7 +75,7 @@ describe('config and db', () => {
     cfg.meko.captureTranscripts = true;
     saveConfig(paths, cfg);
     const text = readFileSync(paths.config, 'utf8');
-    expect(text).toMatch(/^# AgentK configuration/);
+    expect(text).toMatch(/^# Kode configuration/);
     expect(text).toContain('depth = 2');
     expect(text).toContain('capture_transcripts = true');
     expect(text.slice(text.indexOf('\n\n'))).not.toMatch(/port|roots|\[server\]|\[tmux\]/);
@@ -131,7 +141,7 @@ describe('config and db', () => {
     expect(mekoDatapackUrl({ configured: false }, id)).toBeNull();
   });
 
-  it("deletes the Meko call logs AgentK kept itself once, and nothing else in a session's folder", () => {
+  it("deletes the Meko call logs Kode kept itself once, and nothing else in a session's folder", () => {
     const dir = mkdtempSync(join(tmpdir(), 'ak-designs-'));
     const db = openDb(join(dir, 'state.db'));
     const designs = join(dir, 'designs');
@@ -182,13 +192,13 @@ describe('config and db', () => {
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
     const settings = (id: string) => JSON.parse(all<{ s: string }>(db, 'SELECT settings_json AS s FROM projects WHERE id = ?', id)[0].s);
-    // Migration 36 also keeps them on the reviewer mode they had (AgentK + People, People since 47).
+    // Migration 36 also keeps them on the reviewer mode they had (Kode + People, People since 47).
     expect(settings('old')).toEqual({ branchPrefix: 'ak_{login}/', notify: false, reviewer: 'people' });
     expect(settings('set')).toEqual({ branchPrefix: 'hari/', reviewer: 'people' });
     expect(settings('none')).toEqual({ reviewer: 'people' });
     expect(settings('people')).toEqual({ reviewer: 'people' });
     expect(settings('broken')).toEqual({ reviewer: 'people' });
-    // And notes when reviews started being held (read only by the AgentK reviewer's code, gone since 47).
+    // And notes when reviews started being held (read only by the Kode reviewer's code, gone since 47).
     expect(Number(kvGet(db, 'held-reviews-since'))).toBeGreaterThan(0);
     expect(parseSettings('{}').branchPrefix).toBe('ak_{login}/');
     db.close();
@@ -325,7 +335,7 @@ describe('config and db', () => {
     db.close();
   });
 
-  it('moves every project to AgentK + People (People since migration 47) and keeps a queued review prompt', () => {
+  it('moves every project to Kode + People (People since migration 47) and keeps a queued review prompt', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
@@ -352,7 +362,7 @@ describe('config and db', () => {
       { reviewer: 'people', notify: false }, { reviewer: 'people' }, { reviewer: 'people' },
     ]);
     const queues = db.prepare('SELECT id, pending_prompts AS q, ci_fixes FROM sessions ORDER BY id').all() as { id: string; q: string }[];
-    // The AgentK reviewer's prompt went to review-people with migration 47.
+    // The Kode reviewer's prompt went to review-people with migration 47.
     expect(queues.map((r) => ({ ...r, q: JSON.parse(r.q) as unknown }))).toEqual([
       { id: 's1', q: { 'review-people': { state: 'queued' } }, ci_fixes: 0 },
       { id: 's2', q: { 'review-people': { state: 'sent', vars: { reviewers: 'yb-agentk-dev' } } }, ci_fixes: 0 },
@@ -361,7 +371,7 @@ describe('config and db', () => {
     db.close();
   });
 
-  it('moves projects and sessions off the AgentK reviewer, finishing the work under way', () => {
+  it('moves projects and sessions off the Kode reviewer, finishing the work under way', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
@@ -559,7 +569,7 @@ describe('config and db', () => {
     expect(repoFolder('/ak/worktrees', '/home/u/code/Yugabyte-DB')).toBe(a);
   });
 
-  it('reads an unknown reviewer mode as the default, Yours only, and drops the AgentK login', () => {
+  it('reads an unknown reviewer mode as the default, Yours only, and drops the Kode login', () => {
     expect(parseSettings(JSON.stringify({ reviewer: 'bogus' })).reviewer).toBe('mine');
     expect(parseSettings(JSON.stringify({ reviewer: 'agentk' })).reviewer).toBe('mine');
     expect(parseSettings(JSON.stringify({ reviewer: 'all' })).reviewer).toBe('all');
@@ -664,7 +674,7 @@ function dropV33(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE share_contacts');
 }
 
-/** Undoes migration 32 (Ask AgentK's asks), for tests that rewind the schema. */
+/** Undoes migration 32 (Ask Kode's asks), for tests that rewind the schema. */
 function dropV32(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE agentk_asks');
 }
@@ -684,7 +694,7 @@ function dropV28(db: ReturnType<typeof openDb>) {
   db.exec('ALTER TABLE sessions DROP COLUMN discarding; ALTER TABLE sessions DROP COLUMN skip_learn');
 }
 
-/** Undoes migration 27 (the learn step, AgentK's own Meko calls and transcript captures), for tests that rewind the schema. */
+/** Undoes migration 27 (the learn step, Kode's own Meko calls and transcript captures), for tests that rewind the schema. */
 function dropV27(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs');
 }
@@ -1007,7 +1017,7 @@ describe('Claude folder trust', () => {
   });
 });
 
-describe('the Meko AgentK uses', () => {
+describe('the Meko Kode uses', () => {
   const local = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
   let reader: LocalMekoReader | null = null;
   afterEach(() => {
@@ -1062,7 +1072,7 @@ describe('the Meko AgentK uses', () => {
     expect(resolveMeko()).toEqual({ url: local.url, apiKey: 'local-token' });
   });
 
-  it("ignores AgentK's own Meko keys from before: config.toml's, the environment's and Claude Code's settings'", async () => {
+  it("ignores Kode's own Meko keys from before: config.toml's, the environment's and Claude Code's settings'", async () => {
     const keys = ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL', 'MEKO_API_URL', 'CLAUDE_CONFIG_DIR'] as const;
     const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
     const dir = mkdtempSync(join(tmpdir(), 'akl-claude-'));
@@ -1084,7 +1094,7 @@ describe('the Meko AgentK uses', () => {
       expect(readFileSync(paths.config, 'utf8')).toContain('api_key = "mko_tkn_config"');
       await read([{ state: 'stopped', meko: null }]);
       expect(resolveMeko()).toEqual({ url: '', apiKey: '' });
-      // An older Meko's link, which handed out its key, is no account and no web app of AgentK's.
+      // An older Meko's link, which handed out its key, is no account and no web app of Kode's.
       await read([{ state: 'running', meko: local }]);
       expect(resolveMeko()).toEqual({ url: local.url, apiKey: 'local-token' });
     } finally {

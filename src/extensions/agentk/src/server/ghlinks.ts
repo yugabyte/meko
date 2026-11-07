@@ -104,7 +104,7 @@ export class GithubLinkService {
       // opened on the clone doesn't get here: its clone is its repo).
       const dest = this.core.projects.cloneDest(cloneUrl(repo));
       if (!this.core.projects.scannable(dest)) {
-        throw new HttpError(400, `${p.name} has no clone of ${repo}, and AgentK would clone it into ${dest}, outside your repos folders `
+        throw new HttpError(400, `${p.name} has no clone of ${repo}, and Kode would clone it into ${dest}, outside your repos folders `
           + `(${this.core.config.repos.roots.join(', ')}), where its sessions can't use it. Clone ${repo} into one of them, `
           + 'or set the clone folder to one of them in Settings.');
       }

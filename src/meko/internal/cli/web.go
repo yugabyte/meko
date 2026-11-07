@@ -26,7 +26,7 @@ import (
 )
 
 // webRetry is how often serve tries again to take the web port while something else holds it (an
-// AgentK from before Meko served it), and to hand over from an extension that can't yet.
+// Kode from before Meko served it), and to hand over from an extension that can't yet.
 var webRetry = 30 * time.Second
 
 // webURL is the web listener's address for links: 127.0.0.1 with local access, else [web] name or
@@ -64,11 +64,15 @@ type webListener struct {
 	mu      sync.Mutex
 	status  server.WebStatus
 	srv     *server.Server
-	sockets map[string]string          // an extension's name to the socket its handoff named
-	handed  map[string]bool            // the extensions handed over since this server started
-	asked   map[string]time.Time       // when a handoff was last tried for a socket a request needed
-	warned  map[string]string          // the last handoff failure logged for an extension, logged once
-	proxied map[string]*extproxy.Proxy // one proxy per extension, kept for its WebSockets
+	sockets map[string]string // an extension's name to the socket its handoff named
+	paths   map[string]string // an extension's name to the path its handoff named (WebPath)
+	// releases are the release each handoff came from (app/current's version), to ask again when
+	// another one runs: an update in another process (meko update), or a rollback.
+	releases map[string]string
+	handed   map[string]bool            // the extensions handed over since this server started
+	asked    map[string]time.Time       // when a handoff was last tried for a socket a request needed
+	warned   map[string]string          // the last handoff failure logged for an extension, logged once
+	proxied  map[string]*extproxy.Proxy // one proxy per extension, kept for its WebSockets
 	// jobs are the Extensions page's actions, kept across the servers Run builds.
 	jobs *server.ExtensionJobs
 	// lock is the data folder's update lock, which serve's updater holds too; updater is that
@@ -81,6 +85,7 @@ type webListener struct {
 // newWebListener is serve's web listener, reported on (Enabled) until Run has read the settings.
 func newWebListener(l paths.Layout, st *store.Store, log *slog.Logger) *webListener {
 	return &webListener{l: l, st: st, log: log, reload: make(chan struct{}, 1), sockets: map[string]string{},
+		paths: map[string]string{}, releases: map[string]string{},
 		handed: map[string]bool{}, asked: map[string]time.Time{}, warned: map[string]string{},
 		proxied: map[string]*extproxy.Proxy{}, jobs: server.NewExtensionJobs(), lock: update.NewLock(l.Root),
 		waiting: map[string]string{}, status: server.WebStatus{Enabled: true}}
@@ -133,6 +138,38 @@ func (w *webListener) forget(name string) {
 	defer w.mu.Unlock()
 	delete(w.sockets, name)
 	delete(w.handed, name)
+}
+
+// release is the version of a managed extension's release app/current names, or "" for none.
+func (w *webListener) release(name string) string {
+	cat := extensions.Known[name]
+	if !cat.Managed {
+		return ""
+	}
+	return cat.App(w.l.Root, name).Current()
+}
+
+// path is where an extension's web UI is served, as its handoff said (asking for it as socket
+// does), or "" while it's unknown: then it's /ext/<name>/. A release other than the one that handed
+// over runs now (the path it's built for may differ), so it's asked again.
+func (w *webListener) path(name string) func() string {
+	socket := w.socket(name)
+	return func() string {
+		now := w.release(name)
+		w.mu.Lock()
+		changed := w.handed[name] && w.releases[name] != now
+		w.mu.Unlock()
+		if changed {
+			w.forget(name)
+			w.mu.Lock()
+			delete(w.asked, name) // ask at once: it isn't a socket that went away
+			w.mu.Unlock()
+		}
+		socket()
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.paths[name]
+	}
 }
 
 // Run serves until ctx ends. A port that's taken is tried again every webRetry, and so is a handoff
@@ -231,7 +268,7 @@ func (w *webListener) listen(cfg config.Config) (net.Listener, *tlscert.Pair, er
 	}
 	ln, err := net.Listen("tcp", webBind(cfg.Web))
 	if errors.Is(err, syscall.EADDRINUSE) {
-		return nil, nil, fmt.Errorf("port %d is in use (an AgentK from before Meko served it, or another "+
+		return nil, nil, fmt.Errorf("port %d is in use (a Kode from before Meko served it, or another "+
 			"program). Meko takes it once it's free; or pick another with [web] port in config.toml", cfg.Web.Port)
 	}
 	if err != nil {
@@ -290,6 +327,7 @@ func (w *webListener) Proxies() []*extproxy.Proxy {
 		}
 		if w.proxied[name] == nil {
 			p := extproxy.New(name, cat.Title, w.socket(name), w.log)
+			p.Old, p.Prefix = cat.OldNames, w.path(name)
 			p.OnGone = func() { w.forget(name) }
 			w.proxied[name] = p
 		}
@@ -349,6 +387,7 @@ func (w *webListener) handoff(ctx context.Context) (pending bool) {
 		if !ok || !cat.WebUI || done {
 			continue
 		}
+		release := w.release(name)
 		h, err := reg.Entries[name].Handoff(w.l.Root)
 		if err != nil {
 			w.useKnownSocket(ctx, name)
@@ -362,7 +401,8 @@ func (w *webListener) handoff(ctx context.Context) (pending bool) {
 			continue
 		}
 		w.mu.Lock()
-		w.sockets[name], w.handed[name] = h.Socket, true
+		w.sockets[name], w.paths[name], w.handed[name] = h.Socket, cat.WebPath(name, h.Path), true
+		w.releases[name] = release
 		delete(w.warned, name)
 		w.mu.Unlock()
 	}
@@ -380,18 +420,33 @@ func (w *webListener) warnOnce(name, msg string, err error) {
 	}
 }
 
-// socketKey is where the last socket an extension named is kept, for a start whose handoff fails.
+// socketKey is where the last socket an extension named is kept, for a start whose handoff fails,
+// and pathKey the path it named.
 func socketKey(name string) string { return "extension_socket." + name }
+
+func pathKey(name string) string { return "extension_path." + name }
 
 // tookOverKey records that an extension's old web settings were taken over, which happens once: the
 // extension keeps reporting them, and a [web] the owner removed later must not come back from it.
 func tookOverKey(name string) string { return "extension_took_over." + name }
 
+// setting is one of an extension's settings (key names it for the extension), or, before it's been
+// set under its name, the one kept under its newest old name that has it (Kode's, under agentk).
+func (w *webListener) setting(ctx context.Context, key func(string) string, name string) (string, bool, error) {
+	for _, n := range append([]string{name}, extensions.Known[name].OldNames...) {
+		if v, ok, err := w.st.Setting(ctx, key(n)); err != nil || ok {
+			return v, ok, err
+		}
+	}
+	return "", false, nil
+}
+
 func (w *webListener) useKnownSocket(ctx context.Context, name string) {
-	if v, ok, err := w.st.Setting(ctx, socketKey(name)); err == nil && ok {
+	if v, ok, err := w.setting(ctx, socketKey, name); err == nil && ok {
+		p, _, _ := w.st.Setting(ctx, pathKey(name))
 		w.mu.Lock()
 		if w.sockets[name] == "" {
-			w.sockets[name] = v
+			w.sockets[name], w.paths[name] = v, extensions.Known[name].WebPath(name, p)
 		}
 		w.mu.Unlock()
 	}
@@ -401,7 +456,10 @@ func (w *webListener) takeOver(ctx context.Context, name string, h extensions.Ha
 	if err := w.st.SetSetting(ctx, socketKey(name), h.Socket); err != nil {
 		return err
 	}
-	if _, done, err := w.st.Setting(ctx, tookOverKey(name)); err != nil || done {
+	if err := w.st.SetSetting(ctx, pathKey(name), h.Path); err != nil {
+		return err
+	}
+	if _, done, err := w.setting(ctx, tookOverKey, name); err != nil || done {
 		return err
 	}
 	if err := w.importLegacy(name, h.Legacy); err != nil {

@@ -25,7 +25,7 @@ describe("Claude's AskUserQuestion questions", () => {
     expect(long.options[0].preview!.length).toBe(8001);
   });
 
-  it("refuse what AgentK can't show as Claude's dialog does, leaving it to the terminal", () => {
+  it("refuse what Kode can't show as Claude's dialog does, leaving it to the terminal", () => {
     expect(() => parseAsk([])).toThrow(/1 to 4/);
     expect(() => parseAsk([COLOR, COLOR, COLOR, COLOR, COLOR])).toThrow(/1 to 4/);
     expect(() => parseAsk('Which?')).toThrow(/1 to 4/);
@@ -38,8 +38,8 @@ describe("Claude's AskUserQuestion questions", () => {
   });
 
   it('name the first question in the status, shortened', () => {
-    expect(askDetail('Which\n color?')).toBe('AgentK asks: Which color?');
-    expect(askDetail('x'.repeat(300))).toHaveLength('AgentK asks: '.length + 120);
+    expect(askDetail('Which\n color?')).toBe('Kode asks: Which color?');
+    expect(askDetail('x'.repeat(300))).toHaveLength('Kode asks: '.length + 120);
   });
 });
 
@@ -83,17 +83,17 @@ describe('questions from the design_questions tool', () => {
     expect(error([{ id: 'a', question: 'A?', options: ['x'], recommended: 1 }])).toMatch(/"recommended" must be the index/);
     expect(error([{ id: 'a', question: 'A?', status: 'done' }])).toMatch(/"status" must be "open" or "resolved"/);
     expect(error(Array.from({ length: 31 }, (_, i) => ({ id: `q${i}`, question: '?' })))).toMatch(/at most 30/);
-    // AgentK's own decisions: always resolved, with what was chosen, and the Meko items they rest on.
+    // Kode's own decisions: always resolved, with what was chosen, and the Meko items they rest on.
     expect(error([{ id: 'a', kind: 'choice', question: 'A?' }])).toMatch(/"kind" must be "question" or "decision"/);
     expect(error([{ id: 'a', kind: 'decision', question: 'A?' }])).toMatch(/is a decision, so it needs its "decision"/);
     expect(error([{ id: 'a', kind: 'decision', question: 'A?', decision: 'B', status: 'open' }])).toMatch(/its "status" must be "resolved"/);
-    expect(error([{ id: 'a', question: 'A?', decidedBy: 'me' }])).toMatch(/"decidedBy" must be "user", "agentk" or null/);
+    expect(error([{ id: 'a', question: 'A?', decidedBy: 'me' }])).toMatch(/"decidedBy" must be "user", "kode" or null/);
     expect(error([{ id: 'a', question: 'A?', meko: 'm-1' }])).toMatch(/"meko" must be a list/);
     expect(error([{ id: 'a', question: 'A?', meko: [{ kind: 'memory' }] }])).toMatch(/each "meko" item needs "kind"/);
     expect(error([{ id: 'a', question: 'A?', meko: Array.from({ length: 6 }, (_, i) => ({ kind: 'memory', id: `m${i}` })) }])).toMatch(/cites 6 Meko items; give at most 5/);
     expect(error(Array.from({ length: 31 }, (_, i) => ({ id: `d${i}`, kind: 'decision', question: '?', decision: 'Yes' })))).toMatch(/at most 30 decisions/);
     const ok = checkToolQuestions([{ id: 'q', question: 'A?' }, { id: 'd', kind: 'decision', question: 'B?', decision: 'Yes', meko: [{ kind: 'knowledge', id: 'doc-1', excerpt: 'Why' }] }]);
-    expect('questions' in ok && ok.questions.map((q) => [q.kind, q.status, q.decidedBy, q.meko.length])).toEqual([['question', 'open', null, 0], ['decision', 'resolved', 'agentk', 1]]);
+    expect('questions' in ok && ok.questions.map((q) => [q.kind, q.status, q.decidedBy, q.meko.length])).toEqual([['question', 'open', null, 0], ['decision', 'resolved', 'kode', 1]]);
     // Too much for the questions file to be read back.
     const big = Array.from({ length: 30 }, (_, i) => ({
       id: `q${i}`, question: 'q'.repeat(1000), context: 'c'.repeat(4000), options: Array.from({ length: 6 }, (_, j) => ({ label: `${j}`.repeat(200), detail: 'd'.repeat(1000) })),
@@ -102,11 +102,11 @@ describe('questions from the design_questions tool', () => {
   });
 });
 
-describe('approving and revising while AgentK is busy, in the browser', () => {
+describe('approving and revising while Kode is busy, in the browser', () => {
   const working = { status: 'working', midTurn: true } as const;
   const permission = { status: 'needs_input', statusDetail: 'Permission needed for Bash', midTurn: true } as const;
   const terminal = /waiting on you in the terminal/;
-  const wait = /Wait for AgentK/;
+  const wait = /Wait for Kode/;
 
   it.each<[string, Partial<Session>, RegExp | null, RegExp | null]>([
     // Without the mod, both wait for the turn to end.
@@ -121,7 +121,7 @@ describe('approving and revising while AgentK is busy, in the browser', () => {
     // No approval is queued for a Needs you with no turn behind it.
     ['a Needs you with no turn behind it', { status: 'needs_input', statusDetail: 'Recovered twice in the last hour; waiting for you before continuing', modLive: true }, terminal, terminal],
     // Claude's question is one even when it mentions a plan; plan mode's own dialog lets the approval through.
-    ["Claude's question about a plan", { status: 'needs_input', statusDetail: 'AgentK asks: Which plan should I follow?', midTurn: true }, terminal, terminal],
+    ["Claude's question about a plan", { status: 'needs_input', statusDetail: 'Kode asks: Which plan should I follow?', midTurn: true }, terminal, terminal],
     ["plan mode's approval dialog", { status: 'needs_input', statusDetail: 'Claude has a plan for you to approve' }, null, null],
     // Answers Claude holds go before an approval.
     ['answers held', { status: 'needs_input', statusDetail: 'Design ready for your approval', modLive: true, promptsHeld: 1 }, /answers from you to take first/, null],

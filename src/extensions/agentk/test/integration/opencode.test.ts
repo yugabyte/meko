@@ -11,7 +11,7 @@ const lines = (file: string) => {
   return readJsonl(f);
 };
 
-describe('sessions on OpenCode (real session host + git, fake opencode running AgentK’s plugin)', () => {
+describe('sessions on OpenCode (real session host + git, fake opencode running Kode’s plugin)', () => {
   let env: TestEnv;
   beforeEach(async () => {
     env = await makeEnv({ opencode: true });
@@ -32,7 +32,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     expect(first.args.join(' ')).not.toContain('model');
   });
 
-  it("runs a session with AgentK's plugin: instructions, the Design guard, Needs you, priced usage, subagents, exit and Resume", async () => {
+  it("runs a session with Kode's plugin: instructions, the Design guard, Needs you, priced usage, subagents, exit and Resume", async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
     const s = await env.core.sessions.create(p.id, { name: 'OpenCode task', prompt: 'write src.ts now', start: 'design', harness: 'opencode' });
     expect(s.harness).toBe('opencode');
@@ -44,14 +44,14 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     // No mod, so no design_questions tool: its Design prompt names only the questions file.
     expect(first.args[1]).toContain(`write that JSON to ${env.core.sessions.questionsFile(env.core.sessions.row(s.id))}.`);
     expect(first.args[1]).not.toContain('design_questions');
-    // AgentK's plugin folder and the session's instructions come in OpenCode's inline config; the design folder is writable.
+    // Kode's plugin folder and the session's instructions come in OpenCode's inline config; the design folder is writable.
     expect(first.config).toMatchObject({ plugin: [openCodePluginPath(env.core.paths)], permission: { external_directory: { [join(env.core.paths.designs, s.id, '*')]: 'allow' } } });
     const row = env.core.sessions.row(s.id);
-    expect(first.env).toMatchObject({ MEKO_AGENT_ID: sessionAgentId(row), AK_SESSION: s.id, AK_OPENCODE_SOURCE: 'startup', OPENCODE_DISABLE_PROJECT_CONFIG: null });
+    expect(first.env).toMatchObject({ MEKO_AGENT_ID: sessionAgentId(row), KODE_SESSION: s.id, KODE_OPENCODE_SOURCE: 'startup', OPENCODE_DISABLE_PROJECT_CONFIG: null });
     expect(row.meko_agent_id).toMatch(/^opencode:opencode-task-[0-9a-f]{8}$/);
     const [sys] = lines('system.jsonl');
-    expect(sys.instructions[0]).toMatch(/^This OpenCode session is managed by AgentK\. Project: Demo\. Task: OpenCode task\./);
-    // AgentK's Meko as OpenCode's `meko` server, from an owner-only file: the key never goes in the environment.
+    expect(sys.instructions[0]).toMatch(/^This OpenCode session is managed by Kode\. Project: Demo\. Task: OpenCode task\./);
+    // Kode's Meko as OpenCode's `meko` server, from an owner-only file: the key never goes in the environment.
     expect(first.env.OPENCODE_CONFIG).toBe(openCodeMekoFile(env.core.paths));
     expect(statSync(first.env.OPENCODE_CONFIG).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(first.env.OPENCODE_CONFIG, 'utf8')).mcp.meko).toMatchObject({ type: 'remote', headers: { Authorization: 'Bearer test-key' } });
@@ -100,7 +100,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     await waitFor(() => lines('argv.jsonl').length, (n) => n === 2, 10000, 'resume');
     const resumed = lines('argv.jsonl')[1];
     expect(resumed.args).toEqual(['--standalone', `--session=${row.agent_session_id}`]);
-    expect(resumed.env.AK_OPENCODE_SOURCE).toBe('resume');
+    expect(resumed.env.KODE_OPENCODE_SOURCE).toBe('resume');
 
     // Turning Meko off removes the file with its key at once, not at OpenCode's next launch.
     await noMeko(env);
@@ -167,7 +167,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     }
   });
 
-  it("answers Ask AgentK on OpenCode as a tool-less agent, without the user's plugins and MCP servers, and deletes the run's session even when it fails", async () => {
+  it("answers Ask Kode on OpenCode as a tool-less agent, without the user's plugins and MCP servers, and deletes the run's session even when it fails", async () => {
     env.core.updateConfig((c) => {
       c.agents.default = 'opencode';
     });
@@ -182,20 +182,20 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
         { type: 'step_start', sessionID: 'ses_ask1', part: {} },
         { type: 'text', sessionID: 'ses_ask1', part: { text: `\`\`\`json\n${JSON.stringify(answer)}\n\`\`\`` } },
       ]);
-      const r = await env.core.askAgentk.ask({ text: 'what needs me?' });
+      const r = await env.core.askKode.ask({ text: 'what needs me?' });
       expect(r).toEqual({ reply: 'Nothing needs you.', actions: [], together: false, notes: [] });
       const input = JSON.parse(readFileSync(join(process.env.FAKE_OPENCODE_DIR!, 'ask-input.json'), 'utf8'));
-      expect(input.args).toEqual(['run', '--standalone', '--format', 'json', '--agent', 'agentk-ask']);
+      expect(input.args).toEqual(['run', '--standalone', '--format', 'json', '--agent', 'kode-ask']);
       expect(input.input).toContain('what needs me?');
       // OpenCode reads the ask's own global config in place of the user's, and no project config.
       expect(input.env).toMatchObject({ OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1' });
       expect(input.config).toEqual({
-        model: 'anthropic/claude-sonnet-4-5', agent: { 'agentk-ask': expect.objectContaining({ mode: 'primary', permission: 'deny' }) },
+        model: 'anthropic/claude-sonnet-4-5', agent: { 'kode-ask': expect.objectContaining({ mode: 'primary', permission: 'deny' }) },
       });
 
       // A failed run (no provider signed in) is deleted too.
       reply([{ type: 'error', sessionID: 'ses_ask2', error: { type: 'provider.auth', message: 'No API key for anthropic', status: 401 } }]);
-      await expect(env.core.askAgentk.ask({ text: 'again' })).rejects.toThrow(/^OpenCode can't reach a model provider/);
+      await expect(env.core.askKode.ask({ text: 'again' })).rejects.toThrow(/^OpenCode can't reach a model provider/);
       await env.core.stop();
       expect(lines('deleted.jsonl')).toEqual([
         { id: 'ses_ask1', cwd: input.cwd, xdg: input.env.XDG_CONFIG_HOME },

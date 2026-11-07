@@ -8,7 +8,7 @@
 // `<command> install` (pointing it at this Meko), `<command> version --json`, and the catalog's
 // RestartArgs, CheckArgs, BusyArgs, RemoveArgs and UninstallArgs; and its launcher, which hands the commands in
 // Probation to meko _launch. Every command Meko runs of an extension gets MEKO_HOME set to Meko's
-// data folder, so the extension knows where its own folder in it is (Dir). AgentK's program is
+// data folder, so the extension knows where its own folder in it is (Dir). Kode's program is
 // me_kode; Presenter's me_present. Their names start with me_, so a process list and the services
 // say they're Meko's. Neither is a command on PATH: people run them through Meko, as meko kode and
 // meko present (Catalog.Verb), which runs the registered program.
@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -40,19 +41,23 @@ import (
 // installs and updates their releases. A build from source on PATH is used as it is, and never
 // updated.
 var Known = map[string]Catalog{
-	"agentk": {
-		Title: "AgentK",
+	// Kode (src/extensions/agentk, which calls itself AgentK). Meko knew it as agentk before: its
+	// registry entry, folder, tarballs and web path had that name (OldNames).
+	"kode": {
+		Title: "Kode",
 		Description: "Runs Claude Code, OpenCode and Kiro sessions across your projects, from task to merged PR, " +
 			"with Meko as their shared memory.",
-		Summary: "runs coding agents across your projects, from task to merged PR",
-		Command: "me_kode",
-		Verb:    "kode",
-		// Its names before, newest first: me_koder, agentk, and agent-k-local before the rename to
-		// AgentK. Its releases still carry all three, as links to me_kode, for the services and older
-		// Mekos that run them; Rename moves an install onto the new name.
+		Summary:  "runs coding agents across your projects, from task to merged PR",
+		Command:  "me_kode",
+		Verb:     "kode",
+		OldNames: []string{"agentk"},
+		// Its program's names before, newest first: me_koder, agentk, and agent-k-local before the
+		// rename to AgentK. Its releases still carry all three, as links to me_kode, for the services
+		// and older Mekos that run them; Rename moves an install onto the new name.
 		OldCommands: []string{"me_koder", "agentk", "agent-k-local"},
-		// Its releases are tagged agentk-v<version>, and v<version> before releases were tagged by product.
-		TagPrefixes: []string{"agentk-v", "v"},
+		// Its releases are tagged kode-v<version>; agentk-v<version> before, and v<version> before
+		// releases were tagged by product.
+		TagPrefixes: []string{"kode-v", "agentk-v", "v"},
 		Managed:     true,
 		// Its home before it moved into Meko's data folder, where an install that hasn't moved yet runs.
 		OldHomes:      []string{".agent-k-local"},
@@ -116,10 +121,16 @@ func (c Catalog) UserCommand(args string) string {
 // Catalog says how to find and install a known extension.
 type Catalog struct {
 	Title       string
-	Description string   // what it does, in a sentence, for the web UI's Extensions page
-	Summary     string   // what it does, in a few lowercase words, for meko install's picker
-	Command     string   // the program's name: a release's bin/<Command>, or a build from source's on PATH
-	Verb        string   // the meko command that runs it: meko <Verb> <its command>
+	Description string // what it does, in a sentence, for the web UI's Extensions page
+	Summary     string // what it does, in a few lowercase words, for meko install's picker
+	Command     string // the program's name: a release's bin/<Command>, or a build from source's on PATH
+	Verb        string // the meko command that runs it: meko <Verb> <its command>
+	// OldNames are the names Meko knew it by before, newest first (Kode's agentk). An entry
+	// registered under one is moved to the new name (Load), its folder is used while the new one
+	// isn't there yet (Dir), its tarballs are looked for too (AppIn), and the web listener serves it
+	// at the old path for a release that names no other (WebPath). Commands given an old name refuse
+	// it, saying the new one (RenamedError).
+	OldNames    []string
 	OldCommands []string // names it had before, looked for after Command
 	TagPrefixes []string // its release tags, newest naming first
 	// Managed says Meko installs it from its releases' tarballs into App and updates it: the
@@ -161,26 +172,103 @@ type Catalog struct {
 	// when it removes the extensions too, and meko extension delete --purge.
 	UninstallArgs []string
 	// WebUI says it serves a web UI on a unix socket, which the web listener serves at
-	// /ext/<name>/ (internal/extproxy). `<command> _handoff --json` names the socket (Handoff).
+	// /ext/<name>/ (internal/extproxy). `<command> _handoff --json` names the socket and the path
+	// (Handoff, WebPath).
 	WebUI bool
 }
 
-// Dir is the folder an extension keeps its data in, in Meko's data folder at root. AgentK's home
-// is there (Meko's rule decides where root is, and AgentK follows it).
-func Dir(root, name string) string { return filepath.Join(root, "extensions", name) }
+// Renamed reports the name an old name of a known extension is now (agentk: kode).
+func Renamed(old string) (string, bool) {
+	for n, c := range Known {
+		if slices.Contains(c.OldNames, old) {
+			return n, true
+		}
+	}
+	return "", false
+}
+
+// RenamedError is the error meko extension <command> gives an extension's old name, saying how to
+// run it with the new one, or nil for a name that isn't an old one.
+func RenamedError(command, name string) error {
+	n, ok := Renamed(name)
+	if !ok {
+		return nil
+	}
+	return fmt.Errorf("%s is called %s now: run meko extension %s %s", oldTitles[name], Known[n].Title, command, n)
+}
+
+// oldTitles are what people called an extension by each of its old names.
+var oldTitles = map[string]string{"agentk": "AgentK"}
+
+// Lookup finds a known extension by its name or one of its old names (an older release's launcher
+// passes meko _launch the old one), and returns its name now.
+func Lookup(name string) (string, Catalog, bool) {
+	if c, ok := Known[name]; ok {
+		return name, c, true
+	}
+	if n, ok := Renamed(name); ok {
+		return n, Known[n], true
+	}
+	return "", Catalog{}, false
+}
+
+// WebPath is where the web listener serves an extension's web UI: the path its handoff named, when
+// that is /ext/<name>/ or /ext/<old name>/; else, for one that names none (a release from before it
+// was renamed, whose page is built for its old path), /ext/<its newest old name>/; else /ext/<name>/.
+func (c Catalog) WebPath(name, handed string) string {
+	for _, n := range append([]string{name}, c.OldNames...) {
+		if handed == "/ext/"+n+"/" {
+			return handed
+		}
+	}
+	if handed == "" && len(c.OldNames) > 0 {
+		return "/ext/" + c.OldNames[0] + "/"
+	}
+	return "/ext/" + name + "/"
+}
+
+// Dir is the folder an extension keeps its data in, in Meko's data folder at root. Kode's home is
+// there (Meko's rule decides where root is, and Kode follows it). While only a folder under one of
+// its old names is there (Kode moves its own from extensions/agentk once a release that knows the
+// new name runs), Dir is that one. The move leaves the old name as a link to the new folder.
+func Dir(root, name string) string {
+	dir := filepath.Join(root, "extensions", name)
+	if _, err := os.Lstat(dir); err == nil {
+		return dir
+	}
+	for _, old := range Known[name].OldNames {
+		if fi, err := os.Stat(filepath.Join(root, "extensions", old)); err == nil && fi.IsDir() {
+			return filepath.Join(root, "extensions", old)
+		}
+	}
+	return dir
+}
+
+// OldDirs are the paths under an extension's old names in Meko's data folder at root that are
+// there and aren't Dir: the link its move left behind. Removing its data removes them too.
+func OldDirs(root, name string) []string {
+	var out []string
+	for _, old := range Known[name].OldNames {
+		p := filepath.Join(root, "extensions", old)
+		if _, err := os.Lstat(p); err == nil && p != Dir(root, name) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // App is the app folder a Managed extension's releases are installed in: <Dir>/app, one folder per
 // version, app/current pointing at the one in use, update-pending.json and bad-versions beside
-// them, as Meko's own (internal/update). Its tarballs are named for the extension, its binary for
-// its command.
+// them, as Meko's own (internal/update). Its tarballs are named for the extension (an old name of
+// it in older releases), its binary for its command.
 func (c Catalog) App(root, name string) update.App {
 	return c.AppIn(filepath.Join(Dir(root, name), "app"), name)
 }
 
 // AppIn is App for the app folder at appRoot, which meko _launch knows from the binary it runs.
 func (c Catalog) AppIn(appRoot, name string) update.App {
-	a := update.App{Root: appRoot, Name: c.Command, OldNames: c.OldCommands, Package: name, Private: true,
-		Checks: c.CheckArgs}
+	a := update.App{Root: appRoot, Name: c.Command, OldNames: c.OldCommands, Package: name,
+		OldPackages: c.OldNames, Private: true, Checks: c.CheckArgs}
 	if c.LegacyRecords {
 		a.Legacy = filepath.Dir(appRoot)
 	}
@@ -250,6 +338,10 @@ func (c Catalog) AutoUpdate(root, name string, e Entry) bool {
 type Registry struct {
 	path    string
 	Entries map[string]Entry `json:"extensions"`
+	// renamedFrom names, for each entry Load moved from an old name, that old name. Save writes it
+	// back under the old one until Rename runs (past probation, at serve's start), so a Meko rolled
+	// back to a release that knows only the old name still finds it.
+	renamedFrom map[string]string
 }
 
 // File is where the registry lives in the data folder at root.
@@ -271,12 +363,37 @@ func Load(root string) (*Registry, error) {
 	if r.Entries == nil {
 		r.Entries = map[string]Entry{}
 	}
+	// An entry under an old name is the extension's under its new one, with its command and its
+	// Update automatically. Only Rename saves it under the new name (renamedFrom).
+	for old, e := range r.Entries {
+		if n, ok := Renamed(old); ok {
+			if _, there := r.Entries[n]; !there {
+				r.Entries[n] = e
+				if r.renamedFrom == nil {
+					r.renamedFrom = map[string]string{}
+				}
+				r.renamedFrom[n] = old
+			}
+			delete(r.Entries, old)
+		}
+	}
 	return r, nil
 }
 
-// Save writes the registry, readable only by this user.
+// Save writes the registry, readable only by this user, with the entries Load moved from an old
+// name under that name still (renamedFrom).
 func (r *Registry) Save() error {
-	b, err := json.MarshalIndent(r, "", "  ")
+	out := r
+	if len(r.renamedFrom) > 0 {
+		out = &Registry{Entries: make(map[string]Entry, len(r.Entries))}
+		for n, e := range r.Entries {
+			if old, ok := r.renamedFrom[n]; ok {
+				n = old
+			}
+			out.Entries[n] = e
+		}
+	}
+	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -316,6 +433,14 @@ func (r *Registry) FindAgain(name, home, root string) string {
 // install.
 func (r *Registry) Rename(root, home string) error {
 	var errs []error
+	if len(r.renamedFrom) > 0 {
+		was := r.renamedFrom
+		r.renamedFrom = nil
+		if err := r.Save(); err != nil {
+			r.renamedFrom = was
+			errs = append(errs, err)
+		}
+	}
 	for _, name := range r.Names() {
 		cat, ok := Known[name]
 		if !ok || !cat.Managed {
@@ -375,7 +500,7 @@ func (r *Registry) Names() []string {
 	return names
 }
 
-// Timeouts for an extension's commands. Stopping AgentK waits for its server and its sessions;
+// Timeouts for an extension's commands. Stopping Kode waits for its server and its sessions;
 // uninstalling it also deletes its worktrees.
 var (
 	StartTimeout     = 2 * time.Minute
@@ -592,14 +717,17 @@ func executable(p string) bool {
 	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
 }
 
-// Handoff is what `<command> _handoff --json` says: where an extension with a web UI listens, and
-// the settings and login it had when it served browsers itself, which Meko takes over with its port.
+// Handoff is what `<command> _handoff --json` says: where an extension with a web UI listens, the
+// path its page is built for (Path: Kode's /ext/kode/; a release from before names none:
+// Catalog.WebPath), and the settings and login it had when it served browsers itself, which Meko
+// takes over with its port.
 type Handoff struct {
 	Socket string  `json:"socket"`
+	Path   string  `json:"path,omitempty"`
 	Legacy *Legacy `json:"legacy"`
 }
 
-// Legacy is an extension's own web settings from before Meko served it (AgentK's [server] and [tls],
+// Legacy is an extension's own web settings from before Meko served it (Kode's [server] and [tls],
 // and its login), or nil when it had none.
 type Legacy struct {
 	Bind  string       `json:"bind"`

@@ -29,7 +29,7 @@ export class HostRequestError extends Error {
 
 /** How long a request waits for its answer (a paste includes its pause before Enter). */
 const REQUEST_MS = 30_000;
-/** Keys by name (Enter, Escape, …), for the few keys AgentK presses itself. */
+/** Keys by name (Enter, Escape, …), for the few keys Kode presses itself. */
 const KEYS: Record<string, string> = { Enter: '\r', Escape: '\x1b', Tab: '\t', Up: '\x1b[A', Down: '\x1b[B' };
 
 /** A viewer's connection to a pane (the host's side is its `Viewer` and `attach()`). */
@@ -305,7 +305,7 @@ export function startDetached(paths: Paths): void {
     detached: true,
     stdio: 'ignore',
     cwd: paths.home,
-    env: { ...process.env, AK_HOME: paths.home },
+    env: { ...process.env, KODE_HOME: paths.home },
   });
   p.on('error', () => undefined);
   p.unref();

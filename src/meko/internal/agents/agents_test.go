@@ -508,7 +508,7 @@ func isCode(err error, code string) bool {
 }
 
 // CLAUDE_CONFIG_DIR, CODEX_HOME, KIRO_HOME and XDG_CONFIG_HOME move the agents' configs, as each agent
-// (and AgentK) reads them.
+// (and Kode) reads them.
 func TestConfigFolders(t *testing.T) {
 	fakeAgents(t, false)
 	dirs := map[string]string{}

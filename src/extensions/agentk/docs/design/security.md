@@ -1,17 +1,17 @@
 # Access and security
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
-The terminal is a shell running as your Unix user, so whoever can open AgentK can do what your SSH
+The terminal is a shell running as your Unix user, so whoever can open Kode can do what your SSH
 key can. Each install serves exactly one owner. Sharing the app means other people install their
 own copy.
 
-- **Meko is the front door.** AgentK doesn't listen on the network and has no login of its own,
+- **Meko is the front door.** Kode doesn't listen on the network and has no login of its own,
   and Meko has none either.
   Its server listens only on a unix socket (`Paths.webSock`, `web.sock` in its home, or in its
   private socket folder in the temp dir when that path is too long), in a folder only you can open,
   and lets in every request that arrives there. The Meko on this computer serves it to browsers at
-  `/ext/agentk/` on its web listener (`:7777`), with the path stripped, after its own access
+  `/ext/kode/` on its web listener (`:7777`), with the path stripped, after its own access
   check ([Meko's web.md](../../../../meko/docs/web.md)):
   - **Local access** (Meko's `[web] access = "local"`): Meko listens on 127.0.0.1 over plain HTTP,
     and a request from this computer needs no login: a loopback peer, a `Host` of `localhost`,
@@ -22,12 +22,12 @@ own copy.
     proxy on it included: on a shared host, choose remote.
   - **Remote access** (`"remote"`): Meko listens on every address over HTTPS, with its own
     certificate or a self-signed one (`meko status` shows its fingerprint), and lets in every
-    request another site's page didn't send. Anyone who can reach the port can open AgentK, and its
+    request another site's page didn't send. Anyone who can reach the port can open Kode, and its
     terminals: choose it only where that's who you mean. `meko ui stop` on the host closes the port
-    (AgentK's page with it) until `meko ui start`, and closes the terminals and event sockets Meko
+    (Kode's page with it) until `meko ui start`, and closes the terminals and event sockets Meko
     proxied.
-- **What reaches AgentK.** Meko passes the browser's `Host` and `Origin` on as they are, drops the
-  `Cookie` header, and adds no forwarding headers. AgentK refuses a write (any `/api/*` request but GET) or a
+- **What reaches Kode.** Meko passes the browser's `Host` and `Origin` on as they are, drops the
+  `Cookie` header, and adds no forwarding headers. Kode refuses a write (any `/api/*` request but GET) or a
   WebSocket upgrade whose `Origin` isn't the page's own (403, or close code 1008), so another site's
   page can't act through a browser Meko let in. The API only takes JSON bodies, so a plain HTML form
   can't post to it; the routes that take a file (pasted images and files, knowledge-base uploads)
@@ -51,20 +51,20 @@ own copy.
   HTTPS with its own login), its old `[server]` bind and port, its certificate (self-signed in
   `certs/`, or `[tls]`'s) and its login (`owner` in `state.db`). Meko takes the port, access and
   certificate over once, copying what it doesn't have yet, so the same URL and certificate
-  fingerprint keep working; it ignores the login, having none. Nothing else in AgentK reads them.
+  fingerprint keep working; it ignores the login, having none. Nothing else in Kode reads them.
   `state.db` is read read-only, the one read outside the server's lease, and only on the host whose
   server holds it: `_handoff` refuses while the home's server runs on another host, whose socket
   this host can't reach anyway. On
   shutdown the server removes `web.sock` only while it's still the file it bound (`socketId`), as it
   does the hook socket: after a lost lease another server may have bound its own.
-- **Guard rails.** AgentK has no route that sets or shows a Meko key: Meko owns the Meko Cloud
-  link and keeps its key, and AgentK reads only the Meko on this computer's URL and token, never a
+- **Guard rails.** Kode has no route that sets or shows a Meko key: Meko owns the Meko Cloud
+  link and keeps its key, and Kode reads only the Meko on this computer's URL and token, never a
   key of its own (an older Meko's handed-out key in `meko token --json` is ignored; a key from
   before in `config.toml` is left there unread, for a rollback, and `MEKO_*` and Claude Code's
   settings aren't read). No response carries a key. Meko's own page refuses to send a saved key to another server (the MCP, web
   app or API URL) until it's typed again, so someone who reaches the page can't point it at their
-  own server and read the key off it. `POST /_meko/changed` only makes AgentK read Meko again, and
-  refuses another origin. The Meko on this computer's client token, which AgentK uses
+  own server and read the key off it. `POST /_meko/changed` only makes Kode read Meko again, and
+  refuses another origin. The Meko on this computer's client token, which Kode uses
   whether or not that Meko is linked, is read from Meko (`meko token --json`), held in memory, never
   written to `config.toml`, and sent only to that Meko's own origin (its `/mcp` and `/api/v1`). Hooks use their
   own unix socket with a per-session token, never the web socket. The Design-stage edit guard asks the server over the same socket;
@@ -82,11 +82,11 @@ own copy.
   (0600) whatever folder it's in, and so are its `-wal` and `-shm` files, which SQLite gives the
   database's mode, and so are the snapshots a version takes of it before migrating it after an update
   (`state.db.bak-<version>`); ones made before this are fixed when the server opens the database.
-  A folder AgentK creates for it is 0700 (so are its home, and Meko's data folder and its
-  `extensions/` when AgentK makes them first); an existing one, such as AgentK's home on an older
+  A folder Kode creates for it is 0700 (so are its home, and Meko's data folder and its
+  `extensions/` when Kode makes them first); an existing one, such as Kode's home on an older
   install or a `[state] db_path` folder of one, keeps its mode. In `/var/tmp`, Meko's data folder
   must be a real directory owned by you that others can't write to (`ensurePrivateDir`, and
-  `private_dir` in the installer), or AgentK stops.
+  `private_dir` in the installer), or Kode stops.
 
 ## Code from public repos
 
@@ -94,31 +94,31 @@ Code on a private or internal GitHub repo is trusted like your own: only people 
 push to it or open a PR on it (a private repo's forks are private too). Code on a **public** repo's
 PR head isn't: anyone can open a PR. A session works on such a head when it reviews a PR (Review a
 PR) or is a task started on a PR, or on an existing branch whose open PR it took
-(`prHead()` in `src/server/headtrust.ts`). Before its first prompt and at every launch, AgentK
+(`prHead()` in `src/server/headtrust.ts`). Before its first prompt and at every launch, Kode
 reads the PR's repo's visibility (`gh api repos/<owner>/<name>`, kept 10 minutes, so a repo made
 public later is noticed), and a public repo, or one gh can't read, marks the session untrusted
 (`sessions.untrusted`, with a line in its log saying why). An untrusted session runs without the
-repo's own config, which would otherwise run the PR author's commands as you with no prompt (AgentK
+repo's own config, which would otherwise run the PR author's commands as you with no prompt (Kode
 answers Claude Code's folder-trust question for worktrees):
 
 - Claude Code starts with `--setting-sources user`: none of the repo's `.claude/settings*.json`
-  (hooks, permissions, `env`, plugins, status line) or `.mcp.json` servers load. AgentK's own
+  (hooks, permissions, `env`, plugins, status line) or `.mcp.json` servers load. Kode's own
   `--settings`, its mod and your user-level MCP servers (Meko's included) still do. Checked with
   Claude Code 2.1.296: a project `SessionStart` hook and a `.mcp.json` server both ran without the
   flag, and neither did with it.
 - The status line relay runs your user status line, never the worktree's.
-- The repo's `.agent-k/stages/` prompts aren't used; AgentK's (or yours from Settings) are. Until a
+- The repo's `.kode/stages/` prompts aren't used; Kode's (or yours from Settings) are. Until a
   session's head has been checked, it's treated as untrusted here.
 - OpenCode starts with `OPENCODE_DISABLE_PROJECT_CONFIG=1`, which leaves out the worktree's
   `opencode.json(c)` and `.opencode/` folders: its plugins (code OpenCode would run), agents,
-  commands and MCP servers (checked against OpenCode 1.19.4's and 2.1.4's source). AgentK's own plugin and
+  commands and MCP servers (checked against OpenCode 1.19.4's and 2.1.4's source). Kode's own plugin and
   config still load, from the session's environment.
-- Kiro has no way to leave a workspace's config out, and uses a workspace agent named `agentk`
-  (or `agentk-trusted`, a trusted launch's agent on Kiro 3.0) over AgentK's (checked with kiro-cli 2.32). An untrusted session on Kiro doesn't start while the
+- Kiro has no way to leave a workspace's config out, and uses a workspace agent named `kode`
+  (or `kode-trusted`, a trusted launch's agent on Kiro 3.0) over Kode's (checked with kiro-cli 2.32). An untrusted session on Kiro doesn't start while the
   worktree has one, or workspace MCP servers (`.kiro/settings/mcp.json`); the error says to review
   it on Claude Code.
 
-- [AgentK's session tools](tools.md), which start and move other sessions, refuse every call from an
+- [Kode's session tools](tools.md), which start and move other sessions, refuse every call from an
   untrusted session (`repoConfigTrusted()`: one not checked yet counts), and a Claude Code session launches without them;
   Kiro's shared agent file has them, and the route refuses them.
 

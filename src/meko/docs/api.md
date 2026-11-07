@@ -1,6 +1,6 @@
 # Meko backend: MCP and REST
 
-Agents (Claude Code, AgentK, and the CLI's tool commands) reach Meko over MCP at `/mcp` on the API
+Agents (Claude Code, Kode, and the CLI's tool commands) reach Meko over MCP at `/mcp` on the API
 listener, and the web UI ([web-ui.md](web-ui.md)) over `/api/v1` on the web listener ([web.md](web.md)), with Meko Cloud's tool names, arguments, paths and
 reply shapes, written here from scratch. Both call the service layer in `internal/memory`
 ([context-engine.md](context-engine.md)); the knowledge-file tools and routes are designed in
@@ -26,7 +26,7 @@ no login. Its own routes:
 
 | Route | Credential | What |
 |---|---|---|
-| `GET /api/v1/auth/status` | none | `{access, local_access, signed_in, setup_required, reset, username, totp_enabled}`: `signed_in` is whether this request is let in; the last four are always `false` or `null`, kept for pages that read them (AgentK's). No other `/api/v1/auth/*` route exists |
+| `GET /api/v1/auth/status` | none | `{access, local_access, signed_in, setup_required, reset, username, totp_enabled}`: `signed_in` is whether this request is let in; the last four are always `false` or `null`, kept for pages that read them (Kode's). No other `/api/v1/auth/*` route exists |
 | `GET /api/v1/extensions` | remote or local | `[{name, title, description, installed, web_ui, path, available, job?}]`: every extension Meko knows, sorted by name. `installed` is registered in `extensions.json`; `path` is `/ext/<name>/` while it's served, else `""`; `available` is whether it accepts a connection on its socket (it's running; a socket file left by one that died doesn't count); `job` is the last action the Extensions page ran on it since the server started, `{action, state, started_at, finished_at?, error?, output}`, `state` `running`, `done` or `failed`, `output` its last 16 KiB with the client token blanked; a failed `install` or `start` of one that is now installed and running is left out, since something else (such as `meko extension install` in a terminal) has done it since |
 | `POST /api/v1/extensions/<name>/<action>` | remote or local | `install`, `start` or `stop`, run in the background as the extension's job: 202 with its row. An install or a start of one with a web UI is done once it answers on its socket (30 s at most). 404 `NOT_FOUND` (not a known extension or action), 409 `CONFLICT` (start or stop on one that isn't installed, or a job running for it) |
 | `GET /api/v1/agents`, `POST /api/v1/agents/<name>/connect`, `/disconnect` | remote or local | The agents on this computer, and connecting them to Meko ([Agents](#agents)) |
@@ -37,7 +37,7 @@ no login. Its own routes:
 - **The client token** is what MCP and REST clients send as `Authorization: Bearer <token>`:
   32 random bytes, hex, in `client.token` (0600) at the data folder's root. `serve` (or
   `meko token`, if it runs first) makes it once, and it's kept across restarts, because Claude
-  Code's MCP config and AgentK store it once. It lives outside `run/`, which `serve` clears at
+  Code's MCP config and Kode store it once. It lives outside `run/`, which `serve` clears at
   each start. Making it is atomic (a hard link of a complete temp file), so two processes making it
   at once agree on one token. A token file other users have any access to, that another user
   owns, that isn't a regular file, or that holds no token is refused. Delete the file and restart
@@ -87,9 +87,11 @@ datapack's history stays until it's pruned. `serve` prunes rows older than 90 da
 then daily (`memory.RunCallPruner`). The rows don't count toward the storage limit
 ([design.md](design.md#the-storage-limit)).
 
-Each row also says which client sent the call (`client`, `0013_call_contents.sql`): `agentk` for a
-call that came with `X-Meko-Client: agentk` (AgentK's own, [below](#agentks-calls)), else `''`. It's
-a name only, so the Calls page can tell AgentK's calls from the agent's in the same session, which
+Each row also says which client sent the call (`client`, `0013_call_contents.sql`): `kode` for a
+call that came with `X-Meko-Client: kode` (Kode's own, [below](#kodes-calls); `agentk`, which releases
+from before Meko called it Kode send, counts as `kode`, and `0015_kode_client.sql` renamed the rows
+kept before), else `''`. It's
+a name only, so the Calls page can tell Kode's calls from the agent's in the same session, which
 share an agent id.
 
 ### Call contents
@@ -133,7 +135,7 @@ log. `datapack_metrics` gives the same three numbers to an agent.
 ## Context Gaps
 
 The searches Meko answered poorly, grouped by question, so someone can see what Meko is missing and
-teach it: the web UI's **Context Gaps** tab ([web-ui.md](web-ui.md)), and AgentK's project home and
+teach it: the web UI's **Context Gaps** tab ([web-ui.md](web-ui.md)), and Kode's project home and
 learn step. No model judges a reply; the rules flag only what the scores can show
 (`internal/memory/questions.go`).
 
@@ -156,7 +158,7 @@ its key (the query lower-cased with its whitespace collapsed, which groups asks 
 quality, tool, agent, conversation, result count, and best memory `score` and
 `raw_similarity_score`. A relevant one sets its question's `answered_at`, when the datapack has that
 question; nothing else is kept of it. Not recorded: failed calls; the web UI's own searches (agent
-`meko_web_ui`); and AgentK's own calls, which carry `X-Meko-Client: agentk` (its search at a
+`meko_web_ui`); and Kode's own calls, which carry `X-Meko-Client: kode` (its search at a
 session's start, whose query is the task, and its learn step's lookups). That's an HTTP header
 rather than a tool argument because Meko Cloud refuses arguments it doesn't know. A failure to
 record is logged and never fails the search.
@@ -183,12 +185,12 @@ in the datapack as `memory_add` saves one, agent `meko_web_ui`, metadata `{sourc
 "taught", question}` (the question cut to 300 characters), and the question is marked taught.
 Nothing checks it against what Meko has: the person wrote it on purpose. An agent marks a question
 dismissed (with the memory that already said the answer, whose text the list shows while the
-datapack has it) or taught with its `conversation_id` (AgentK's learn step, which saves its memory itself
+datapack has it) or taught with its `conversation_id` (Kode's learn step, which saves its memory itself
 first); the list then says an agent did it, in that conversation. A person's own latest dismissal and
 teach are kept apart (`person_*_at`) for the usage stats, which count them and the poor searches by
 quality a day, never a query; an agent's later mark doesn't overwrite them, and a restore clears a
 person's dismissal only when it restores theirs. An agent that searches before saving into a datapack
-it's filling (AgentK's learn session) forgets its conversation's asks afterwards, since finding
+it's filling (Kode's learn session) forgets its conversation's asks afterwards, since finding
 nothing there is expected.
 
 **Meko Cloud's datapacks.** While Meko Cloud is linked, `/mcp` passes each call that names none
@@ -353,16 +355,16 @@ datapacks, linked or not ([cloud.md](cloud.md#meko-cli)). `meko ui` opens the we
 no browser here (over SSH, or on Linux without a display); the link carries no credential. While
 the web UI is off it says so, and `meko ui start` turns it on; `meko ui stop` turns it off.
 `meko agent list`, `connect` and `disconnect` are in [Agents](#agents). `meko token --json` prints the MCP URL, the web
-listener's (`web_url`, where AgentK finds its own address), the token,
+listener's (`web_url`, where Kode finds its own address), the token,
 whether a server runs and whether Meko Cloud is linked, never its key (`cloud`, [cloud.md](cloud.md)), for
-extensions (AgentK reads it). `meko cloud-link` links Meko Cloud ([cloud.md](cloud.md)). `meko logs` and the commands that
+extensions (Kode reads it). `meko cloud-link` links Meko Cloud ([cloud.md](cloud.md)). `meko logs` and the commands that
 install and run Meko are in [install.md](install.md).
 
 ## Agents
 
 Meko knows five agents and connects them to itself: `claude` (Claude Code), `codex` (Codex), `kiro`
 (Kiro CLI), `opencode` (OpenCode) and `cursor` (Cursor), by adding an MCP server always named `meko` to the agent's
-own config, for all the user's projects. AgentK recognizes Meko's tools by that name
+own config, for all the user's projects. Kode recognizes Meko's tools by that name
 (`mcp__meko__*`). `internal/agents` does it for the CLI (`meko agent`), the routes below, the web
 UI's Agents page and a Meko Cloud link's change. Meko keeps no record of its own: it reads each
 agent's config every time, since the user and the agent edit it too.
@@ -377,7 +379,7 @@ agent's config every time, since the user and the agent edit it too.
   `~/.zshrc` and `~/.bashrc` (which a login bash reads only when its profile sources it, as a
   terminal's does); another shell gives way to `/bin/sh -l -c`. The shell runs only when an agent
   isn't found otherwise, in a session of its own with no terminal. Lists wait for its first read
-  until 3 s after it started, all their agents together, and no longer (AgentK gives the list 5 s).
+  until 3 s after it started, all their agents together, and no longer (Kode gives the list 5 s).
   The shell goes on in the background for up to 20 s, since a heavy profile can take seconds under a
   service, and the lists after it ends get its PATH; Meko kills one still running when it stops.
   Its PATH is kept, and read again in the background once it's 5 minutes old, so no list waits for
@@ -408,7 +410,7 @@ How it adds and removes the server, each agent's own way, Streamable HTTP with
 |---|---|---|---|
 | `claude` (Claude Code) | `claude mcp remove --scope user meko`, then `claude mcp add --scope user --transport http meko <url> --header "Authorization: Bearer <token>"`; if the add fails, the old entry goes back (`claude mcp add-json`). Then, in each folder whose own (local scope) `meko` points at this computer, `claude mcp remove --scope local meko` | `claude mcp remove --scope user meko`, and the folders' own on this computer as connect does | User scope (`~/.claude.json`, or `CLAUDE_CONFIG_DIR`'s) is every project's; Claude Code's default, `local`, is only the folder it runs in, and wins there over the user scope, so a folder's old `meko` for this Meko would keep its dead token after a destroy. `add` refuses a name the scope has, so an old `meko` goes first. Meko only reads Claude's file: its running sessions rewrite it. A folder's `meko` pointing elsewhere stays, and the list and connect note that Claude Code uses that one there |
 | `opencode` (OpenCode) | `opencode mcp add meko --url <url> --header "Authorization=Bearer <token>" --global` | Takes `mcp.servers.meko` (OpenCode 2) and `mcp.meko` (earlier versions) out of its global config files (`opencode.json`, `opencode.jsonc`, `config.json` in `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`), as text, keeping the rest of each file, comments too | `mcp add` replaces a server of the same name and writes the config in the shape its own version reads. `opencode mcp` has no remove. The list reads the same files, JSONC included, a later file's `meko` over an earlier one's |
-| `kiro` (Kiro CLI) | Sets `mcpServers.meko` (`url`, `headers`) in `settings/mcp.json` in Kiro's home (`KIRO_HOME`, else `~/.kiro`, as AgentK reads it), as text: an old entry keeps its other fields (`autoApprove`, `timeout`) and loses `disabled`, and the file's other servers and keys stay as they were | Takes `mcpServers.meko` out of the file as text, keeping the rest as it was | `kiro-cli mcp add` takes no headers, and needs a login |
+| `kiro` (Kiro CLI) | Sets `mcpServers.meko` (`url`, `headers`) in `settings/mcp.json` in Kiro's home (`KIRO_HOME`, else `~/.kiro`, as Kode reads it), as text: an old entry keeps its other fields (`autoApprove`, `timeout`) and loses `disabled`, and the file's other servers and keys stay as they were | Takes `mcpServers.meko` out of the file as text, keeping the rest as it was | `kiro-cli mcp add` takes no headers, and needs a login |
 | `codex` (Codex) | Writes an `[mcp_servers.meko]` table (`url`, `http_headers`) into `config.toml` in `$CODEX_HOME` or `~/.codex`, as text: an old `[mcp_servers.meko]` table and its subtables go (but not the comment and blank lines right before the next table's header, which are that table's), the rest stays as it was, and the result is parsed before it's written | Takes the table and its subtables out the same way | `codex mcp add` takes no headers, only the name of an environment variable holding a bearer token, which the user's shell would then have to set. A `meko` set some other way (a dotted key) isn't replaced or removed: it says to run `codex mcp remove meko` |
 | `cursor` (Cursor) | As Kiro's, in `~/.cursor/mcp.json` | As Kiro's | The editor and its CLI (`cursor-agent`) share that global file; neither has an `mcp add` that takes headers |
 
@@ -508,14 +510,14 @@ deeper nesting. Routes, shapes, rules and layouts are Meko Cloud's (its `/projec
   and `source`, so every memory records where it came from from day one. Nothing sets it until
   connectors exist, and replies don't show it yet.
 - **Artifacts**: `artifacts` holds the bytes in the database, once per datapack and SHA-256, up to
-  5 MiB (Cloud's limit). `artifact_get` returns them inline as `content_base64`, which AgentK reads
+  5 MiB (Cloud's limit). `artifact_get` returns them inline as `content_base64`, which Kode reads
   as well as Cloud's `local_path`, and records when the file was last read. It's annotated
   read-only as in Cloud: that time is bookkeeping, not a change to the artifact. The bytes go
   with the datapack's export, and count toward the storage limit.
 
-## AgentK's calls
+## Kode's calls
 
-`internal/mcp/agentk_contract_test.go` replays every call AgentK's Meko client makes
+`internal/mcp/kode_contract_test.go` replays every call Kode's Meko client makes
 (`src/extensions/agentk/src/server/meko.ts`), with the same tool names and arguments:
 
 - `check` (a ping);
@@ -526,17 +528,17 @@ deeper nesting. Routes, shapes, rules and layouts are Meko Cloud's (its `/projec
 - `search`;
 - `putArtifact`, `getArtifact`.
 
-Every call carries `X-Meko-Client: agentk`, so none of AgentK's own searches is a question on
-[Context Gaps](#context-gaps). AgentK reads and marks a project's questions through the Context Gaps
+Every call carries `X-Meko-Client: kode`, so none of Kode's own searches is a question on
+[Context Gaps](#context-gaps). Kode reads and marks a project's questions through the Context Gaps
 routes, with the client token.
 
 It checks each reply has every field MekoClient reads. When a method in `meko.ts` changes a call
-or reads a new field, change its step there. Once AgentK's own tests run against a real Meko,
+or reads a new field, change its step there. Once Kode's own tests run against a real Meko,
 this replay can go.
 
 ## REST at /api/v1
 
-`internal/rest` serves the subset of Meko Cloud's REST routes that the web UI, AgentK and
+`internal/rest` serves the subset of Meko Cloud's REST routes that the web UI, Kode and
 `meko-cli export` use, plus a few of Meko's own (marked below), with Cloud's paths and shapes in the
 `{data, error}` envelope, mounted on the server's `/api/v1` group (1 MB body limit), behind the
 same credential check as `/mcp`. Shapes MCP shares come from `internal/wire`; REST-only ones are in
@@ -579,7 +581,7 @@ An extracted memory is its named turn's ([memory-extraction.md](memory-extractio
 memory is the turn's when it was saved in its conversation (a memory's `conversation_id`) after the
 turn before it and no later than it, as Meko Cloud infers them. So a memory counts for a turn only when the agent records the turn
 (`conversation_add_message`) after that turn's `memory_add`s; a turn recorded before them gives
-them to the next turn. Turns come from the agents' own MCP calls (AgentK's Meko client records
+them to the next turn. Turns come from the agents' own MCP calls (Kode's Meko client records
 none), so the attribution depends on their order. Promoted ones are listed apart
 (`promoted_memory_ids`, `promoted_memory_texts`).
 

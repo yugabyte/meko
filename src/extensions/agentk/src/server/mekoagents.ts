@@ -7,7 +7,7 @@ import { mekoUrlHost } from './mekosetup.js';
 
 /**
  * Meko's list of the agents on this computer and whether each reaches Meko (`GET /api/v1/agents`,
- * Meko's docs/api.md): Meko owns the agents' connections. AgentK reads it on Meko's API listener
+ * Meko's docs/api.md): Meko owns the agents' connections. Kode reads it on Meko's API listener
  * with the client token, never posts to it (connecting is the owner's: the page does it, through
  * Meko's web routes), and gates new sessions on it (`Harnesses`), so it keeps the last list read in
  * state.db for when Meko doesn't answer. Never having read one, or a Meko too old to list them
@@ -110,7 +110,7 @@ export function mekoMcpGaps(label: string, meko: HarnessMeko | null, target: str
 }
 
 /**
- * Meko's list as AgentK last read it, kept in state.db's kv so a restart while Meko is down still
+ * Meko's list as Kode last read it, kept in state.db's kv so a restart while Meko is down still
  * gates on it. Read only on events (startup, Settings open, Check again, after an agent's Meko setup,
  * a change of Meko's link, a new session that the list kept would refuse): nothing polls.
  */

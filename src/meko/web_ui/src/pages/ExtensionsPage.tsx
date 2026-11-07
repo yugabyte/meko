@@ -152,7 +152,7 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           {/* Update only while there's a newer release (the badge's test), or while one installs. */}
           {installed && ext.updatable && (ext.update_available || doing === "update") && button("update", false)}
           {running && ext.path && (
-            // A plain link, opening it in place of this page: AgentK refuses to be framed.
+            // A plain link, opening it in place of this page: Kode refuses to be framed.
             <a
               href={ext.path}
               className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground hover:opacity-90"
@@ -226,8 +226,8 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           }
         >
           <p className="text-sm">
-            {ext.name === "agentk"
-              ? "Stopping AgentK ends every session running in it. They resume when it starts again."
+            {ext.name === "kode"
+              ? "Stopping Kode ends every session running in it. They resume when it starts again."
               : `${ext.title} stops answering until it starts again.`}
           </p>
         </Dialog>
@@ -248,8 +248,8 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           }
         >
           <p className="text-sm">
-            {ext.name === "agentk"
-              ? "Meko installs AgentK's newest release and, if it's running, restarts its server: sessions keep running, and open pages reconnect."
+            {ext.name === "kode"
+              ? "Meko installs Kode's newest release and, if it's running, restarts its server: sessions keep running, and open pages reconnect."
               : `Meko installs ${ext.title}'s newest release and, if it's running, restarts it: open pages reconnect, and a live talk resumes where it was.`}{" "}
             A release that fails to start is rolled back.
           </p>

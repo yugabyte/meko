@@ -4,7 +4,7 @@ import { mekoApiBase, type LocalMeko } from './mekolocal.js';
 
 /**
  * Meko's Context Gaps: the searches Meko found nothing, or nothing relevant, for, which Meko keeps
- * per datapack as questions (its docs/api.md). Meko judges every search itself; AgentK only reads
+ * per datapack as questions (its docs/api.md). Meko judges every search itself; Kode only reads
  * the questions and marks them, on the Meko on this computer's API listener with the client token
  * (`GET`, `POST …/mark`, `DELETE …/asks` under `/api/v1/datapacks/:id/questions`; `meko`: null
  * while none runs). That covers a linked Meko Cloud's datapacks too: their searches pass through this

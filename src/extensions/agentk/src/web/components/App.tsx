@@ -62,7 +62,7 @@ type Modal =
   /**
    * `fresh`: the project was just opened, so a Review a PR is offered first when it has PRs to review.
    * `learn`: start on Learn the project (the project was just opened on an empty datapack, or its home offered it).
-   * `retry`: a failed start to try again, filling the dialog in. `initial`: a task Ask AgentK proposed, to change before it starts.
+   * `retry`: a failed start to try again, filling the dialog in. `initial`: a task Ask Kode proposed, to change before it starts.
    */
   | { kind: 'new-session'; projectId: string; fresh?: boolean; learn?: boolean; retry?: FailedStart; initial?: CreateSessionRequest; pickProject?: boolean }
   /** Add a work item, or edit `item`. */
@@ -75,7 +75,7 @@ type Modal =
   | { kind: 'palette' }
   /** Move a session to another stage, starting from `preset` (a stage clicked in the stage bar). */
   | { kind: 'move'; sessionId: string; preset?: MovePreset }
-  /** Open PR with instructions for AgentK. */
+  /** Open PR with instructions for Kode. */
   | { kind: 'open-pr'; sessionId: string }
   | { kind: 'rename'; sessionId: string }
   /** What's new from one version to another, and what opened it (for Back: `whatsNewBack`). */
@@ -127,7 +127,7 @@ function sortedProjects(projects: ProjectWithSessions[]): ProjectWithSessions[] 
   return [...projects].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
 }
 
-// Only the AgentK page used last shows notifications, so clicking one lands in the window in use.
+// Only the Kode page used last shows notifications, so clicking one lands in the window in use.
 const notifier = notifyLeader(typeof navigator !== 'undefined' ? navigator.locks : undefined);
 if (typeof window !== 'undefined') {
   window.addEventListener('focus', () => notifier.claim());
@@ -448,7 +448,7 @@ export function App() {
     }
   };
 
-  // The AgentK tour: its demo project and host, or the host of the one already open.
+  // The Kode tour: its demo project and host, or the host of the one already open.
   const [tourStarting, setTourStarting] = useState(false);
   const startTour = async () => {
     setTourStarting(true);
@@ -707,7 +707,7 @@ export function App() {
           />
         ) : (
           <>
-            {mobile && <TopBar onMenu={openDrawer} title="AgentK" />}
+            {mobile && <TopBar onMenu={openDrawer} title="Kode" />}
             <div className="empty-main">
               <img src={appUrl('/logo.png')} alt="" width={96} height={96} />
               <h2>No projects yet</h2>
@@ -715,8 +715,8 @@ export function App() {
                 A project is an effort to build or improve a feature, product or service, worked on in one of your git repos. Each task you start in it gets its own worktree and Claude session.
               </p>
               <div className="empty-actions">
-                <button className="btn primary" disabled={tourStarting} onClick={() => void startTour()} title="A demo project and a session that walks you through AgentK and what Meko adds">
-                  {tourStarting ? <Busy label="Starting the tour" /> : 'Take the AgentK tour'}
+                <button className="btn primary" disabled={tourStarting} onClick={() => void startTour()} title="A demo project and a session that walks you through Kode and what Meko adds">
+                  {tourStarting ? <Busy label="Starting the tour" /> : 'Take the Kode tour'}
                 </button>
                 <button className="btn" onClick={() => setModal({ kind: 'new-project' })}>
                   Open project
@@ -837,7 +837,7 @@ export function App() {
           onLinkWorkItem={() => currentSession && setModal({ kind: 'link-work', sessionId: currentSession.id })}
           mekoConfigured={state.meko.configured}
           onError={showToast}
-          askAgentk={!!state.askAgentk}
+          askKode={!!state.askKode}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
           mekoWebUrl={state.meko.webUrl}
           onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}

@@ -58,7 +58,7 @@ describe('plan limits from the status line', () => {
   });
 });
 
-describe("plan limits from AgentK's mod", () => {
+describe("plan limits from Kode's mod", () => {
   it('reads both windows by kind, with ISO reset times', () => {
     const list = [
       { kind: 'five_hour', percentUsed: 2, resetsAt: '2026-09-21T15:00:00.000Z' },
@@ -295,9 +295,9 @@ describe('the status line script', () => {
       writeHookFiles(paths);
       expect(readFileSync(join(paths.run, 'user-statusline'), 'utf8')).toBe('printf user:; cat');
       const run = (env: Record<string, string>) => runStatusLine(statusLineScriptPath(paths), env);
-      expect(run({ AK_USER_STATUSLINE: 'printf session:; cat' })).toBe('session:{"model":{}}');
+      expect(run({ KODE_USER_STATUSLINE: 'printf session:; cat' })).toBe('session:{"model":{}}');
       expect(run({})).toBe('user:{"model":{}}');
-      expect(run({ AK_USER_STATUSLINE: '' })).toBe('');
+      expect(run({ KODE_USER_STATUSLINE: '' })).toBe('');
     } finally {
       if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = saved;

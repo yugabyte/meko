@@ -32,12 +32,12 @@ describe("the design panel's working line (designWorking)", () => {
     ['sent long ago, idle', {}, LONG_AGO, null],
     // A revision never seen within its grace isn't the turn running now.
     ['working, a revision sent long ago never seen', working, LONG_AGO, 'working'],
-    // Answers Claude holds for the next turn: AgentK is about to revise.
+    // Answers Claude holds for the next turn: Kode is about to revise.
     ['between turns, answers held', held, STARTED, 'revising'],
     // Never while Claude waits on the user, or can't work.
     ['a permission prompt mid-turn', permission, JUST, null],
     ['a permission prompt with answers held', { ...permission, ...held }, STARTED, null],
-    ["Claude's own question", { status: 'needs_input', statusDetail: 'AgentK asks: Which one?', midTurn: true }, JUST, null],
+    ["Claude's own question", { status: 'needs_input', statusDetail: 'Kode asks: Which one?', midTurn: true }, JUST, null],
     ['exited', { status: 'exited' }, JUST, null],
     ['starting', { status: 'starting' }, JUST, null],
     ['an approval queued', { ...working, approvalQueued: true }, null, null],

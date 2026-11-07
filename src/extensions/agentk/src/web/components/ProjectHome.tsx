@@ -48,7 +48,7 @@ export function ProjectHomeView({
   order: { index: number; count: number };
   /** Moves the project to this index in the list (the tap equivalent of dragging it in the rail). */
   onMove: (index: number) => void;
-  /** The Meko AgentK uses, for links to its datapacks' pages. */
+  /** The Meko Kode uses, for links to its datapacks' pages. */
   meko: Pick<MekoStatus, 'configured'>;
   /** There's a Meko to use (the one on this computer). */
   mekoConfigured: boolean;
@@ -471,7 +471,7 @@ function ProjectSettingsForm({
           info={{
             for: 'ps-reviewer',
             text:
-              'Whose reviews go straight to AgentK. Other reviews wait for you to send or dismiss them; your own always go.',
+              'Whose reviews go straight to Kode. Other reviews wait for you to send or dismiss them; your own always go.',
           }}
         >
           <select

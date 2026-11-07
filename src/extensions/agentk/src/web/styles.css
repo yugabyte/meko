@@ -1,4 +1,4 @@
-/* AgentK web UI. */
+/* Kode web UI. */
 :root {
   --bg: #f5f6f4;
   --surface: #ffffff;
@@ -218,7 +218,7 @@ code,
   font-size: 12px;
   color: var(--muted);
 }
-/* Instructions for AgentK past their limit (InstructionsField). */
+/* Instructions for Kode past their limit (InstructionsField). */
 .hint .over {
   color: var(--bad);
 }
@@ -741,7 +741,7 @@ textarea.input {
 .dot.idle {
   border: 2px solid var(--idle);
 }
-/* AgentK stopped the agent for sitting idle: a thin grey ring with a pause sign (‖) inside, still.
+/* Kode stopped the agent for sitting idle: a thin grey ring with a pause sign (‖) inside, still.
    Not dashed: a broken ring at this size reads as a spinner that has frozen. The bars are placed
    from the border edge, so their offsets are on the dot's 10px box. */
 .dot.stopped {
@@ -758,7 +758,7 @@ textarea.input {
 .dot.recovered {
   background: var(--accent);
 }
-/* AgentK is saving what the session learned to Meko: a ring of ten dots turning around Meko's m.
+/* Kode is saving what the session learned to Meko: a ring of ten dots turning around Meko's m.
    Drawn at 14px but 10px in the layout, so a tab keeps its width when learning starts or stops.
    Both layers are the accent through a mask, so they follow the theme. */
 .dot.learning {
@@ -847,7 +847,7 @@ textarea.input {
 /* ---------- Shell ---------- */
 .app {
   display: grid;
-  /* Wide enough for the rail's search bar ("Ask AgentK" beside Ctrl+K), the projects' names and,
+  /* Wide enough for the rail's search bar ("Ask Kode" beside Ctrl+K), the projects' names and,
      under them, their sessions' names (which wrap rather than cut off). */
   grid-template-columns: var(--rail-w, 248px) minmax(0, 1fr);
   height: 100%;
@@ -875,7 +875,7 @@ textarea.input {
   gap: 4px;
   min-height: 0;
 }
-/* Ask AgentK: a button that looks like a field, with the logo where a search icon would be.
+/* Ask Kode: a button that looks like a field, with the logo where a search icon would be.
    The palette opens over it (.pal-overlay). */
 .rail-search {
   display: flex;
@@ -1310,7 +1310,7 @@ textarea.input {
   font-size: 10.5px;
   padding-left: 54px;
 }
-/* Kiro's own bonus and overage lines, quoted under what AgentK read unless that already states the whole line. */
+/* Kiro's own bonus and overage lines, quoted under what Kode read unless that already states the whole line. */
 .lim-said {
   font-family: var(--mono);
   font-size: 10.5px;
@@ -2914,7 +2914,7 @@ button.rv-where {
   cursor: pointer;
   text-align: left;
 }
-/* Only AgentK's own decisions to look at: no open question waits on the user. */
+/* Only Kode's own decisions to look at: no open question waits on the user. */
 .dq-bar.calm {
   background: var(--accent-soft);
   color: var(--accent);
@@ -2974,7 +2974,7 @@ a.icon-btn {
   padding: 0 4px;
   margin: 0 -4px;
 }
-/* AgentK at work on the design (designWorking in util.ts): its time reads Revising or Working, and
+/* Kode at work on the design (designWorking in util.ts): its time reads Revising or Working, and
    a bar runs along the header's bottom edge (still, at half strength, with reduced motion). When
    the revised design lands, the time flashes once. */
 .design-working {
@@ -3022,7 +3022,7 @@ a.icon-btn {
   overflow-y: auto;
   padding: 16px 20px 32px;
 }
-/* The page a design is about to fill, while AgentK writes the first one (DesignSkeleton). */
+/* The page a design is about to fill, while Kode writes the first one (DesignSkeleton). */
 .design-skel {
   display: flex;
   flex-direction: column;
@@ -3779,7 +3779,7 @@ div[id^='dak-mermaid-'] .label {
 .pal-item.wrap .pal-label {
   white-space: normal;
 }
-/* AgentK's actions and sessions found: the hint goes under the label, which keeps the whole width, and wraps. */
+/* Kode's actions and sessions found: the hint goes under the label, which keeps the whole width, and wraps. */
 .pal-item.wrap {
   grid-template-columns: 16px minmax(0, 1fr);
   row-gap: 2px;
@@ -3793,7 +3793,7 @@ div[id^='dak-mermaid-'] .label {
 .pal-error {
   padding: 0 16px 10px;
 }
-/* Ask AgentK's exchange while the palette is open: what you asked, muted, then AgentK's reply. */
+/* Ask Kode's exchange while the palette is open: what you asked, muted, then Kode's reply. */
 .pal-chat {
   max-height: 40vh;
   overflow-y: auto;

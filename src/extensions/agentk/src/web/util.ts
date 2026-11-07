@@ -7,10 +7,10 @@ import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
 /**
- * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
+ * What a status dot shows: the session's status, `learning` while Kode saves what it learned to
  * Meko, `queued` while a gate waits to go between turns, `background` while the agent is between
  * turns with work still running in the background, `meko` while Claude runs a Meko tool call in
- * a working turn, or `stopped` while AgentK has stopped the agent for sitting idle (`Session.idleStoppedAt`).
+ * a working turn, or `stopped` while Kode has stopped the agent for sitting idle (`Session.idleStoppedAt`).
  */
 export type DotState = SessionStatus | 'learning' | 'queued' | 'background' | 'meko' | 'stopped';
 
@@ -35,8 +35,8 @@ const URGENCY: Record<DotState, number> = {
 };
 
 /**
- * AgentK stopped the session's agent for sitting idle: it shows as exited, but anything that needs
- * the agent (an action, AgentK's own steps) starts it again first, so it doesn't block them.
+ * Kode stopped the session's agent for sitting idle: it shows as exited, but anything that needs
+ * the agent (an action, Kode's own steps) starts it again first, so it doesn't block them.
  */
 export function idleStopped(s: Pick<Session, 'status'> & Partial<Pick<Session, 'idleStoppedAt'>>): boolean {
   return s.status === 'exited' && s.idleStoppedAt != null;
@@ -271,7 +271,7 @@ function waitsOnYou(s: Pick<DotFields, 'stage' | 'waitsOnYou' | 'codeReview'>): 
  * What a session's dot shows: Needs you while Pull Request or the code review's findings wait on the user, over idle, recovered
  * and working; then `Session.learning` over idle, recovered and working, then `Session.queued` over
  * idle and recovered, then `Session.background` over idle and recovered, then `Session.mekoCall`
- * over working; an exited session whose agent AgentK stopped for sitting idle is `stopped`, under
+ * over working; an exited session whose agent Kode stopped for sitting idle is `stopped`, under
  * Needs you.
  */
 export function dotState(s: DotFields): DotState {
@@ -324,7 +324,7 @@ export function backgroundText(tasks: Session['background']): string {
 export const LEARNING_TITLE = 'learning (saving what it learned to Meko)';
 
 /**
- * Whether Save learnings is offered: AgentK saves to the project's datapack, so it needs one, Meko and
+ * Whether Save learnings is offered: Kode saves to the project's datapack, so it needs one, Meko and
  * Claude there. Not while a Discard waits for its learn step: the Discard row already says so.
  */
 export function offersLearn(s: Pick<Session, 'status' | 'discarding'> & Partial<Pick<Session, 'idleStoppedAt'>>, datapack: boolean, mekoConfigured: boolean): boolean {
@@ -475,10 +475,10 @@ export function limitLevel(percent: number): 'warn' | 'bad' | null {
 }
 
 /**
- * The extra lines under Kiro's credit ring (`KiroLimit` in Rail.tsx): `extra` is AgentK's own
+ * The extra lines under Kiro's credit ring (`KiroLimit` in Rail.tsx): `extra` is Kode's own
  * reading of the bonus and overage lines, and `said` is Kiro's verbatim line quoted under them,
- * kept unless the `extra` line already states everything AgentK read from the line, so a fact
- * isn't shown twice and nothing AgentK read but doesn't show is hidden. The overage quote is
+ * kept unless the `extra` line already states everything Kode read from the line, so a fact
+ * isn't shown twice and nothing Kode read but doesn't show is hidden. The overage quote is
  * dropped only for the one form that's been seen, `Overages: Disabled` (its on/off read, no
  * credits), which `extra` fully states as `Overage off`; a line that also carries credits keeps
  * its quote, since `extra` shows only the credits (not the on/off) and the credits amount itself
@@ -490,7 +490,7 @@ export function kiroPlanLines(plan: Pick<KiroPlan, 'bonus' | 'overage'>): { extr
     plan.bonus && `Bonus ${creditsNumber(Math.max(0, plan.bonus.total - plan.bonus.used))} of ${creditsNumber(plan.bonus.total)} left`,
     plan.overage && (plan.overage.credits !== null ? `Overage ${creditsNumber(plan.overage.credits)} billed` : plan.overage.enabled !== null ? `Overage ${plan.overage.enabled ? 'on' : 'off'}` : null),
   ].filter((l): l is string => !!l);
-  // Kiro's own words, quoted unless `extra` says everything AgentK read: dropped only for the seen
+  // Kiro's own words, quoted unless `extra` says everything Kode read: dropped only for the seen
   // `Overages: Disabled` shape (on/off, no credits), which `Overage off`/`Overage on` fully states.
   const overageShown = !!plan.overage && plan.overage.enabled !== null && plan.overage.credits === null;
   const said = [plan.bonus?.line, overageShown ? null : plan.overage?.line].filter((l): l is string => !!l);
@@ -519,7 +519,7 @@ export function usageTitle(u: TokenUsage): string {
 
 /**
  * The Meko section's 1st-turn tokens tile in words: its split line (shown, since tooltips aren't
- * seen on touch) and a tooltip that spells it out, including how many sessions AgentK's search at
+ * seen on touch) and a tooltip that spells it out, including how many sessions Kode's search at
  * start (the seed) ran in, since sessions from before it was added, or started with no task, count
  * but never had one.
  */
@@ -528,8 +528,8 @@ export function firstTurnText(t: MekoFirstTurn): { split: string | null; title: 
   if (t.sessions === 0) return { split: null, title: 'No session has finished its first turn yet.' };
   const sessions = (n: number) => `${f(n)} ${n === 1 ? 'session' : 'sessions'}`;
   const seed = t.startSearches === 0
-    ? "AgentK's search at session start, the seed, hasn't run in any of them yet;"
-    : `${f(t.seedTokens)} that AgentK's search at session start passed to Claude (the seed` +
+    ? "Kode's search at session start, the seed, hasn't run in any of them yet;"
+    : `${f(t.seedTokens)} that Kode's search at session start passed to Claude (the seed` +
       (t.startSearches < t.sessions ? `; it ran in ${f(t.startSearches)} of them, the others are from before it was added or had no task),` : '),');
   return {
     split: `${t.startSearches === 0 ? 'Seeded none yet' : `Seeded ≈ ${formatTokens(t.seedTokens)}`} · Searched ≈ ${formatTokens(t.searchedTokens)}`,
@@ -597,7 +597,7 @@ export function approveLabel(openQuestions: number): string {
 
 /**
  * Whether the design panel's header shows the approve button: for a design of a running session in
- * Design, as the questions' footer is. With open questions, or a change to one of AgentK's decisions
+ * Design, as the questions' footer is. With open questions, or a change to one of Kode's decisions
  * waiting (`changing`), it only takes the user to them, so it's left out while they're on screen
  * (their footer approves, with the answers) and while they can't be shown (the design is loading,
  * or couldn't be read).
@@ -608,7 +608,7 @@ export function headerApproves(session: Session, questions: 'shown' | 'hidden' |
 }
 
 /** The status detail while Claude asks the user something (`askDetail()` in sessions.ts). */
-const ASKING = 'AgentK asks: ';
+const ASKING = 'Kode asks: ';
 
 /** Claude is waiting on a question or permission prompt in the terminal, not on the design. */
 function otherPrompt(session: Session): boolean {
@@ -625,7 +625,7 @@ function otherPrompt(session: Session): boolean {
  */
 export function promptBlocker(session: Session): string | null {
   if (exitedForGood(session)) return 'Claude has exited. Resume the session first.';
-  if (session.status === 'needs_input' && session.statusDetail !== DESIGN_READY) return 'AgentK is waiting on you in the terminal. Answer it first.';
+  if (session.status === 'needs_input' && session.statusDetail !== DESIGN_READY) return 'Kode is waiting on you in the terminal. Answer it first.';
   return null;
 }
 
@@ -637,7 +637,7 @@ export function instructionsBlocker(text: string): string | null {
 }
 
 /**
- * A turn is running and AgentK's mod is too: an approval now waits for the turn to end, and
+ * A turn is running and Kode's mod is too: an approval now waits for the turn to end, and
  * answers sent now are taken when it does.
  */
 export function heldForTurnEnd(session: Session): boolean {
@@ -646,21 +646,21 @@ export function heldForTurnEnd(session: Session): boolean {
 
 /** Why Approve design can't be pressed right now, or null when it can. Mirrors the server's checks. */
 export function designApprovalBlocker(session: Session): string | null {
-  if (!session.hasDesign) return 'AgentK hasn’t proposed a design yet.';
-  if (session.approvalQueued) return 'You approved the design: it goes to AgentK when this turn ends.';
+  if (!session.hasDesign) return 'Kode hasn’t proposed a design yet.';
+  if (session.approvalQueued) return 'You approved the design: it goes to Kode when this turn ends.';
   if (exitedForGood(session)) return 'Claude has exited. Resume the session first.';
-  if (session.status === 'starting') return 'Wait for AgentK to finish its turn.';
-  if (session.promptsHeld > 0) return 'AgentK has answers from you to take first. Approve once it has revised the design.';
+  if (session.status === 'starting') return 'Wait for Kode to finish its turn.';
+  if (session.promptsHeld > 0) return 'Kode has answers from you to take first. Approve once it has revised the design.';
   // With the mod, an approval made mid-turn waits for the turn to end.
   if (heldForTurnEnd(session)) return null;
-  if (session.status === 'working') return 'Wait for AgentK to finish its turn.';
+  if (session.status === 'working') return 'Wait for Kode to finish its turn.';
   // A question or permission prompt from Claude isn't the design; the server refuses to approve over it.
-  if (otherPrompt(session)) return 'AgentK is waiting on you in the terminal. Answer it first.';
+  if (otherPrompt(session)) return 'Kode is waiting on you in the terminal. Answer it first.';
   return null;
 }
 
 /** Why the design's approve buttons wait while the server moves the session on (`Session.busy`). */
-export const SESSION_BUSY = 'AgentK is moving the session on. Wait a moment.';
+export const SESSION_BUSY = 'Kode is moving the session on. Wait a moment.';
 
 /** A gate button: its label, why it's disabled (null when it isn't), and its tooltip. */
 export interface GateButton {
@@ -679,26 +679,26 @@ export interface GateButton {
 export function demoReviewGate(session: Session): GateButton | null {
   const run = canRunReview(session);
   if (!run.offered) return null;
-  return { label: 'Run code review', reason: run.wait, title: run.wait ?? "Run AgentK's code review on the change as it is now" };
+  return { label: 'Run code review', reason: run.wait, title: run.wait ?? "Run Kode's code review on the change as it is now" };
 }
 
 /**
- * The Open PR gate in Code. It reads Review Changes when the press starts AgentK's code review first
+ * The Open PR gate in Code. It reads Review Changes when the press starts Kode's code review first
  * (`reviews`, by default `Session.openPrReview` `new`; the Open PR dialog passes what its own Code
  * review fields make of it). Mid-turn, a press queues the PR prompt for the turn's end. Mirrors the
  * server's checks.
  */
 export function openPrGate(session: Session, reviews = session.openPrReview === 'new'): GateButton {
   const name = reviews ? 'Review Changes' : 'Open PR';
-  const does = reviews ? "Run AgentK's code review, then commit, push and open a pull request" : 'Commit, push and open a pull request';
+  const does = reviews ? "Run Kode's code review, then commit, push and open a pull request" : 'Commit, push and open a pull request';
   const gate = (reason: string | null): GateButton => ({ label: name, reason, title: reason ?? does });
   if (exitedForGood(session)) return gate('Claude has exited. Resume the session first.');
   if (!session.busy && (session.status === 'working' || session.status === 'starting' || session.midTurn)) {
-    const title = reviews ? 'AgentK is mid-turn: the code review starts when the turn ends' : 'AgentK is mid-turn: the PR prompt goes when the turn ends';
+    const title = reviews ? 'Kode is mid-turn: the code review starts when the turn ends' : 'Kode is mid-turn: the PR prompt goes when the turn ends';
     return { label: `${name} after this turn`, reason: null, title, queues: true };
   }
-  if (session.status === 'needs_input') return gate('AgentK is waiting on you in the terminal. Answer it first.');
-  if (session.promptsHeld > 0) return gate('AgentK has prompts from you to take first. Open the PR once it has.');
+  if (session.status === 'needs_input') return gate('Kode is waiting on you in the terminal. Answer it first.');
+  if (session.promptsHeld > 0) return gate('Kode has prompts from you to take first. Open the PR once it has.');
   return gate(null);
 }
 
@@ -738,8 +738,8 @@ const MERGE_WAITS: [string, string][] = [
   ['CI is still running.', 'waiting on CI'],
   ["CI hasn't started on the latest push yet.", 'waiting on CI'],
   ["GitHub's required checks haven't reported on the latest push yet.", 'waiting on CI'],
-  ['AgentK is waiting on you in the terminal.', 'waiting on you in the terminal'],
-  // Only Run to merge's merge stays queued through these, which AgentK works on.
+  ['Kode is waiting on you in the terminal.', 'waiting on you in the terminal'],
+  // Only Run to merge's merge stays queued through these, which Kode works on.
   ['CI is failing.', 'waiting on a CI fix'],
   ['The branch has merge conflicts.', 'waiting on the merge conflicts'],
 ];
@@ -752,7 +752,7 @@ export function queuedText(session: Session): string | null {
   if (session.queued === 'open-pr') return session.autoRun ? '✓ Run to merge: opens the PR when this turn ends' : '✓ Open PR queued: goes when the turn ends';
   if (session.queued !== 'merge') return null;
   const first = session.mergeBlockers[0];
-  const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? (session.autoRun && !session.mergeQueueable ? 'waiting on you' : 'waiting on AgentK')) : 'merging soon';
+  const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? (session.autoRun && !session.mergeQueueable ? 'waiting on you' : 'waiting on Kode')) : 'merging soon';
   return session.autoRun ? `✓ Run to merge: ${waits}` : `✓ Merge queued: ${waits}`;
 }
 
@@ -761,9 +761,9 @@ export function queuedText(session: Session): string | null {
  * under the gate in the phone's ⋯ sheet, which has no tooltips.
  */
 export function runToMergeTitle(session: Session): string {
-  if (session.stage === 'design') return 'once you approve the design, AgentK opens the PR when it has made the change, then merges it once nothing blocks it';
-  if (session.stage === 'review') return 'AgentK merges the PR once nothing blocks it, and tells you when something only you can clear blocks it';
-  return 'AgentK opens the PR when its turn ends (at once, between turns), then merges it once nothing blocks it';
+  if (session.stage === 'design') return 'once you approve the design, Kode opens the PR when it has made the change, then merges it once nothing blocks it';
+  if (session.stage === 'review') return 'Kode merges the PR once nothing blocks it, and tells you when something only you can clear blocks it';
+  return 'Kode opens the PR when its turn ends (at once, between turns), then merges it once nothing blocks it';
 }
 
 /**
@@ -787,7 +787,7 @@ export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean
 
 /**
  * The task's code review can be run now (the `review-run` action): a task in Code, or in Pull
- * Request once its PR is found, with no review running. `ready`: AgentK can take a prompt now (between
+ * Request once its PR is found, with no review running. `ready`: Kode can take a prompt now (between
  * turns, not waiting on the user or exited), as the server checks; until then it's offered disabled,
  * with `wait` saying what it waits for.
  */
@@ -797,9 +797,9 @@ export function canRunReview(s: Pick<Session, 'kind' | 'stage' | 'prNumber' | 'c
   const offered = s.kind !== 'code-review' && s.kind !== 'review-pr' && (s.stage === 'code' || (s.stage === 'review' && !!s.prNumber)) && !running;
   const wait = !offered || idleStopped(s) ? null
     : s.status === 'exited' ? 'Resume the session first'
-      : s.status === 'needs_input' ? 'Answer AgentK in the terminal first'
-        : s.status === 'starting' ? 'Once AgentK has started'
-          : s.busy || (s.status !== 'idle' && s.status !== 'recovered') ? "After AgentK's turn" : null;
+      : s.status === 'needs_input' ? 'Answer Kode in the terminal first'
+        : s.status === 'starting' ? 'Once Kode has started'
+          : s.busy || (s.status !== 'idle' && s.status !== 'recovered') ? "After Kode's turn" : null;
   return { offered, ready: offered && !wait, wait };
 }
 
@@ -846,7 +846,7 @@ export function learnStepText(p: LearnProgress): string {
     case 'search': return `Looking up ${facts(p.facts)} in Meko`;
     case 'check': return `Checking ${facts(p.facts)} against Meko`;
     case 'save': return `Saving ${Math.min(p.done + 1, p.facts)} of ${p.facts} to Meko`;
-    case 'turn': return 'AgentK is saving what it learned in a turn';
+    case 'turn': return 'Kode is saving what it learned in a turn';
   }
 }
 
@@ -860,7 +860,7 @@ export function closingText(s: Pick<Session, 'closeStep' | 'learnProgress' | 'pr
   const pr = s.prNumber ? `PR #${s.prNumber}` : 'the PR';
   switch (s.closeStep) {
     case 'merge': return `Waiting for GitHub to merge ${pr}`;
-    case 'turn': return 'Merged. Closing when AgentK finishes its turn';
+    case 'turn': return 'Merged. Closing when Kode finishes its turn';
     case 'learn': return `Merged. ${s.learnProgress ? learnStepText(s.learnProgress) : 'Saving learnings'}`;
     case 'cleanup': return 'Merged. Cleaning up';
     default: return 'Merging and closing';
@@ -900,23 +900,23 @@ export function dotTitle(s: Session): string {
   return STATUS_TEXT[dot];
 }
 
-/** Why answers can't be sent for AgentK to revise the design right now, or null when they can. */
+/** Why answers can't be sent for Kode to revise the design right now, or null when they can. */
 export function designReviseBlocker(session: Session): string | null {
   if (session.approvalQueued) return 'You approved the design. Cancel the approval to send answers instead.';
   if (exitedForGood(session)) return 'Claude has exited. Resume the session first.';
-  if (session.status === 'starting') return 'Wait for AgentK to finish its turn.';
+  if (session.status === 'starting') return 'Wait for Kode to finish its turn.';
   if (heldForTurnEnd(session)) return null;
-  if (session.status === 'working') return 'Wait for AgentK to finish its turn.';
-  if (otherPrompt(session)) return 'AgentK is waiting on you in the terminal. Answer it first.';
+  if (session.status === 'working') return 'Wait for Kode to finish its turn.';
+  if (otherPrompt(session)) return 'Kode is waiting on you in the terminal. Answer it first.';
   return null;
 }
 
-/** How long after Send for revision the design panel shows AgentK at work before Claude reports the turn. */
+/** How long after Send for revision the design panel shows Kode at work before Claude reports the turn. */
 export const REVISION_GRACE_MS = 10_000;
 
 /**
  * A Send for revision from this page: when it was clicked, and whether its turn has been seen
- * (AgentK working on it, or Claude holding the answers for the turn's end) within the grace.
+ * (Kode working on it, or Claude holding the answers for the turn's end) within the grace.
  */
 export interface RevisionSent {
   at: number;
@@ -928,14 +928,14 @@ function canWork(session: Session): boolean {
   return !exitedForGood(session) && session.status !== 'starting' && !otherPrompt(session);
 }
 
-/** AgentK is in a turn, or Claude holds answers for the next one (through the mod). */
+/** Kode is in a turn, or Claude holds answers for the next one (through the mod). */
 function busyWithTurn(session: Session): boolean {
   return session.status === 'working' || (session.promptsHeld > 0 && canWork(session));
 }
 
 /**
  * A session in Design whose first design isn't written yet (`ProjectView` opens the design panel
- * for it, to show AgentK at work on it): its id, or null. Null while it starts, so the panel leaves
+ * for it, to show Kode at work on it): its id, or null. Null while it starts, so the panel leaves
  * the terminal's startup steps on screen and opens as the first turn begins.
  */
 export function designPending(s: Pick<Session, 'id' | 'stage' | 'desired' | 'hasDesign' | 'status'> | null | undefined): string | null {
@@ -943,11 +943,11 @@ export function designPending(s: Pick<Session, 'id' | 'stage' | 'desired' | 'has
 }
 
 /**
- * Whether the design panel's header shows AgentK at work on the design (its edge loader), and how
+ * Whether the design panel's header shows Kode at work on the design (its edge loader), and how
  * it's worded: 'revising' for the turn of a Send for revision from this page (`rev`), 'working' for
  * any other turn, null when it doesn't show. It follows the session's status, so a reload or another
  * screen shows it too; `rev` covers the moment between the click and Claude reporting the turn, and
- * the wording. Before there's a design it shows AgentK writing the first one (the panel's body
+ * the wording. Before there's a design it shows Kode writing the first one (the panel's body
  * shows a placeholder page then). Never while Claude waits on the user.
  */
 export function designWorking(session: Session, rev: RevisionSent | null, now: number): 'revising' | 'working' | null {

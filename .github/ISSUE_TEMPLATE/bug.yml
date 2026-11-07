@@ -1,7 +1,7 @@
 # The issue skill (.claude/skills/issue/SKILL.md) writes agents' bug reports with these headings:
 # change both together.
 name: Bug report
-description: Something in Meko, AgentK or Presenter doesn't work as it should.
+description: Something in Meko, Kode or Presenter doesn't work as it should.
 type: Bug
 labels: [bug]
 body:
@@ -16,7 +16,7 @@ body:
       label: Product
       options:
         - Meko
-        - AgentK
+        - Kode
         - Presenter
         - Not sure
     validations:
@@ -26,7 +26,7 @@ body:
     attributes:
       label: Version
       description: "`meko status` lists Meko's version and each extension's. Paste those lines, not its links."
-      placeholder: Meko 0.20261028.1, AgentK 0.20261028.3
+      placeholder: Meko 0.20261028.1, Kode 0.20261028.3
     validations:
       required: true
   - type: textarea
@@ -60,5 +60,5 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Your OS and its version. For AgentK, also the agent and its version (Claude Code, OpenCode or Kiro).
+      description: Your OS and its version. For Kode, also the agent and its version (Claude Code, OpenCode or Kiro).
       placeholder: macOS 15.5, Claude Code 2.1.302

@@ -1,9 +1,9 @@
-// AgentK's program: me_kode, named so a process list and the services say AgentK is a Meko
+// Kode's program: me_kode, named so a process list and the services say Kode is a Meko
 // extension. It isn't a command on PATH: people run it through Meko (`meko kode <command>`), which
 // runs a release's app/current/bin/me_kode. Its names before were `me_koder`, `agentk` and, until
-// the rename to AgentK, `agent-k-local`: a release still carries all three in bin/, as links to
+// the rename to Kode, `agent-k-local`: a release still carries all three in bin/, as links to
 // me_kode, for the services and Mekos that run them. Installs once linked them into ~/.local/bin;
-// Meko's start removes those links (extensions.Registry.Rename), and AgentK never makes one.
+// Meko's start removes those links (extensions.Registry.Rename), and Kode never makes one.
 import { readlinkSync, renameSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';

@@ -1,4 +1,4 @@
-// Filesystem types (to keep SQLite and AgentK's home off network filesystems) and private folders
+// Filesystem types (to keep SQLite and Kode's home off network filesystems) and private folders
 // in shared places like /var/tmp. Meko's src/meko/internal/paths checks the same names.
 import { execFileSync } from 'node:child_process';
 import { chmodSync, lstatSync, mkdirSync } from 'node:fs';

@@ -1,6 +1,6 @@
 // The sidebar's Extensions group: the label opens the Extensions page, the chevron shows the
 // installed extensions under it. It starts collapsed on every load. A running one with a web UI
-// links to it, as a plain link that replaces this page (AgentK refuses to be framed); any other
+// links to it, as a plain link that replaces this page (Kode refuses to be framed); any other
 // links to the Extensions page, where it can be started.
 
 import { useState } from "react";
@@ -13,7 +13,7 @@ import { cx } from "./ui";
 const page = { tab: "overview" as const, view: "extensions" as const };
 
 // The extensions whose logo is in public/ as <name>-logo.png.
-const LOGOS = new Set(["agentk", "present"]);
+const LOGOS = new Set(["kode", "present"]);
 
 export function ExtensionIcon({ name, className }: { name: string; className?: string }) {
   // The known extensions' logos ship with this UI, so they show while an extension is stopped or

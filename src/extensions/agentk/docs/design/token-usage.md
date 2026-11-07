@@ -1,6 +1,6 @@
 # Token usage
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 Claude Code writes every model response to the session transcript with its token counts. The
 server reads new lines from each session's transcript, and from any subagent transcripts under
@@ -25,7 +25,7 @@ partial**), and the tooltip says how many responses were left out. Model ids mat
 (`-20251001`), `[1m]` or `@…` suffix, and in Bedrock's form (`us.anthropic.claude-…-v1:0`).
 
 **OpenCode's tokens.** An [OpenCode session](harnesses.md#opencode) has no Claude transcript
-either: AgentK's plugin logs each finished response (the session's and its subagents') to
+either: Kode's plugin logs each finished response (the session's and its subagents') to
 `run/opencode/sessions/<session>/messages.jsonl`, read incrementally into `usage_messages` as
 `opencode:<message id>` (a subagent's with its session id as the agent), reasoning tokens counted as
 output and cache writes as 5-minute ones. They're priced like Claude Code's, from the model's API list
@@ -36,7 +36,7 @@ rows name the agent first: **OpenCode · claude-sonnet-4-5**.
 `~/.kiro/sessions/cli/<id>.json`, with every finished turn's token counts (0 under its `auto` model),
 the credits it billed (`metering_usage`) and how full the context was. After each turn (its `stop`
 hook, and again 3 seconds later, since Kiro may write the turn just after) and when the session
-exits, AgentK stores each new turn as a `usage_messages` row keyed `kiro:<Kiro's id>:<when it ended>`
+exits, Kode stores each new turn as a `usage_messages` row keyed `kiro:<Kiro's id>:<when it ended>`
 with `credits` set; Claude Code's rows leave it NULL. A `usage_files` row for the session file marks
 the session as read, so the backfill at start leaves it alone. Only the session's own conversation
 is read ([Agents](harnesses.md#kiro)), never another session's in the same pooled worktree. Cost is priced only from rows without
@@ -68,7 +68,7 @@ single record; a plain-text reply unless it says nothing was found) aren't empty
 tool error or a reply with a non-empty `error`. A result too large to show, which Claude Code saved to
 a file, counts as found at the size of its notice, since only the notice entered the context (reading
 the file is Claude's own tool call); a call moved to the background found nothing. `model` and `context_tokens` (input, cache read and write)
-come from the response that made the call. Sizes are characters ÷ 4. Apart from AgentK's own
+come from the response that made the call. Sizes are characters ÷ 4. Apart from Kode's own
 search at start (`meko_preloads`, see [Meko recall at start](recall-and-learn.md#meko-recall-at-start)), the Meko
 plugin's hooks inject no recalled memory today, so the transcript is the rest of the record of what
 Meko gave a session. The migration that added the table cleared the read offsets again, so older
@@ -84,7 +84,7 @@ usage report treat every agent's calls alike:
   `serverName`, `toolName`, `params`), so a call is taken there, from a server named `meko` or
   starting with it, with its reply from the line's `toolResult` content (`parseKiroMekoCalls`,
   checked against kiro-cli 2.34.0). Kiro dates only its `Prompt` lines, so a call's `at` is its
-  turn's prompt when the read saw it, else when AgentK read the call. A Meko call's `postToolUse`
+  turn's prompt when the read saw it, else when Kode read the call. A Meko call's `postToolUse`
   starts a read at once, so that's usually seconds after the call ran. If Kiro hasn't written the
   result by then, it's the next read: a later tool call more than 10 seconds after the last read, or
   the turn's end, which can be minutes later. `model` and `context_tokens` are NULL. The input's `__tool_use_purpose`, Kiro's
@@ -113,18 +113,18 @@ a command, "[Request interrupted by user]"; meta lines, compaction summaries and
 don't count). So an interrupted or failed first turn ends there, not at a later turn's end. After
 a `/clear`, a transcript read again from the start is only the current conversation's. Among
 sessions whose first turn has ended, in projects with datapacks (the others had no Meko to
-search), AgentK adds up about how many tokens Meko brought into that turn (characters ÷ 4, like
+search), Kode adds up about how many tokens Meko brought into that turn (characters ÷ 4, like
 the tokens found): from lookups by Claude or a subagent that found something at or before that
 time (`searchedTokens`), and from the search at start when it was handed over (the seed, `seedTokens`).
 It also counts the sessions the search at start ran in at all (`startSearches`, whatever it
 found), since older sessions predate it and a session started with no task skips it. They're `mekoFirstTurn` on the project and overview
 usage, beside `meko`. The migration that added the column cleared the read offsets once more, so
-sessions from before AgentK searched at start give the numbers to compare with.
+sessions from before Kode searched at start give the numbers to compare with.
 
 **What Meko saved (an estimate).** Nobody sees the run where Meko wasn't there, so savings come
 from a fixed formula (`src/server/mekosavings.ts`), not a comparison. Only searches that found
 something count (`memory_search`, `knowledgebase_search`, `context_search`), plus each **seed**:
-what AgentK's search at session start passed to Claude (`meko_preloads` with outcome `found`). A
+what Kode's search at session start passed to Claude (`meko_preloads` with outcome `found`). A
 seed is credited like a search made by the session's first main-agent response: *C* is that
 response's context less the seed (a search's context doesn't hold its result yet), *k* counts the
 responses after it, and its price is that response's model. A seed waits for that first response,
@@ -177,16 +177,16 @@ startup, one session per tick.
 
 **Plan limits.** On Pro and Max plans, Claude Code passes the account's 5-hour and weekly usage
 (`rate_limits.five_hour` / `seven_day`: percent used and reset time) to its status line command.
-Sessions are launched with AgentK's own status line (`run/statusline.sh`, set in the
+Sessions are launched with Kode's own status line (`run/statusline.sh`, set in the
 `--settings` file). It sends inputs that carry limits to the server over the hook socket, in the
 background, and then runs the user's own status line command with the same input, so the terminal
 looks unchanged. That command is found at launch (local project settings, then project, then user
-settings) and passed as `AK_USER_STATUSLINE`; sessions launched before this existed use the
+settings) and passed as `KODE_USER_STATUSLINE`; sessions launched before this existed use the
 user-level command saved in `run/user-statusline`; its `padding` and `refreshInterval` are copied.
 If that command is Meko's `meko-statusline.sh`, only the command it wraps (`--inner-cmd`, or
 `MEKO_INNER_STATUSLINE`) runs: Meko's "Meko: <datapack>" suffix would repeat what the session
 screen already shows, since sessions always use the project's datapack.
-AgentK's mod reports the same windows after each turn (`session.measure`), whatever the status line does.
+Kode's mod reports the same windows after each turn (`session.measure`), whatever the status line does.
 All sessions use one account, since Claude Code's login is the machine's, so reports are merged per window: a window that has reset is
 ignored, a later window replaces an earlier one, and a report missing a window keeps the last one.
 Within a window, what counts is whether the reading is new: the server keeps each session's last
@@ -226,11 +226,11 @@ version is read), hourly, when the first Kiro session is created, so that sessio
 without waiting for the hour, and — at most once every 10 min — when a Kiro session's turn ends, so
 an active account's reading stays fresh between the hourly reads. It runs only while Kiro is
 available and some
-session (archived ones too) has run on it, so an install that never uses Kiro in AgentK never
-runs it for this. One read at a time, in `run/kiro-usage`, 20 s at most, as `agentk-usage`, an
-inert agent written in that folder (no tools, MCP servers or hooks, like Ask AgentK's), so the
+session (archived ones too) has run on it, so an install that never uses Kiro in Kode never
+runs it for this. One read at a time, in `run/kiro-usage`, 20 s at most, as `kode-usage`, an
+inert agent written in that folder (no tools, MCP servers or hooks, like Ask Kode's), so the
 user's default agent isn't loaded for it. Kiro keeps each run as an empty session: after every
-read AgentK deletes (`chat --delete-session`) the one the run named and any other Kiro session
+read Kode deletes (`chat --delete-session`) the one the run named and any other Kiro session
 whose folder is `run/kiro-usage`, since a run cut off at its timeout never names its own. A server
 that is stopping waits up to 5 seconds for a read and its deletes still running. `parseKiroPlan` (`src/server/kiro.ts`)
 reads the plan name, the reset day and the credits line, and returns nothing without the credits
@@ -244,7 +244,7 @@ credits** on Kiro's row: a ring of used over covered in Kiro's violet (amber at 
 past 100%, **Over plan**, red, or amber while overage is on, since Kiro then bills the rest and
 goes on), `36 of 50 · Free · resets Nov 1` beside it, then a line for bonus and overage when Kiro
 printed them (`kiroPlanLines` in `src/web/util.ts`). Kiro's own line is quoted under it unless the
-line above already states everything AgentK read from it: the overage quote is dropped only for the
+line above already states everything Kode read from it: the overage quote is dropped only for the
 seen `Overages: Disabled` shape (on/off read, no credits), which `Overage off` fully states; a line
 that also carries credits keeps its quote, since the line above shows only the credits and that
 amount is still a guess, and the bonus line is always quoted (its format is unseen). Its tooltip
@@ -268,7 +268,7 @@ Kiro isn't available.
 - **The Meko section** is the same on both pages (`MekoUsageSection`): the Meko logo (black in the
   light theme, white in the dark) and tiles for lookups, lookups that found something, saves,
   **1st-turn tokens** (the tokens Meko brought into first turns, `≈ 15.3k`, with the split on one
-  more line, `Seeded ≈ 3.3k · Searched ≈ 12k`, or `Seeded none yet` before AgentK's search at
+  more line, `Seeded ≈ 3.3k · Searched ≈ 12k`, or `Seeded none yet` before Kode's search at
   start has run in any of them; a dash before any first turn has ended; the
   tooltip says how many sessions the search at start ran in; `firstTurnText` in
   `src/web/util.ts`) and tokens found, then two tiles for the [learn step](recall-and-learn.md#the-learn-step)
@@ -282,7 +282,7 @@ Kiro isn't available.
   the tiles says how many questions on Meko's Context Gaps are open for the dedicated datapack,
   with the split (`gapsLine` in `src/web/util.ts`), or that none are, and opens that tab in Meko's
   web UI ([Meko's Context Gaps](recall-and-learn.md#mekos-context-gaps)); it's left out while
-  AgentK doesn't use the Meko on this computer, or that Meko keeps no list for the datapack.
+  Kode doesn't use the Meko on this computer, or that Meko keeps no list for the datapack.
 - **Code reviews** ([the code review](code-review.md)) show on both pages once one has run.
   The 14-day chart stacks each day's tokens that review sessions (`kind = 'code-review'`) spent at
   the bottom of its bar (`DailyUsage.reviewTokens`, its own color, `--chart-review`), with a legend

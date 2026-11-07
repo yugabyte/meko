@@ -24,9 +24,9 @@ export interface NoteCommit {
 const SUBJECT = new RegExp(`^(${RELEASE_TYPES.join('|')})(?:\\(([^)]*)\\))?(!?): (.+)$`);
 const PR = /\s*\(#(\d+)\)$/;
 /**
- * A component that isn't AgentK's: a subject that names only such components (Meko's and Presenter's,
- * which release those; `presenter` was Presenter's before it was `present`) isn't AgentK's, and one that names one in a list
- * with AgentK's (feat(agentk,meko): ...) is (`exclude` in scripts/release/product.sh).
+ * A component that isn't Kode's: a subject that names only such components (Meko's and Presenter's,
+ * which release those; `presenter` was Presenter's before it was `present`) isn't Kode's, and one that names one in a list
+ * with Kode's (feat(agentk,meko): ...) is (`exclude` in scripts/release/product.sh).
  */
 const OTHER_PRODUCT = /^(meko|present|presenter)(\/|$)/;
 

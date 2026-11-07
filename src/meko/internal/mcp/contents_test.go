@@ -45,9 +45,9 @@ func TestCallContentsKept(t *testing.T) {
 	if err := e.Service.SetKeepCallContents(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	call("memory_get_all", map[string]any{"agent_id": "claude_code:a", "conversation_id": "c1"}, "X-Meko-Client", "agentk")
+	call("memory_get_all", map[string]any{"agent_id": "claude_code:a", "conversation_id": "c1"}, "X-Meko-Client", "kode")
 	c, cc := newest()
-	if c.Client != "agentk" || c.AgentID != "claude_code:a" || cc == nil ||
+	if c.Client != "kode" || c.AgentID != "claude_code:a" || cc == nil ||
 		!strings.Contains(cc.Args, `"agent_id":"claude_code:a"`) || !strings.Contains(cc.Reply, `"memories":[]`) {
 		t.Fatalf("kept %+v %+v", c, cc)
 	}

@@ -30,7 +30,7 @@ const (
 	exitUsage      = 2
 	exitNotRunning = 3 // status, when no server runs
 	// exitLocked: serve found another server holding the data folder. The systemd unit tells systemd
-	// not to restart on it (restarting won't help); it's EX_TEMPFAIL, as AgentK's. launchd can't skip
+	// not to restart on it (restarting won't help); it's EX_TEMPFAIL, as Kode's. launchd can't skip
 	// one exit code, so a serve it runs waits for the folder instead of exiting (waitForLock).
 	exitLocked = 75
 )
@@ -208,7 +208,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	case "agent list":
 		fs.BoolVar(&t.json, "json", false, "print the list as JSON, as GET /api/v1/agents gives it")
 	case "extension delete":
-		fs.BoolVar(&c.purge, "purge", false, "also delete its data: AgentK's sessions and worktrees")
+		fs.BoolVar(&c.purge, "purge", false, "also delete its data: Kode's sessions and worktrees")
 		fs.BoolVar(&c.force, "force", false, "delete without asking")
 	case "extension install":
 		fs.StringVar(&c.version, "version", "", "install this release rather than the newest")
@@ -313,6 +313,11 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		!c.all {
 		fmt.Fprintf(stderr, "meko %s: name the extension (%s)\n", cmd, strings.Join(extensions.KnownNames(), ", "))
 		return exitUsage
+	}
+	if strings.HasPrefix(cmd, "extension ") {
+		if err := extensions.RenamedError(strings.TrimPrefix(cmd, "extension "), t.text); err != nil {
+			return fail(stderr, err)
+		}
 	}
 	if cmd == "version" {
 		return runVersion(t.json, stdout, stderr)

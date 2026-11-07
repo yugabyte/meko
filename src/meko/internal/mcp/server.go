@@ -148,7 +148,7 @@ func (o Options) handler(t *tool, cred string) sdk.ToolHandler {
 		res := o.result(t, c, reply, err)
 		c.rec.Ms = time.Since(start).Milliseconds()
 		o.record(ctx, c.rec, req, res)
-		if s := c.search; s != nil && c.rec.OK && c.rec.AgentID != memory.WebUIAgent && !fromAgentK(req) {
+		if s := c.search; s != nil && c.rec.OK && c.rec.AgentID != memory.WebUIAgent && !fromKode(req) {
 			s.DatapackID, s.Tool, s.AgentID, s.ConversationID, s.At = c.rec.DatapackID, t.name, c.rec.AgentID,
 				c.rec.ConversationID, start
 			o.Service.RecordSearch(ctx, *s)
@@ -157,19 +157,21 @@ func (o Options) handler(t *tool, cred string) sdk.ToolHandler {
 	}
 }
 
-// ClientHeader names the client a request comes from. AgentK sends ClientAgentK on its own calls (its
+// ClientHeader names the client a request comes from. Kode sends ClientKode on its own calls (its
 // search at a session's start, its learn step's lookups), which aren't questions for Context Gaps: a
-// header, not a tool argument, since Meko Cloud refuses arguments it doesn't know.
+// header, not a tool argument, since Meko Cloud refuses arguments it doesn't know. Releases from
+// before Meko called it Kode send oldClientKode, which counts as Kode's too.
 const (
-	ClientHeader = "X-Meko-Client"
-	ClientAgentK = "agentk"
+	ClientHeader  = "X-Meko-Client"
+	ClientKode    = "kode"
+	oldClientKode = "agentk"
 )
 
 // record adds a call to the call log, with the client it came from, and what it sent and got back for
 // Settings' "Keep call contents".
 func (o Options) record(ctx context.Context, rec store.Call, req *sdk.CallToolRequest, res *sdk.CallToolResult) {
-	if fromAgentK(req) {
-		rec.Client = ClientAgentK
+	if fromKode(req) {
+		rec.Client = ClientKode
 	}
 	o.Service.RecordCall(ctx, rec, req.Params.Arguments, replyText(res))
 }
@@ -191,9 +193,13 @@ func replyText(res *sdk.CallToolResult) string {
 	return b.String()
 }
 
-// fromAgentK says whether a call is AgentK's own.
-func fromAgentK(req *sdk.CallToolRequest) bool {
-	return req.Extra != nil && strings.EqualFold(strings.TrimSpace(req.Extra.Header.Get(ClientHeader)), ClientAgentK)
+// fromKode says whether a call is Kode's own.
+func fromKode(req *sdk.CallToolRequest) bool {
+	if req.Extra == nil {
+		return false
+	}
+	c := strings.TrimSpace(req.Extra.Header.Get(ClientHeader))
+	return strings.EqualFold(c, ClientKode) || strings.EqualFold(c, oldClientKode)
 }
 
 // result is the MCP result for a tool's reply or error, and marks the call log row.

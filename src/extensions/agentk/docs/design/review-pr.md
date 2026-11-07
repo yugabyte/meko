@@ -1,14 +1,14 @@
 # Reviewing a PR
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 The other side of sharing a project: someone the author shared it with (see
 [Sharing a project](sharing.md)) opens its datapack as a project, from the invite's
-banner, and reviews the PR with their own AgentK. The New session dialog opens by itself for a
+banner, and reviews the PR with their own Kode. The New session dialog opens by itself for a
 project just opened, and starts on **Review a PR** when an open PR names the project's datapack.
 
 **Picking the PR.** Picking **Review a PR** swaps the first prompt for a **Pull request** picker
-and **Notes for AgentK** (optional: what to focus on). The picker lists, newest first and at most
+and **Notes for Kode** (optional: what to focus on). The picker lists, newest first and at most
 20, the open PRs in any repo you can read whose description names one of the project's datapacks
 (`gh search prs "<datapack id>" --match body`, once per datapack: the PRs its sessions open end
 with that id, followed by `;` and the datapack's name, see the PR stage in [Task lifecycle](lifecycle.md)). A project's sessions can work in several repos, so the PRs
@@ -27,8 +27,8 @@ repo (the PR's clone, changeable to another clone of it); the base and branch co
 
 **A public repo's PR.** Anyone can open a PR on a public repo, so a review of one runs without
 the repo's own config: Claude Code loads only your user settings (none of the PR's `.claude/`
-settings, hooks, status line or `.mcp.json` servers), and the PR's `.agent-k/stages/` prompts aren't
-used. On Kiro, a PR that brings its own `agentk` agent (or `agentk-trusted`, with `[kiro] trust_tools` on Kiro 3.0) or MCP servers can't be reviewed. A private
+settings, hooks, status line or `.mcp.json` servers), and the PR's `.kode/stages/` prompts aren't
+used. On Kiro, a PR that brings its own `kode` agent (or `kode-trusted`, with `[kiro] trust_tools` on Kiro 3.0) or MCP servers can't be reviewed. A private
 or internal repo's PR runs as any session does. See [Code from public repos](security.md#code-from-public-repos).
 
 **Starting.** `CreateSessionRequest.pr` names the PR (`{ repo: 'owner/name', number }`), with
@@ -36,7 +36,7 @@ or internal repo's PR runs as any session does. See [Code from public repos](sec
 and that the PR is open (400 otherwise, with nothing started). Then, after the dialog has closed
 (a fetch that fails is a failed start: see [New session](open-project-and-new-session.md#new-session); the PR isn't polled for new
 commits until the session is created), it fetches `refs/pull/<n>/head` from
-that remote into `refs/agentk/pr/<n>` (a fork's PR too) along with the PR's base, and puts the
+that remote into `refs/kode/pr/<n>` (a fork's PR too) along with the PR's base, and puts the
 branch `<prefix>review-pr-<n>` (numbered like any session's, so PR #7 of two repos never collide)
 at that commit, in a new or idle worktree, with no upstream and a `pushRemote` naming a remote
 that doesn't exist, so a bare `git push` fails whatever the push config (`push.default=current`
@@ -50,7 +50,7 @@ head and state at the last look (`Session.reviewingPr`). The search at start
 lines, and the notes.
 
 **The PR's design.** When the PR's description has a `meko_design:<name>;<hash>` line (written by
-the author's AgentK, see [The design after approval](lifecycle.md#the-design-after-approval)), AgentK fetches
+the author's Kode, see [The design after approval](lifecycle.md#the-design-after-approval)), Kode fetches
 that version from Meko while the PR and the worktree are made ready (`src/server/prdesign.ts`;
 the startup step reads *Fetching the PR and its design, and preparing the worktree*). Meko's
 `artifact_get` takes only an artifact's content hash, which is why the line carries it. It asks
@@ -74,7 +74,7 @@ Meko says it doesn't have (an expired artifact) or whose bytes don't match isn't
 until the line changes; one Meko couldn't be asked for (off or failing) is tried again after 10
 minutes. A review whose start fails removes any copy it fetched.
 
-**AgentK assists; the user reviews.** The `review-pr` prompt tells Claude to get ready without
+**Kode assists; the user reviews.** The `review-pr` prompt tells Claude to get ready without
 reviewing: read the PR description, the reviews and threads and CI's state, look at the shape of
 the diff, then show a short summary (what the PR does and why, the main changes and where to start
 reading, the review so far, what the author asked reviewers to look at) and wait. It lists no
@@ -82,7 +82,7 @@ problems and gives no verdict on its own; it answers what the user asks (explain
 path, check a suspicion, run a test, draft a comment in their words). Every `gh` command names the
 PR's repo (`--repo owner/name`), since the clone may be a fork. With datapacks, the prompt starts
 with a Meko search for the decisions and gotchas behind the PR, and a second line (`mekoQuestionLine()`, added in
-code like the other Meko lines, and to a repo's own `.agent-k/stages/review-pr.md` too) asks for
+code like the other Meko lines, and to a repo's own `.kode/stages/review-pr.md` too) asks for
 a Meko search before every answer about why the code is the way it is, saying which parts came
 from Meko and which from the code. The system prompt's workflow line says the same, so it holds
 after a resume or `/clear`. Nothing goes to GitHub, and nothing is committed or pushed, until the
@@ -99,14 +99,14 @@ latest** fetches the head, moves the review branch there (`reset --keep`) and se
 `review-pr-update` prompt: a short summary of what changed since the commit reviewed so far and of
 the threads that got replies, again without reviewing. The button reads *Updating* with moving
 dots, and takes no second press, from the click until the state shows the update (its answer
-comes before the state, which is pushed within 100 ms), since the fetch can take a while. It's refused while AgentK is mid-turn or
+comes before the state, which is pushed within 100 ms), since the fetch can take a while. It's refused while Kode is mid-turn or
 waiting on you, while the worktree has uncommitted files, or while the branch has commits of your
 own on top of the commit reviewed (move them to another branch first); queued in
 `pending_prompts` if Claude is busy. A review
 you post is logged ("You requested changes on PR #21"). When the PR is merged or closed, a
 notification says so, and **Close review** becomes the main button. It archives the session,
 deletes the review branch (kept when it has commits of yours on top of the commit reviewed, or
-when git can't tell) and `refs/agentk/pr/<n>`, and is refused while the worktree has uncommitted
+when git can't tell) and `refs/kode/pr/<n>`, and is refused while the worktree has uncommitted
 files. Discard works as for any session; its warning counts only your own commits, not the
 author's, which are on GitHub. A closed review ends in Done with someone else's PR, so the usage
 counts never take it for one of your merged PRs. A Review a PR

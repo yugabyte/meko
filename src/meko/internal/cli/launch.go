@@ -42,17 +42,25 @@ const (
 // outlives later updates. A launcher outside a release install's app folder (a build from source) is
 // just run.
 func runLaunch(args []string, stderr io.Writer) int {
-	if len(args) == 1 && args[0] == "--supported" {
+	// --supported says this meko has _launch; with an extension's name, that it knows that name
+	// (Kode's launcher asks for kode, and falls back on agentk with a Meko from before).
+	if len(args) >= 1 && args[0] == "--supported" {
+		if len(args) == 2 {
+			if _, _, ok := extensions.Lookup(args[1]); !ok {
+				return exitError
+			}
+		}
 		return exitOK
 	}
 	if len(args) < 2 {
 		fmt.Fprintln(stderr, "meko _launch: usage: meko _launch <extension> <its launcher> [args...]")
 		return exitUsage
 	}
-	name, exe, rest := args[0], args[1], args[2:]
-	cat, ok := extensions.Known[name]
+	// A launcher from a release before the extension's rename names it by its old name.
+	name, cat, ok := extensions.Lookup(args[0])
+	exe, rest := args[1], args[2:]
 	if !ok {
-		return fail(stderr, fmt.Errorf("_launch: no extension called %q", name))
+		return fail(stderr, fmt.Errorf("_launch: no extension called %q", args[0]))
 	}
 	real, err := filepath.EvalSymlinks(exe)
 	if err != nil {

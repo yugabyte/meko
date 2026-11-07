@@ -1,7 +1,7 @@
 # The issue skill (.claude/skills/issue/SKILL.md) writes agents' feature requests with these
 # headings: change both together.
 name: Feature request
-description: Something Meko, AgentK or Presenter should do, or do differently.
+description: Something Meko, Kode or Presenter should do, or do differently.
 type: Feature
 labels: [enhancement]
 body:
@@ -16,7 +16,7 @@ body:
       label: Product
       options:
         - Meko
-        - AgentK
+        - Kode
         - Presenter
         - Not sure
     validations:

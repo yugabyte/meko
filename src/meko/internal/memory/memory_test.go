@@ -163,7 +163,7 @@ func TestContextEngineWithAnotherModelIsRefused(t *testing.T) {
 }
 
 // The end-to-end check, with the real model: a paraphrased question finds its memory, with a 0-1
-// score and the cosine as raw_similarity_score, and an exact identifier clears AgentK's 0.75
+// score and the cosine as raw_similarity_score, and an exact identifier clears Kode's 0.75
 // recall cut once BM25 has a datapack's worth of memories to weigh terms against.
 func TestParaphraseAndIdentifierSearch(t *testing.T) {
 	if testing.Short() {
@@ -186,7 +186,7 @@ func TestParaphraseAndIdentifierSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 	facts := map[string]string{
-		"restarts":   "AgentK sessions survive server restarts because the session host keeps each pty alive.",
+		"restarts":   "Kode sessions survive server restarts because the session host keeps each pty alive.",
 		"identifier": "MIN_MEMORY_SCORE is 0.75 and drops weaker memories from recall.",
 	}
 	ids := map[string]string{}

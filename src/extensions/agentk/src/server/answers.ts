@@ -25,7 +25,7 @@ interface Entry extends DesignQuestionSet {
 }
 
 /**
- * What an approval did beyond the user's answers: the questions it left to AgentK, and whether it
+ * What an approval did beyond the user's answers: the questions it left to Kode, and whether it
  * made the questions file (for a markdown design's).
  */
 interface ApprovalNote {
@@ -43,7 +43,7 @@ function entry(questions: DesignQuestion[], source: DesignQuestionSet['source'])
  * "Open questions" list of a markdown design) the first time they're asked for, again at the end
  * of each Design turn (`refresh`), and for every session in Design at startup (`preload`), so the
  * first turn end after a restart can tell whether they changed. Claude's design_questions tool
- * (through AgentK's mod) replaces them mid-turn (`set`), writing the file too.
+ * (through Kode's mod) replaces them mid-turn (`set`), writing the file too.
  */
 export class DesignQuestionStore {
   private cache = new Map<string, Entry>();
@@ -62,7 +62,7 @@ export class DesignQuestionStore {
         // questions it had are gone and Approve no longer asks for them.
         this.core.log.warn(`reading the design's questions failed for ${row.id}`, errMsg(err));
         if (row.stage === 'design') {
-          this.core.sessions.event(row.id, 'design', `AgentK's questions file can't be read (${errMsg(err)}), so its open questions aren't shown. Ask AgentK to fix ${this.core.sessions.questionsFile(row)}.`);
+          this.core.sessions.event(row.id, 'design', `Kode's questions file can't be read (${errMsg(err)}), so its open questions aren't shown. Ask Kode to fix ${this.core.sessions.questionsFile(row)}.`);
         }
         e = this.read(row, true);
       }
@@ -106,15 +106,15 @@ export class DesignQuestionStore {
 
   /**
    * The user's answers, as they go to Claude: each question answered is resolved, with the answer
-   * as its decision (decided by the user, as is each of AgentK's own decisions the user changed),
-   * and with `all` (an approval) so is every other open one, left to AgentK.
+   * as its decision (decided by the user, as is each of Kode's own decisions the user changed),
+   * and with `all` (an approval) so is every other open one, left to Kode.
    * Written to the questions file and kept, so the user sees what they sent in any browser, and
-   * the next turn end doesn't count it as AgentK's change. Built from the file as it is now, so a
-   * change AgentK made since is kept; an answer to a question that changed since it was checked
+   * the next turn end doesn't count it as Kode's change. Built from the file as it is now, so a
+   * change Kode made since is kept; an answer to a question that changed since it was checked
    * (against `asked`) is left out. Questions from a markdown design are written only with `all`:
-   * until then AgentK revises its "Open questions" list, which a questions file would hide. What an
+   * until then Kode revises its "Open questions" list, which a questions file would hide. What an
    * approval did beyond the user's answers is noted beside the file, for `reopen`. True when
-   * anything changed. Throws when the file can't be read (it's left for AgentK to fix) or written.
+   * anything changed. Throws when the file can't be read (it's left for Kode to fix) or written.
    */
   record(row: SessionRow, answers: DesignAnswerInput[], asked: DesignQuestion[], all: boolean): boolean {
     const cur = this.read(row);
@@ -148,7 +148,7 @@ export class DesignQuestionStore {
 
   /**
    * Back in Design after an approval: undoes what the approval did beyond the user's answers.
-   * The questions it left to AgentK are open again, and a questions file it made for a markdown
+   * The questions it left to Kode are open again, and a questions file it made for a markdown
    * design is removed, so the design's own list shows again. True when anything was undone. Throws
    * when the files can't be read or written.
    */
@@ -203,7 +203,7 @@ export class DesignQuestionStore {
     if (row.kind === 'review-pr') return entry([], null);
     const d = get<{ markdown: string }>(this.core.db, 'SELECT markdown FROM designs WHERE session_id = ?', row.id);
     if (!d) return entry([], null);
-    // Who decided each, as recorded, survives AgentK rewriting the file without it.
+    // Who decided each, as recorded, survives Kode rewriting the file without it.
     const fromFile = skipFile ? null : readDesignQuestions(this.core.sessions.questionsFile(row), this.cache.get(row.id)?.questions);
     if (fromFile) return entry(fromFile, 'file');
     const fromMd = d.markdown ? questionsFromMarkdown(d.markdown) : [];
@@ -211,8 +211,8 @@ export class DesignQuestionStore {
   }
 }
 
-/** Refused: the browser's answers are to questions AgentK has changed since. */
-const STALE = 'AgentK changed its questions since you answered. Review them and try again.';
+/** Refused: the browser's answers are to questions Kode has changed since. */
+const STALE = 'Kode changed its questions since you answered. Review them and try again.';
 
 /** The user's answers to the design's open questions, checked: formatted for Claude, and as sent. */
 export interface CheckedAnswers {
@@ -225,7 +225,7 @@ export interface CheckedAnswers {
 }
 
 /**
- * The user's answers to the design's open questions, changes to AgentK's own decisions, and other
+ * The user's answers to the design's open questions, changes to Kode's own decisions, and other
  * feedback, from a request body, checked against the current questions and formatted for Claude,
  * with the count for the prompt's first line. Null when there's nothing in it. Throws a 400 for a
  * malformed answer or answers too long for one prompt, and a 409 for an answer to a question
@@ -257,7 +257,7 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): Check
     seen.add(a.questionId);
     const q = questions.find((x) => x.id === a.questionId);
     if (!q || !answerable(q)) throw new HttpError(409, STALE);
-    // A change to one of AgentK's decisions is to the decision the user saw.
+    // A change to one of Kode's decisions is to the decision the user saw.
     if (q.kind === 'decision' && a.decision !== q.decision) throw new HttpError(409, STALE);
     const qn = number.get(q.id) ?? q.id;
     const text = a.text ?? '';
@@ -265,7 +265,7 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): Check
     capped(`The answer to ${qn}`, text);
     const choice = a.choice ?? null;
     if (choice === null) {
-      if (!text.trim()) throw new HttpError(400, `Write your answer to ${qn}, or pick one of AgentK's options.`);
+      if (!text.trim()) throw new HttpError(400, `Write your answer to ${qn}, or pick one of Kode's options.`);
       answers.push({ questionId: q.id, choice: null, label: null, text });
       continue;
     }
@@ -279,7 +279,7 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): Check
   if (!answers.length && !feedback.trim()) return null;
   const text = formatAnswers(answers, feedback, questions);
   if (text.length > ANSWERS_PROMPT_MAX) {
-    throw new HttpError(400, `Your answers come to ${text.length.toLocaleString('en-US')} characters, more than the ${ANSWERS_PROMPT_MAX.toLocaleString('en-US')} that go to AgentK at once. Shorten some.`);
+    throw new HttpError(400, `Your answers come to ${text.length.toLocaleString('en-US')} characters, more than the ${ANSWERS_PROMPT_MAX.toLocaleString('en-US')} that go to Kode at once. Shorten some.`);
   }
   return { text, count: answersCount(answers, feedback, questions), answers, questions };
 }

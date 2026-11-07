@@ -48,7 +48,7 @@ describe('installer: the Meko on this computer', () => {
     const { d, said, calls } = deps();
     expect(await installMeko({ noMeko: false }, d)).toBe(false);
     expect(calls).toEqual([]);
-    expect(said).toEqual(['warn Meko not running on this computer: AgentK uses it once it runs (meko start).']);
+    expect(said).toEqual(['warn Meko not running on this computer: Kode uses it once it runs (meko start).']);
   });
 
   it.each([
@@ -81,7 +81,7 @@ describe('installer: the Meko on this computer', () => {
   it("only warns when Meko's setup for Claude Code is declined", async () => {
     const { d, said } = deps({ local: true, cloud: LINKED, setupError: "Meko isn't set up for Claude Code. Run: npx …" });
     expect(await installMeko({ noMeko: false }, d)).toBe(true);
-    expect(said.join('\n')).toMatch(/warn Meko in Claude Meko isn't set up for Claude Code\. Run: npx … AgentK uses Meko/);
+    expect(said.join('\n')).toMatch(/warn Meko in Claude Meko isn't set up for Claude Code\. Run: npx … Kode uses Meko/);
     expect(said.some((s) => s.startsWith('ok Meko in Claude'))).toBe(false);
   });
 });

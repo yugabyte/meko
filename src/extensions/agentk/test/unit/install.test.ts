@@ -238,7 +238,7 @@ describe('makePrompter', () => {
   });
 });
 
-// The install makes the repos folder it was given when it isn't there, since AgentK clones into it.
+// The install makes the repos folder it was given when it isn't there, since Kode clones into it.
 describe('reposFolder', () => {
   it('makes a missing folder with its parents, and leaves one that exists', () => {
     const base = mkdtempSync(join(tmpdir(), 'akl-repos-'));

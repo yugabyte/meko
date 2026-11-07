@@ -26,7 +26,7 @@ export function MekoLinkDialog({ reason, local, onClose }: { reason?: string; lo
         <p className="muted">
           {reason ?? 'Meko gives projects a datapack: shared memory for their sessions, and what you share a project with.'}
         </p>
-        <p className="muted small">{LOCAL_STATE_TEXT[local]} AgentK uses the Meko on this computer once it runs.</p>
+        <p className="muted small">{LOCAL_STATE_TEXT[local]} Kode uses the Meko on this computer once it runs.</p>
       </div>
     </Dialog>
   );

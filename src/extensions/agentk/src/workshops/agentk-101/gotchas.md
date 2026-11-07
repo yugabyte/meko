@@ -1,4 +1,4 @@
-# Gotchas: agentk-demo
+# Gotchas: kode-demo
 
 Traps earlier work on this repo hit, mined from its history. Each one is a fact the code alone
 doesn't show.

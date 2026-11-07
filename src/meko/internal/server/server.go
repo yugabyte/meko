@@ -252,7 +252,7 @@ func (s *Server) accessLog(next echo.HandlerFunc) echo.HandlerFunc {
 // guard refuses requests that don't name this server in Host (DNS rebinding) and any request
 // from another site's page (an Origin header that isn't this server's own): only the web UI
 // Meko serves may call it from a browser. There are no CORS headers, so no other page can read a
-// reply either. The web listener with remote access has no Host list, as AgentK had none: it's
+// reply either. The web listener with remote access has no Host list, as Kode had none: it's
 // HTTPS, so a rebound page can't pass TLS for another name. Its Origin must still be its own,
 // https://<Host>.
 func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {

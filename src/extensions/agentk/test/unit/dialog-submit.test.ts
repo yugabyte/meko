@@ -78,7 +78,7 @@ describe('Ctrl+Enter in a dialog', () => {
     const turnOff = el('input');
     expect(pick(el('div', {}, el('form', {}, turnOff, el('button', { class: 'btn danger' })), el('div', { class: 'dialog-ft' }, el('button', { class: 'btn primary' }))), turnOff)).toBeNull();
 
-    // AgentK is asking: no form or footer, an Answer marked as the dialog's.
+    // Kode is asking: no form or footer, an Answer marked as the dialog's.
     const answer = el('button', { class: 'btn small primary', 'data-submit': '' });
     const other = el('textarea');
     expect(pick(el('div', {}, other, answer), other)).toBe(answer);
@@ -90,7 +90,7 @@ describe('Ctrl+Enter in the design questions', () => {
   const inQuestions = (focused: El, approve: El | null) =>
     questionsSubmitButton(focused as unknown as Element, approve as unknown as HTMLButtonElement | null) as unknown as El | null;
 
-  it('presses Approve from an answer, and Answer from AgentK is asking', () => {
+  it('presses Approve from an answer, and Answer from Kode is asking', () => {
     const approve = el('button', { class: 'btn small primary' });
     const note = el('textarea');
     const askText = el('textarea');

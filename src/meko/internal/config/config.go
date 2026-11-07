@@ -20,7 +20,7 @@ import (
 // DefaultPort is the API listener's: next to the web listener's DefaultWebPort.
 const DefaultPort = 7778
 
-// DefaultWebPort is the web listener's, the port AgentK listened on before Meko served it.
+// DefaultWebPort is the web listener's, the port Kode listened on before Meko served it.
 const DefaultWebPort = 7777
 
 // Config is every setting.
@@ -400,7 +400,7 @@ func (l Log) SlogLevel() (slog.Level, error) {
 }
 
 // WebFile is web.toml beside config.toml at path: the [web] (and [tls]) settings Meko chose
-// itself, from meko install's access, the handoff from AgentK (AddWeb) and meko ui start and stop
+// itself, from meko install's access, the handoff from Kode (AddWeb) and meko ui start and stop
 // (SetWebEnabled). It's a file of its own, not part of config.toml, because a release from before
 // the web listener refuses config.toml's unknown keys: a rollback after an update that failed its
 // probation, or a downgrade, would then leave a Meko that can't start. Older releases don't read
@@ -438,7 +438,7 @@ func mergeWeb(base Web, over webTable) Web {
 // or web.toml already sets [web]'s port, access or name: config.toml's are the user's, and
 // web.toml's an earlier choice. web.toml's enabled is kept. It reports whether it wrote. Meko
 // writes these settings only this way: meko install, with the access it picked, and the handoff
-// from AgentK, with the access and port AgentK had.
+// from Kode, with the access and port Kode had.
 func AddWeb(path string, web Web, tls TLS) (bool, error) {
 	webPath := WebFile(path)
 	for _, p := range []string{path, webPath} {
@@ -498,7 +498,7 @@ func SetWebEnabled(path string, on bool) error {
 // writeWebFile writes web.toml with what f sets.
 func writeWebFile(path string, f webFile) error {
 	var b strings.Builder
-	b.WriteString("# The web listener's settings Meko chose (meko install, the handoff from AgentK, meko ui\n" +
+	b.WriteString("# The web listener's settings Meko chose (meko install, the handoff from Kode, meko ui\n" +
 		"# start and stop). A [web] or [tls] key in config.toml overrides the one here. access = \"local\"\n" +
 		"# takes requests from this computer only; \"remote\" listens on every address, over HTTPS.\n[web]\n")
 	if w := f.Web; w != nil {

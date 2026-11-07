@@ -6,7 +6,7 @@ import { claudePath, type Paths } from './paths.js';
 import { TOOL_DEFS, TOOLS_SERVER } from './tooldefs.js';
 
 /**
- * AgentK's session tools: the `agentk_sessions` MCP server (`me_kode mcp`, mcp.ts) every harness's
+ * Kode's session tools: the `kode_sessions` MCP server (`me_kode mcp`, mcp.ts) every harness's
  * sessions get, and the skill that says how to use it. Here are the files each harness launches with;
  * the server's side of a call (the hook socket's `/tools`) is `SessionTools` in actions.ts.
  */
@@ -14,7 +14,7 @@ import { TOOL_DEFS, TOOLS_SERVER } from './tooldefs.js';
 /** The skill's one source: src/tools/skill in the repo, dist/tools/skill in a build. */
 const SKILL_SOURCE = join(dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'skill', 'SKILL.md');
 /** The skill's name, in its front matter and as its folder. */
-const SKILL = 'agentk-sessions';
+const SKILL = 'kode-sessions';
 
 // ---- the files sessions launch with ----
 
@@ -33,7 +33,7 @@ export function toolsPluginDir(paths: Paths): string {
   return join(toolsDir(paths), 'claude');
 }
 
-/** The folder of skills OpenCode sessions search (`skills.paths`), and where Kiro's `agentk` agent names the skill (`skill://`). */
+/** The folder of skills OpenCode sessions search (`skills.paths`), and where Kiro's `kode` agent names the skill (`skill://`). */
 export function skillsDir(paths: Paths): string {
   return join(toolsDir(paths), 'skills');
 }
@@ -53,7 +53,7 @@ export function toolsCommand(paths: Paths): { command: string; args: string[] } 
   const current = join(paths.app, 'current');
   const installed = join(current, 'lib', 'dist', 'server', 'mcpmain.js');
   // In their local spelling, as every path a session's CLI is given (claudePath).
-  if (process.env.AK_APP_DIR && existsSync(installed)) return { command: claudePath(join(current, 'node', 'bin', 'node')), args: [claudePath(installed)] };
+  if (process.env.KODE_APP_DIR && existsSync(installed)) return { command: claudePath(join(current, 'node', 'bin', 'node')), args: [claudePath(installed)] };
   const here = dirname(fileURLToPath(import.meta.url));
   const entry = existsSync(join(here, 'mcpmain.js')) ? join(here, 'mcpmain.js') : join(here, 'mcpmain.ts');
   return { command: process.execPath, args: [...loaderFlags(process.execArgv), claudePath(entry)] };
@@ -85,7 +85,7 @@ export function openCodeTools(paths: Paths): Record<string, unknown> {
   };
 }
 
-/** Kiro's `mcpServers` entry for the tools. Kiro passes the session's environment to it (AK_HOOK_SOCK, AK_HOOK_TOKEN). */
+/** Kiro's `mcpServers` entry for the tools. Kiro passes the session's environment to it (KODE_HOOK_SOCK, KODE_HOOK_TOKEN). */
 export function kiroToolsServer(paths: Paths): Record<string, unknown> {
   // Starting sessions can clone a repo first: give a call as long as that takes.
   return { ...toolsCommand(paths), timeout: 600_000 };
@@ -118,12 +118,12 @@ export function writeToolFiles(paths: Paths, source = SKILL_SOURCE): boolean {
     rmSync(toolsDir(paths), { recursive: true, force: true });
     return false;
   }
-  // Claude Code passes the session's environment to the server (AK_HOOK_SOCK, AK_HOOK_TOKEN), as Kiro does.
+  // Claude Code passes the session's environment to the server (KODE_HOOK_SOCK, KODE_HOOK_TOKEN), as Kiro does.
   writeIfChanged(toolsMcpConfigPath(paths), `${JSON.stringify({ mcpServers: { [TOOLS_SERVER]: { type: 'stdio', ...toolsCommand(paths) } } }, null, 2)}\n`);
   const plugin = toolsPluginDir(paths);
   writeIfChanged(join(plugin, '.claude-plugin', 'plugin.json'), `${JSON.stringify({
-    name: SKILL, version: '1.0.0', description: "How to use AgentK's session tools: open projects, start sessions, move them between stages.",
-    author: { name: 'AgentK' },
+    name: SKILL, version: '1.0.0', description: "How to use Kode's session tools: open projects, start sessions, move them between stages.",
+    author: { name: 'Kode' },
   }, null, 2)}\n`);
   writeIfChanged(join(plugin, 'skills', 'sessions', 'SKILL.md'), skill);
   writeIfChanged(skillPath(paths), skill);

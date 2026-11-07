@@ -1,6 +1,6 @@
 # Surviving crashes, restarts and updates
 
-Part of the [AgentK design](../design.md).
+Part of the [Kode design](../design.md).
 
 Two systemd user units run with lingering enabled, so they start at boot without anyone logging
 in:
@@ -13,7 +13,7 @@ in:
 They're named for the program, `me_kode`, so the services say they're a Meko extension's. Before
 that they were `me_koder-host.service` and `me_koder.service` (`com.yugabyte.me_koder.host` and
 `com.yugabyte.me_koder`), before that `agentk-host.service` and `agentk.service`
-(`com.yugabyte.agentk.host` and `com.yugabyte.agentk`), and until the rename to AgentK `agent-k-local-host.service` and
+(`com.yugabyte.agentk.host` and `com.yugabyte.agentk`), and until the rename to Kode `agent-k-local-host.service` and
 `agent-k-local.service` (`com.yugabyte.agent-k-local.host` and `com.yugabyte.agent-k-local`). A
 service installed under an old name keeps it: `service.ts` names whichever is installed, and an
 update doesn't touch the units, which start `service/me_koder`, `bin/agentk` or
@@ -68,7 +68,7 @@ back. Reinstalling never reloads a loaded host job, and always reloads the serve
 Both jobs run `<home>/service/me_kode`, a script that execs `app/current/bin/me_kode` (or
 `bin/agentk`, which every release has, in a release from before the program was `me_kode`, one
 rolled back to); macOS
-lists a job under its program's file name, so Login Items shows AgentK as `me_kode`. macOS's
+lists a job under its program's file name, so Login Items shows Kode as `me_kode`. macOS's
 Background Task Management shows "Background Items Added" again whenever the program a LaunchAgent
 names turns out to be another file, and `app/current/bin/me_kode` is another file after every
 update. An update never replaces the launcher. `install` and the server's start
@@ -88,7 +88,7 @@ when they're missing. The shell gets 5 s. A slow profile can take longer. So can
 reads `~/Downloads`, `~/Documents` or `~/Desktop` on macOS: macOS asks whether Meko may open the
 folder, and the shell waits for the answer. macOS asks again after each Meko update, because the
 `meko` program is a new one. When the shell gives no PATH, the service keeps the thin PATH with
-those three folders, and `server.log` (or `host.log`) says why. If AgentK still can't find `gh`, its
+those three folders, and `server.log` (or `host.log`) says why. If Kode still can't find `gh`, its
 error says so in words (`ghMissing` in `github.ts`), not as `spawn gh ENOENT`. It says to install
 `gh`, or, when the shell gave no PATH, to allow macOS's prompt, and then to run `meko kode restart`.
 Sessions don't depend on this: their launcher runs the login shell itself.
@@ -103,11 +103,11 @@ the host service is installed too and none of this home's sessions that aren't a
 tmux (`legacytmux.ts` lists the sessions on the old socket). An
 install updated from a tmux version therefore fails to start and is rolled back to it (Meko's
 launcher; see [Releases](releases.md)), with its sessions still running in tmux.
-`meko kode install`, which `meko extension install agentk` runs, moves it: before it installs the services it
+`meko kode install`, which `meko extension install kode` runs, moves it: before it installs the services it
 removes the old ones, stopping the old server first and then the tmux service, which ends the
 Claudes in it, and the new server's recovery resumes them in the host (auto-continuing a turn that
 was cut off). `meko kode uninstall` removes the tmux service too. Removing it ends the tmux
-server on its socket, which every AgentK home on the account shared.
+server on its socket, which every Kode home on the account shared.
 
 An install can have both services: the move kept the tmux service while any `ak-` pane it didn't
 end was still in tmux (it ended only this home's sessions, so a deleted session's Claude, or
@@ -122,12 +122,12 @@ Claude still in it, and leaves the host and its sessions alone.
 
 All of this sits behind one interface in `src/server/service.ts` (install, start, stop, restart,
 state, remove, boot check, the old tmux service), with a systemd and a launchd implementation picked by platform.
-`servicesFor(home)` uses the installed services only when their `AK_HOME` is exactly this home, so
+`servicesFor(home)` uses the installed services only when their `KODE_HOME` is exactly this home, so
 a dev server or a second home never acts on another install's services.
 
 ## One server per home
 
-Two servers on one AgentK home break each other: each binds the hook socket over the
+Two servers on one Kode home break each other: each binds the hook socket over the
 other's (a Unix socket bound on one host can't be reached from another, so hooks are lost and
 sessions stay on Starting), and both write the same SQLite file. This happens when the home is on
 a file system other hosts mount, like a home directory shared over NFS: every host you log in to
@@ -157,7 +157,7 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 | A phone's page goes to the background, or its network changes | Everything | The server drops the page's sockets once they stop answering its pings. When the page is shown again, it pings its events socket and opens a new one if there's no answer, so it shows the current state instead of the one it had when it was hidden. After 30 seconds or more hidden, it also lets go of its terminals and reconnects the ones on screen, even if the phone kept its timers from running. |
 | Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the session host's panes, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and updates](releases.md)). |
 | A second server starts on the same home (another host that mounts it) | Everything | The units don't start on other hosts, and a server started by hand refuses while the lease is held. If the hook socket goes missing anyway, the running server binds it again within 10 seconds. |
-| Session host crash or restart | Worktrees, transcripts, state | The unit restarts the host, and the server relaunches every session with `desired: running` using `claude --resume`, except one whose agent AgentK stopped for sitting idle ([below](#stopping-idle-agents)). |
+| Session host crash or restart | Worktrees, transcripts, state | The unit restarts the host, and the server relaunches every session with `desired: running` using `claude --resume`, except one whose agent Kode stopped for sitting idle ([below](#stopping-idle-agents)). |
 | Host reboot or crash | Worktrees, transcripts, state (after a crash or power cut, less the last `state.db` commits before it: `synchronous=NORMAL`, see [Projects and sessions](projects-and-sessions.md)) | Both units start at boot (on macOS, when you log in) and the same recovery runs. Sessions show as *recovered* until you interact. |
 
 ```mermaid
@@ -204,7 +204,7 @@ comes back. **Auto-continue is on by default**, with guards:
 ## Stopping idle agents
 
 An idle agent spends no tokens but keeps its memory: measured on Linux, about 350–510 MB for each
-idle `claude`, plus its session-tools MCP server (#445). So AgentK stops a session's agent once it
+idle `claude`, plus its session-tools MCP server (#445). So Kode stops a session's agent once it
 has sat idle for `[sessions] idle_stop_hours` (24 by default; Settings › General; 0 never stops
 one), and starts it again with `--resume` when it's needed. The session keeps its stage, worktree,
 branch and conversation (`SessionManager.stopIdle`, `src/server/sessions.ts`, on Core's one-minute
@@ -234,7 +234,7 @@ timer).
   Open PR, Run to merge, Update to latest, Run code review, a code review's Retry and Open anyway,
   Save learnings, and the learn step of Merge & Close and Discard, whose wait counts against the
   step's own timeout. The page's gates don't block on a stopped agent, and a stopped session that
-  waits on you still shows Needs you. AgentK's own queued work (CI fixes, conflicts, reviews, a
+  waits on you still shows Needs you. Kode's own queued work (CI fixes, conflicts, reviews, a
   code review's fixes, a Review a PR's new design, review comments) starts it without waiting
   (`wakeSoon`), and the prompt goes at a later pass, once it's up. Each start is logged as
   "Resumed for …". A start that fails before its launch (the branch is gone, say) clears the mark
@@ -252,8 +252,8 @@ too, where one missed would let a prompt go to a missing pane.
 
 ## Moving the home into Meko's data folder
 
-Until #236 the home was `~/.agent-k-local` (or what an install named with `AK_HOME`). It now lives
-in Meko's data folder ([Where AgentK lives](projects-and-sessions.md#where-agentk-lives)), and an
+Until #236 the home was `~/.agent-k-local` (or what an install named with `KODE_HOME`). It now lives
+in Meko's data folder ([Where Kode lives](projects-and-sessions.md#where-kode-lives)), and an
 older home moves there by itself (`src/server/movehome.ts`). Moving ends every session, since each
 one's Claude runs in a worktree inside the home; recovery resumes them from the new place, and a
 session that was mid-turn gets its continue prompt as after any host restart.
@@ -274,13 +274,23 @@ session that was mid-turn gets its continue prompt as after any host restart.
   folder than the installer did.
 - **Who.** The move stops the server and the session host, so it can't run in either's unit (systemd
   or launchd would end it with them). The server starts a one-shot job outside both: a transient
-  unit (`systemd-run --user --unit agentk-move-home`, `Restart=on-failure`) or a LaunchAgent of its
-  own (`com.yugabyte.agentk.move-home`, which removes itself at the end), running the release's
-  hidden `me_kode _move-home --to <dir>`. The job keeps its `agentk` name: a server of a newer
-  version must still find a move an older one started. It logs to `agentk-move-home.log` beside the new home (in
+  unit (`systemd-run --user --unit kode-move-home`, `Restart=on-failure`) or a LaunchAgent of its
+  own (`com.yugabyte.kode.move-home`, which removes itself at the end), running the release's
+  hidden `me_kode _move-home --to <dir>`. A server also looks for the job under its name before
+  Kode was called Kode (`agentk-move-home`, `OLD_MOVE_JOB` in `service.ts`), so it finds a move an
+  older release started and doesn't start a second one. It logs to `kode-move-home.log` beside the new home (in
   Meko's `extensions/`), which survives a copy's removal of the old home. Without services, `serve`
   does the move itself at its next start, before it opens anything, unless another server holds the
   home's lease (then the start is refused as ever).
+- **From `extensions/agentk`.** Meko called Kode `agentk` before, and its home was
+  `<data folder>/extensions/agentk`. A release that knows the new name (`homeIn`: `extensions/kode`)
+  running from there moves it the same way, to `extensions/kode` beside it, in the same Meko data
+  folder whatever `MEKO_HOME` says (always a rename), and leaves `extensions/agentk` as a link to it,
+  where Meko's `Dir` stops looking once `extensions/kode` is there. It waits for a Meko whose
+  `meko extension install -h` names `kode` (`mekoKnowsKode`): an older one knows only the old folder.
+  Its `kiro` step also removes the Kiro agents Kode wrote as `agentk` and `agentk-trusted`
+  (`removeOldKiroAgents`): no session runs as them once every session has ended, and they resume as
+  `kode`.
 - **What.**
   1. Stop the server, then the host (`stopAll`, which `meko kode stop` uses too).
   2. Put the home in place: `rename(2)` on one filesystem; on another (a home folder on NFS moving
@@ -299,7 +309,7 @@ session that was mid-turn gets its continue prompt as after any host restart.
      each running session gets an activity line; Claude Code's per-folder entries in
      `~/.claude.json` (copied to the new paths; the old ones stay); Kiro's sessions' `cwd`;
      `git worktree repair` in each worktree; the `~/.local/bin` links; TLS paths in `config.toml`.
-     Files AgentK writes at each start or launch (the hook scripts and settings, the mod, the Kiro
+     Files Kode writes at each start or launch (the hook scripts and settings, the mod, the Kiro
      agent) need nothing.
   4. Install the services on the new home, under their new names (`dropOldNames`: the host is
      stopped), and start them.
@@ -317,7 +327,7 @@ session that was mid-turn gets its continue prompt as after any host restart.
   path; `servicesFor` (`samePath`) takes the two for the same home when they're spelled alike, have
   the same real path, or are the same folder (device and inode), so `stop`, `start`, `status`, the
   trigger and a start mid-move all find the services.
-- **Meko.** Meko runs AgentK's release in `app/current`, which moves with the home; an old
+- **Meko.** Meko runs Kode's release in `app/current`, which moves with the home; an old
   `~/.local/bin` link to it that Meko hasn't removed yet is repointed;
   `meko destroy` leaves `extensions/` alone unless asked ([Meko's install
   docs](../../../../meko/docs/install.md)).

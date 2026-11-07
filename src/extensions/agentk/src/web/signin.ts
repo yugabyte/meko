@@ -1,9 +1,9 @@
 /**
- * Who gets in is Meko's call: it serves AgentK under BASE. A Meko from before it dropped its login
+ * Who gets in is Meko's call: it serves Kode under BASE. A Meko from before it dropped its login
  * signs people in, with remote access; a newer one has no login, and always says signed in. These
  * call Meko's own routes, root-absolute rather than under BASE. Under `npm run dev` there's no Meko,
  * so they fail: then a refused request is shown as an error and retried as before. Signing out, on
- * a Meko with a login, is on its account page, not in AgentK.
+ * a Meko with a login, is on its account page, not in Kode.
  */
 
 /** What Meko says about this browser (`GET /api/v1/auth/status`). */
@@ -51,7 +51,7 @@ let checkedAt = 0;
 export const SIGN_IN_CHECK_MS = 5000;
 
 /**
- * After AgentK's API answered 401, or a WebSocket closed with a WS_UNAUTHORIZED code: Meko may have
+ * After Kode's API answered 401, or a WebSocket closed with a WS_UNAUTHORIZED code: Meko may have
  * refused the request. Where Meko has a login and this browser isn't signed in any more, goes
  * to its sign-in screen (back to this page after) and resolves false. Else resolves true, so the
  * caller keeps retrying.

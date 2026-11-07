@@ -54,7 +54,7 @@ var extensionActions = []string{"install", "update", "start", "stop"}
 
 func (s *Server) proxy(name string) *extproxy.Proxy {
 	for _, p := range s.opts.Web.Extensions() {
-		if p.Name == name {
+		if p.Serves(name) {
 			return p
 		}
 	}
@@ -117,7 +117,7 @@ func (s *Server) local(c echo.Context) bool {
 
 // AuthStatus is GET /api/v1/auth/status: how this browser stands with the web listener. There's no
 // login: signed_in is whether the request is let in, and setup_required, reset, username and
-// totp_enabled are always empty. It stays for pages that read it, AgentK's among them, which go to
+// totp_enabled are always empty. It stays for pages that read it, Kode's among them, which go to
 // a sign-in screen only when it says remote and not signed in.
 type AuthStatus struct {
 	Access        string  `json:"access"`       // local or remote
@@ -146,6 +146,10 @@ type ExtensionInfo struct {
 	Path        string        `json:"path"`      // "" while it isn't served
 	Available   bool          `json:"available"` // its socket is there to connect to
 	Job         *ExtensionJob `json:"job,omitempty"`
+	// RenamedTo, on a row under an extension's old name, is its name now: the row is that one's,
+	// listed again for a release from before the rename, whose page looks for its old name. The web
+	// UI leaves such rows out.
+	RenamedTo string `json:"renamed_to,omitempty"`
 	ExtensionUpdate
 }
 
@@ -154,7 +158,7 @@ type ExtensionUpdate struct {
 	Version   string `json:"version,omitempty"` // the release Meko installed, when it manages it
 	Updatable bool   `json:"updatable"`         // Meko can update it (the update action)
 	// NotUpdatable says why an installed extension isn't updatable: a build from source, or an
-	// AgentK that hasn't moved into Meko's data folder yet. An older Meko never sends it.
+	// Kode that hasn't moved into Meko's data folder yet. An older Meko never sends it.
 	NotUpdatable string `json:"not_updatable,omitempty"`
 	// Latest is the newest release the last check found (versions rolled back left out), and
 	// UpdateAvailable whether it's newer than Version and wasn't rolled back.
@@ -226,14 +230,38 @@ func (s *Server) extensionList(c echo.Context) error {
 	for _, n := range names {
 		out = append(out, s.extensionInfo(n, installed[n]))
 	}
+	for _, n := range names {
+		for _, old := range extensions.Known[n].OldNames {
+			if installed[n] {
+				out = append(out, renamedRow(s.extensionInfo(n, true), old))
+			}
+		}
+	}
 	return envelope.OK(c, out)
+}
+
+// renamedRow is an extension's row under one of its old names (RenamedTo).
+func renamedRow(row ExtensionInfo, old string) ExtensionInfo {
+	row.RenamedTo, row.Name = row.Name, old
+	return row
+}
+
+// extensionName is the extension a route's :name names, by its name or an old one (a release from
+// before the rename asks for its old name), with the row to answer under that name.
+func extensionName(asked string) (string, func(ExtensionInfo) ExtensionInfo, bool) {
+	name, _, ok := extensions.Lookup(asked)
+	if name == asked {
+		return name, func(r ExtensionInfo) ExtensionInfo { return r }, ok
+	}
+	return name, func(r ExtensionInfo) ExtensionInfo { return renamedRow(r, asked) }, ok
 }
 
 // extensionAction is POST /api/v1/extensions/:name/:action: it starts the action as the extension's
 // job and answers 202 with its row; the page follows the job in the list.
 func (s *Server) extensionAction(c echo.Context) error {
-	name, action := c.Param("name"), c.Param("action")
-	cat, known := extensions.Known[name]
+	name, as, known := extensionName(c.Param("name"))
+	action := c.Param("action")
+	cat := extensions.Known[name]
 	if !known || s.opts.Web.Run == nil || (!slices.Contains(extensionActions, action) && action != "check") {
 		return echo.ErrNotFound
 	}
@@ -242,7 +270,7 @@ func (s *Server) extensionAction(c echo.Context) error {
 		return envelope.Fail(c, http.StatusConflict, "CONFLICT", cat.Title+" isn't installed.")
 	}
 	if action == "check" {
-		return s.extensionCheck(c, name)
+		return s.extensionCheck(c, name, as)
 	}
 	jobs := s.opts.Web.Jobs
 	j, ok := jobs.start(name, action, false)
@@ -261,12 +289,12 @@ func (s *Server) extensionAction(c echo.Context) error {
 			s.opts.Logger.Info("extension action done", "extension", name, "action", action)
 		}
 	}()
-	return c.JSON(http.StatusAccepted, envelope.Response{Data: s.extensionInfo(name, installed)})
+	return c.JSON(http.StatusAccepted, envelope.Response{Data: as(s.extensionInfo(name, installed))})
 }
 
 // extensionCheck is POST /api/v1/extensions/:name/check: Check now, answered with the row once the
 // check is done (within 60 s), or 409 UPDATE_BUSY with the row while an update holds the lock.
-func (s *Server) extensionCheck(c echo.Context, name string) error {
+func (s *Server) extensionCheck(c echo.Context, name string, as func(ExtensionInfo) ExtensionInfo) error {
 	if s.opts.Web.CheckExtensions == nil {
 		return envelope.Fail(c, http.StatusConflict, "CONFLICT", "This Meko doesn't check for extensions' updates.")
 	}
@@ -274,19 +302,19 @@ func (s *Server) extensionCheck(c echo.Context, name string) error {
 	defer cancel()
 	if err := s.opts.Web.CheckExtensions(ctx); err != nil {
 		if errors.Is(err, update.ErrBusy) {
-			return c.JSON(http.StatusConflict, envelope.Response{Data: s.extensionInfo(name, true),
+			return c.JSON(http.StatusConflict, envelope.Response{Data: as(s.extensionInfo(name, true)),
 				Error: &envelope.Error{Code: "UPDATE_BUSY", Message: "An update is running: check again when it's done."}})
 		}
 		return envelope.Fail(c, http.StatusConflict, "CONFLICT", err.Error())
 	}
-	return envelope.OK(c, s.extensionInfo(name, true))
+	return envelope.OK(c, as(s.extensionInfo(name, true)))
 }
 
 // extensionPatch is PATCH /api/v1/extensions/:name with {"auto_update": bool}: the Extensions
 // page's Update automatically.
 func (s *Server) extensionPatch(c echo.Context) error {
-	name := c.Param("name")
-	if _, known := extensions.Known[name]; !known || s.opts.Web.SetAutoUpdate == nil {
+	name, as, known := extensionName(c.Param("name"))
+	if !known || s.opts.Web.SetAutoUpdate == nil {
 		return echo.ErrNotFound
 	}
 	if !s.installed()[name] {
@@ -302,7 +330,7 @@ func (s *Server) extensionPatch(c echo.Context) error {
 		return err
 	}
 	s.opts.Logger.Info("extension setting", "extension", name, "auto_update", *body.AutoUpdate)
-	return envelope.OK(c, s.extensionInfo(name, true))
+	return envelope.OK(c, as(s.extensionInfo(name, true)))
 }
 
 func (s *Server) extensionRoot(c echo.Context) error {

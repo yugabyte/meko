@@ -1,12 +1,12 @@
-// Project datapacks: the `adlc/proj/<repo>/<project>` naming, the description AgentK writes on
+// Project datapacks: the `adlc/proj/<repo>/<project>` naming, the description Kode writes on
 // the ones it creates, and matching one to a local repo. Shared by the server and the web UI.
 
 /** Datapacks named with this prefix are project datapacks: offered as invites and filled in automatically. */
 export const PROJECT_DATAPACK_PREFIX = 'adlc/proj/';
 
-const DESCRIPTION_PREFIX = 'AgentK project';
-/** What descriptions started with while the product was AgentK Local; Meko still holds them. */
-const OLD_DESCRIPTION_PREFIX = 'AgentK Local project';
+const DESCRIPTION_PREFIX = 'Kode project';
+/** The prefixes before: AgentK's, and AgentK Local's before that, on datapacks made then (never rewritten). */
+const OLD_DESCRIPTION_PREFIXES = ['AgentK project', 'AgentK Local project'];
 
 export function isProjectDatapack(name: string): boolean {
   return name.startsWith(PROJECT_DATAPACK_PREFIX);
@@ -97,7 +97,7 @@ function shareableRemote(remote: string | null | undefined): string | null {
 }
 
 /**
- * The description AgentK sets on a project datapack it creates. The remote goes in only when it's
+ * The description Kode sets on a project datapack it creates. The remote goes in only when it's
  * a network remote, and without credentials: a local path (`/home/me/src/x.git`) would only tell
  * the people it's shared with where things are on this machine.
  */
@@ -106,9 +106,9 @@ export function projectDatapackDescription(projectName: string, remote: string |
   return `${DESCRIPTION_PREFIX} "${projectName}"${r ? ` · repo ${r}` : ''}`;
 }
 
-/** The repo remote from a description AgentK wrote, or null. Credentials and local paths never come through. */
+/** The repo remote from a description Kode wrote, or null. Credentials and local paths never come through. */
 export function remoteFromDescription(description: string | null | undefined): string | null {
-  if (!description?.startsWith(DESCRIPTION_PREFIX) && !description?.startsWith(OLD_DESCRIPTION_PREFIX)) return null;
+  if (!description || ![DESCRIPTION_PREFIX, ...OLD_DESCRIPTION_PREFIXES].some((p) => description.startsWith(p))) return null;
   // The remote ends the description; one earlier on could be inside the quoted project name.
   return shareableRemote(/ · repo (\S+)$/.exec(description.trimEnd())?.[1]);
 }

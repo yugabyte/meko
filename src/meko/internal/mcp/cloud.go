@@ -222,7 +222,7 @@ func (o Options) forwardAnd(name, failCode, cred string, merge merger) sdk.ToolH
 		}
 		rec.Ms = time.Since(start).Milliseconds()
 		o.record(ctx, rec, req, res)
-		if rec.OK && rec.AgentID != memory.WebUIAgent && !fromAgentK(req) {
+		if rec.OK && rec.AgentID != memory.WebUIAgent && !fromKode(req) {
 			o.recordCloudSearch(ctx, rec, req.Params.Arguments, res)
 		}
 		return res, nil

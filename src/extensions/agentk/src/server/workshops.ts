@@ -20,7 +20,7 @@ import { checkLearn } from './sessions.js';
 import { dedicatedDatapack, projectRow, projectRows, sessionDatapack, sessionRow, type SessionRow } from './store.js';
 
 /**
- * Workshops bundled with AgentK (docs/design/workshops.md): each is a folder of `src/workshops/`
+ * Workshops bundled with Kode (docs/design/workshops.md): each is a folder of `src/workshops/`
  * (`dist/workshops` in a release) with a host's script and the demo repo it's played in. Starting
  * one builds the demo repo with no remote, opens it as a project, seeds its gotchas datapack in Meko
  * and begins its host, a task at Explore with `purpose = 'guide'`. GuideEvents tells the host what
@@ -37,10 +37,10 @@ const GOTCHAS_IN_KEY = 'workshop-gotchas';
 
 /**
  * One session a level's host starts: its prompt file, the name the host gives it, and `learn`, whether
- * AgentK runs the learn step on it by itself once its first turn ends (Level 2's question session).
+ * Kode runs the learn step on it by itself once its first turn ends (Level 2's question session).
  */
 export interface LevelPrompt {
-  /** The session's name, which is how AgentK knows it; null for a level with one unnamed prompt. */
+  /** The session's name, which is how Kode knows it; null for a level with one unnamed prompt. */
   name: string | null;
   file: string;
   learn: boolean;
@@ -75,10 +75,10 @@ export interface WorkshopBundle {
    */
   reviewModels: Partial<Record<HarnessId, string>>;
   /**
-   * `review`: AgentK runs its code review itself on the level's session (a task in the project on
+   * `review`: Kode runs its code review itself on the level's session (a task in the project on
    * that branch) as soon as its worktree is made, so the user watches the review rather than starts it.
    * With `gotchasAfterFirst`, that first review runs while the gotchas datapack is still empty and
-   * keeps its findings; AgentK then adds the gotchas to Meko and reviews again (`firstLookDone`).
+   * keeps its findings; Kode then adds the gotchas to Meko and reviews again (`firstLookDone`).
    */
   /**
    * `prompt`: a prompt file, or a list of `{ name, file, learn }` for a level with more than one
@@ -259,7 +259,7 @@ export class WorkshopService {
   private starting = new Map<string, Promise<WorkshopStart>>();
   /** The level sessions whose gotchas are going into Meko after the user's go, until their review starts. */
   private going = new Set<string>();
-  /** Level sessions whose learn step AgentK is starting (`learnLevel`), until it has started or failed to. */
+  /** Level sessions whose learn step Kode is starting (`learnLevel`), until it has started or failed to. */
   private learning = new Set<string>();
 
   constructor(private core: Core, private root = WORKSHOPS_SOURCE) {
@@ -324,7 +324,7 @@ export class WorkshopService {
   /**
    * A level's later session (its prompts are in order, by name: "Ask again" after "Ask about the
    * game") replaces the earlier ones: the host starts it only once the user has read them and said
-   * so, and AgentK archives them then, so the user has one session of the level on screen. Archive,
+   * so, and Kode archives them then, so the user has one session of the level on screen. Archive,
    * as at a level's end; one still saving what it learned, or about to (`saving`), stays open.
    */
   private closeEarlier(row: SessionRow): void {
@@ -366,7 +366,7 @@ export class WorkshopService {
 
   /**
    * The learn step on a level's question session (a prompt with `learn`, by the session's name), once,
-   * after its first turn: AgentK saves what it worked out and marks the question Meko couldn't answer
+   * after its first turn: Kode saves what it worked out and marks the question Meko couldn't answer
    * taught, while the user watches. The step reads the open questions on Context Gaps itself, once,
    * when it starts: Meko isn't polled for them.
    */
@@ -388,16 +388,16 @@ export class WorkshopService {
     this.learning.add(id);
     try {
       await this.core.learn.start(row, 'manual');
-      this.events.tell(row.project_id, `AgentK is saving what ${row.name} learned to Meko (${dp.name}).`);
+      this.events.tell(row.project_id, `Kode is saving what ${row.name} learned to Meko (${dp.name}).`);
     } catch (e) {
       this.core.log.warn(`the learn step on ${id} for its workshop level didn't start`, errMsg(e));
-      this.events.tell(row.project_id, `AgentK couldn't save what ${row.name} learned: ${errMsg(e)} The user can press Save learnings to Meko in its menu.`);
+      this.events.tell(row.project_id, `Kode couldn't save what ${row.name} learned: ${errMsg(e)} The user can press Save learnings to Meko in its menu.`);
     } finally {
       this.learning.delete(id);
     }
   }
 
-  /** A learn step runs on the session, or AgentK is starting one: archiving it would cut the save short. */
+  /** A learn step runs on the session, or Kode is starting one: archiving it would cut the save short. */
   private saving(id: string): boolean {
     return this.learning.has(id) || this.core.learn.running(id);
   }
@@ -440,11 +440,11 @@ export class WorkshopService {
     }
   }
 
-  /** The level's first look is done: AgentK waits for the user's go (`go`) to add the gotchas and review again. */
+  /** The level's first look is done: Kode waits for the user's go (`go`) to add the gotchas and review again. */
   firstLookDone(taskId: string): void {
     const row = sessionRow(this.core.db, taskId);
     const dp = row && projectRow(this.core.db, row.project_id)?.workshop ? this.gotchasOf(row.project_id) : null;
-    if (row && dp) this.events.tell(row.project_id, `AgentK waits for the user's go to add the team's gotchas to Meko (${dp.name}) and review ${row.name} again.`);
+    if (row && dp) this.events.tell(row.project_id, `Kode waits for the user's go to add the team's gotchas to Meko (${dp.name}) and review ${row.name} again.`);
   }
 
   /**
@@ -490,7 +490,7 @@ export class WorkshopService {
     if (!await this.goOn(projectId)) throw new HttpError(409, "The tour isn't waiting for a go: no level's first look is done and waiting.");
   }
 
-  /** Goes on from the pause after a level's first look: the gotchas go into Meko, and once they're indexed AgentK reviews again. */
+  /** Goes on from the pause after a level's first look: the gotchas go into Meko, and once they're indexed Kode reviews again. */
   private async goOn(projectId: string): Promise<boolean> {
     const p = projectRow(this.core.db, projectId);
     const dp = this.gotchasOf(projectId);
@@ -528,13 +528,13 @@ export class WorkshopService {
     }
   }
 
-  /** AgentK runs the level's review: a first look keeps its findings; the real one's wait for the user. */
+  /** Kode runs the level's review: a first look keeps its findings; the real one's wait for the user. */
   private async runLevelReview(row: SessionRow, firstLook: boolean): Promise<void> {
     try {
       await this.core.reviews.runNow(row, 'auto', { describe: false, handOff: !firstLook });
     } catch (e) {
       this.core.log.warn(`running the code review of ${row.id} for its workshop failed`, errMsg(e));
-      this.events.tell(row.project_id, `AgentK couldn't start the code review of ${row.name}: ${errMsg(e)} The user can press Run code review.`);
+      this.events.tell(row.project_id, `Kode couldn't start the code review of ${row.name}: ${errMsg(e)} The user can press Run code review.`);
     }
   }
 
@@ -560,7 +560,7 @@ export class WorkshopService {
     try {
       b = readWorkshop(id, this.root);
     } catch {
-      throw new HttpError(404, `There's no workshop ${id} in this AgentK.`);
+      throw new HttpError(404, `There's no workshop ${id} in this Kode.`);
     }
     const open = this.projectOf(id);
     if (open) {
@@ -602,7 +602,7 @@ export class WorkshopService {
 
   private async beginHost(projectId: string): Promise<string> {
     const { session, done } = await this.core.sessions.begin(projectId, {
-      name: 'AgentK tour', kind: 'task', start: 'explore', prompt: 'Host the AgentK tour.',
+      name: 'Kode tour', kind: 'task', start: 'explore', prompt: 'Host the Kode tour.',
     }, { purpose: 'guide' });
     // The tab shows the start's progress; a failed start is kept for Try again, as any other.
     done.catch((e) => this.core.log.warn(`the ${projectId} tour's host didn't start`, errMsg(e)));
@@ -729,7 +729,7 @@ export class GuideEvents {
     const before = this.diffs.get(id);
     this.diffs.set(id, key);
     const changed = before !== undefined && before !== key ? `; the change is now ${diffText(stat)}` : '';
-    const line = `${row.name}: ${interrupted ? 'the user interrupted its turn' : "AgentK's turn ended"}${changed}`;
+    const line = `${row.name}: ${interrupted ? 'the user interrupted its turn' : "Kode's turn ended"}${changed}`;
     const meko = sessionMekoLine(this.core.db, id);
     if (!meko) {
       this.queue(host.id, line);

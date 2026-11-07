@@ -313,7 +313,7 @@ func TestInstallTakesOnlyItsOwnFlags(t *testing.T) {
 	for _, flag := range []string{"--meko-key", "--no-meko", "--repos-root"} {
 		code, out := e.run(t, nil, flag, "x")
 		if code == 0 || !strings.Contains(out, "unknown option "+flag) ||
-			!strings.Contains(out, "meko extension install agentk") {
+			!strings.Contains(out, "meko extension install kode") {
 			t.Errorf("%s: exit %d:\n%s", flag, code, out)
 		}
 	}

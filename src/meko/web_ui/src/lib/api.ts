@@ -164,7 +164,9 @@ export const api = {
 
   // How Meko takes this browser (src/meko/docs/web-ui.md): local or remote access, with no login.
   authStatus: () => request<AuthStatus>("GET", "/auth/status"),
-  extensions: () => request<Extension[]>("GET", "/extensions"),
+  // Rows under an extension's old name (renamed_to) are for its releases from before the rename.
+  extensions: () =>
+    request<Extension[]>("GET", "/extensions").then((rows) => rows.filter((e) => !e.renamed_to)),
   // Starts an action as the extension's job; the list shows how it goes.
   extensionAction: (name: string, action: ExtensionAction) =>
     request<Extension>("POST", `/extensions/${enc(name)}/${action}`),

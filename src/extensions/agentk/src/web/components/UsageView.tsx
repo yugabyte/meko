@@ -152,7 +152,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                           {projectHeader('cost', 'Cost', { className: 'num opt', title: "What the tokens would cost at Anthropic's API list prices" })}
                           {showCredits && projectHeader('credits', 'Credits', { className: 'num opt', title: "What Kiro billed for its sessions' turns" })}
                           {showMeko && projectHeader('meko', 'Meko', { className: 'num opt', title: 'Meko lookups that found something, of all lookups' })}
-                          {showMeko && projectHeader('saved', 'Est. saved', { className: 'num opt', title: 'Estimated from the Meko searches that found something and the seeds AgentK passed at session start' })}
+                          {showMeko && projectHeader('saved', 'Est. saved', { className: 'num opt', title: 'Estimated from the Meko searches that found something and the seeds Kode passed at session start' })}
                         </tr>
                       </thead>
                       <tbody>

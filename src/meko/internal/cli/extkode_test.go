@@ -24,14 +24,14 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/update"
 )
 
-// fakeAgentK is an AgentK release's bin/me_kode, keeping its state in its folder in the data folder
+// fakeAgentK is a Kode release's bin/me_kode, keeping its state in its folder in the data folder
 // (MEKO_HOME, which Meko sets): install, start, stop and restart log to its log with its version,
 // status succeeds while it runs, and selftest passes. With rollback-to there, restart does what
 // meko _launch does after three failed starts: points app/current back at that version. uninstall
 // logs to agentk-uninstall.log beside its folder, and with --purge deletes its state.db.
 func fakeAgentK(version string) string {
 	return `#!/bin/sh
-s="$MEKO_HOME/extensions/agentk"
+s="$MEKO_HOME/extensions/kode"
 case "$1" in
   version) echo '{"version":"` + version + `"}' ;;
   selftest) echo "selftest ok" ;;
@@ -148,20 +148,29 @@ func serveReleases(t *testing.T, rels ...fakeRelease) {
 	t.Cleanup(func() { newReleaseClient = old })
 }
 
-func agentkRelease(t *testing.T, tag, version string) fakeRelease {
-	return agentkReleaseAs(t, tag, version, "me_kode")
+func kodeRelease(t *testing.T, tag, version string) fakeRelease {
+	return kodeReleaseAs(t, tag, version, "me_kode")
 }
 
-// agentkReleaseAs is a release of AgentK whose program is named command: agentk before me_kode.
-func agentkReleaseAs(t *testing.T, tag, version, command string) fakeRelease {
-	return fakeRelease{tag: tag, pkg: "agentk", version: version,
-		tgz: packageTarball(t, "agentk", command, version, fakeAgentK(version))}
+// kodeReleaseAs is a release of Kode whose program is named command: agentk before me_kode.
+func kodeReleaseAs(t *testing.T, tag, version, command string) fakeRelease {
+	return releaseOf(t, "kode", tag, version, command)
 }
 
-// installedAgentK is a release install of AgentK's version, as extension install leaves it.
+// agentkRelease is a release of Kode from before Meko called it kode: its tarball is agentk's.
+func agentkRelease(t *testing.T, tag, version, command string) fakeRelease {
+	return releaseOf(t, "agentk", tag, version, command)
+}
+
+func releaseOf(t *testing.T, pkg, tag, version, command string) fakeRelease {
+	return fakeRelease{tag: tag, pkg: pkg, version: version,
+		tgz: packageTarball(t, pkg, command, version, fakeAgentK(version))}
+}
+
+// installedAgentK is a release install of Kode's version, as extension install leaves it.
 func installedAgentK(t *testing.T, dir, version string) update.App {
 	t.Helper()
-	app := extensions.Known["agentk"].App(dir, "agentk")
+	app := extensions.Known["kode"].App(dir, "kode")
 	if err := os.MkdirAll(filepath.Join(app.Dir(version), "bin"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -181,20 +190,20 @@ func installedAgentK(t *testing.T, dir, version string) update.App {
 		t.Fatal(err)
 	}
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: link, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: link, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
 	return app
 }
 
-// agentkFromBeforeTheRename installs AgentK as Meko did while its command was agentk: a version with
+// agentkFromBeforeTheRename installs Kode as Meko did while its command was agentk: a version with
 // only bin/agentk, ~/.local/bin/agentk linking to it, and the registry running that link, which it
 // returns.
 func agentkFromBeforeTheRename(t *testing.T, dir string) string {
 	t.Helper()
 	const version = "0.20261030.0"
-	app := extensions.Known["agentk"].App(dir, "agentk")
+	app := extensions.Known["kode"].App(dir, "kode")
 	bin := filepath.Join(app.Dir(version), "bin")
 	if err := os.MkdirAll(bin, 0o700); err != nil {
 		t.Fatal(err)
@@ -218,34 +227,34 @@ func agentkFromBeforeTheRename(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: old, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: old, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
 	return old
 }
 
-// wantRenamed checks that AgentK installed by agentkFromBeforeTheRename runs as me_kode, with no
+// wantRenamed checks that Kode installed by agentkFromBeforeTheRename runs as me_kode, with no
 // command on PATH: the registry runs app/current/bin/me_kode, no ~/.local/bin/me_kode is made, and
 // the old link is gone.
 func wantRenamed(t *testing.T, dir, old string) {
 	t.Helper()
-	exe := extensions.Known["agentk"].App(dir, "agentk").CurrentExe()
+	exe := extensions.Known["kode"].App(dir, "kode").CurrentExe()
 	if _, err := os.Stat(exe); err != nil {
 		t.Errorf("app/current/bin/me_kode: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(filepath.Dir(old), "me_kode")); !os.IsNotExist(err) {
 		t.Errorf("~/.local/bin/me_kode was made: %v", err)
 	}
-	if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Command != exe {
-		t.Errorf("registry %+v", reg.Entries["agentk"])
+	if reg, _ := extensions.Load(dir); reg.Entries["kode"].Command != exe {
+		t.Errorf("registry %+v", reg.Entries["kode"])
 	}
 	if _, err := os.Lstat(old); !os.IsNotExist(err) {
 		t.Errorf("~/.local/bin/agentk is left: %v", err)
 	}
 }
 
-// Meko's start moves an AgentK installed while its command was agentk onto me_kode: an update never
+// Meko's start moves a Kode installed while its command was agentk onto me_kode: an update never
 // runs its install, so this is where ~/.local/bin/me_kode comes from, and ~/.local/bin/agentk goes.
 func TestStartMovesAgentKOntoItsNewCommand(t *testing.T) {
 	dir, port := setup(t)
@@ -256,8 +265,8 @@ func TestStartMovesAgentKOntoItsNewCommand(t *testing.T) {
 	wantRenamed(t, dir, old)
 }
 
-// extension install agentk installs AgentK's newest release as it does Presenter's (no installer of
-// AgentK's), then runs its install with this Meko's URL and key and what followed --. --version
+// extension install kode installs Kode's newest release as it does Presenter's (no installer of
+// Kode's), then runs its install with this Meko's URL and key and what followed --. --version
 // installs another release, under either tag prefix: one from before the program was me_kode gets
 // that name too. The links of its old names into this data folder go.
 func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
@@ -266,8 +275,8 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 	noRealExtensions(t)
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	serveReleases(t, agentkRelease(t, "agentk-v"+newest, newest), agentkReleaseAs(t, "v"+older, older, "agentk"))
-	app := extensions.Known["agentk"].App(dir, "agentk")
+	serveReleases(t, kodeRelease(t, "kode-v"+newest, newest), agentkRelease(t, "v"+older, older, "agentk"))
+	app := extensions.Known["kode"].App(dir, "kode")
 	home, _ := os.UserHomeDir()
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0o700); err != nil {
@@ -279,14 +288,14 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	code, out, errs = run("extension", "install", "agentk", "--data-dir", dir, "--", "--agent", "kiro")
+	code, out, errs = run("extension", "install", "kode", "--data-dir", dir, "--", "--agent", "kiro")
 	want(t, "extension install", code, 0, out+errs,
-		"  ✓ Release         AgentK "+newest+", downloaded and checked")
+		"  ✓ Release         Kode "+newest+", downloaded and checked")
 	if app.Current() != newest {
 		t.Errorf("current %q", app.Current())
 	}
 	reg, _ := extensions.Load(dir)
-	if reg.Entries["agentk"].Command != app.CurrentExe() {
+	if reg.Entries["kode"].Command != app.CurrentExe() {
 		t.Errorf("registry %+v", reg.Entries)
 	}
 	for _, n := range []string{"me_kode", "agentk", "agent-k-local"} {
@@ -295,30 +304,30 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 		}
 	}
 	_, tok, _ := run("token", "--data-dir", dir)
-	log := filepath.Join(extensions.Dir(dir, "agentk"), "log")
+	log := filepath.Join(extensions.Dir(dir, "kode"), "log")
 	wantArgs := "install --meko-url http://127.0.0.1:" + port + "/mcp --meko-key " + strings.TrimSpace(tok) +
 		" --non-interactive --agent kiro\n"
 	if got := readLog(t, log); got != wantArgs {
 		t.Errorf("agentk got %q, want %q", got, wantArgs)
 	}
-	code, out, errs = run("extension", "install", "agentk", "--version", older, "--data-dir", dir)
+	code, out, errs = run("extension", "install", "kode", "--version", older, "--data-dir", dir)
 	want(t, "extension install --version", code, 0, out+errs,
-		"  ✓ Release         AgentK "+older+", downloaded and checked")
+		"  ✓ Release         Kode "+older+", downloaded and checked")
 	if app.Current() != older {
 		t.Errorf("current %q after --version", app.Current())
 	}
 	if _, err := os.Stat(app.CurrentExe()); err != nil {
 		t.Errorf("app/current/bin/me_kode doesn't run the release from before the rename: %v", err)
 	}
-	code, _, errs = run("extension", "install", "agentk", "--version", "0.20261001.0", "--data-dir", dir)
-	want(t, "a version with no release", code, 1, errs, "no release 0.20261001.0 of AgentK")
+	code, _, errs = run("extension", "install", "kode", "--version", "0.20261001.0", "--data-dir", dir)
+	want(t, "a version with no release", code, 1, errs, "no release 0.20261001.0 of Kode")
 	// Going back to a version keeps Update automatically off, so the next check doesn't undo it.
-	code, out, errs = run("extension", "update", "agentk", "--auto=off", "--data-dir", dir)
-	want(t, "--auto=off", code, 0, out+errs, "only reports AgentK's updates")
-	code, out, errs = run("extension", "install", "agentk", "--version", newest, "--data-dir", dir)
-	want(t, "extension install --version again", code, 0, out+errs, "  ✓ Release         AgentK "+newest)
-	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Auto() {
-		t.Errorf("the switch came back on: %+v", reg.Entries["agentk"])
+	code, out, errs = run("extension", "update", "kode", "--auto=off", "--data-dir", dir)
+	want(t, "--auto=off", code, 0, out+errs, "only reports Kode's updates")
+	code, out, errs = run("extension", "install", "kode", "--version", newest, "--data-dir", dir)
+	want(t, "extension install --version again", code, 0, out+errs, "  ✓ Release         Kode "+newest)
+	if reg, _ = extensions.Load(dir); reg.Entries["kode"].Auto() {
+		t.Errorf("the switch came back on: %+v", reg.Entries["kode"])
 	}
 }
 
@@ -330,19 +339,19 @@ func TestInstallExtensionRequiresASignature(t *testing.T) {
 	noRealExtensions(t)
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	rel := agentkRelease(t, "agentk-v"+v, v)
+	rel := kodeRelease(t, "kode-v"+v, v)
 	rel.unsigned = true
 	serveReleases(t, rel)
-	code, out, errs = run("extension", "install", "agentk", "--data-dir", dir)
+	code, out, errs = run("extension", "install", "kode", "--data-dir", dir)
 	want(t, "unsigned", code, 1, out+errs,
-		"agentk-v"+v+" isn't signed (it has no SHA256SUMS.sig): [update] require_signature = false installs it anyway")
-	app := extensions.Known["agentk"].App(dir, "agentk")
+		"kode-v"+v+" isn't signed (it has no SHA256SUMS.sig): [update] require_signature = false installs it anyway")
+	app := extensions.Known["kode"].App(dir, "kode")
 	if app.Current() != "" {
 		t.Fatalf("an unsigned release was installed: %q", app.Current())
 	}
 	t.Setenv("MEKO_UPDATE_REQUIRE_SIGNATURE", "false")
-	code, out, errs = run("extension", "install", "agentk", "--data-dir", dir)
-	want(t, "unsigned, not required", code, 0, out+errs, "  ! Release         agentk-v"+v+
+	code, out, errs = run("extension", "install", "kode", "--data-dir", dir)
+	want(t, "unsigned, not required", code, 0, out+errs, "  ! Release         kode-v"+v+
 		" isn't signed (it has no SHA256SUMS.sig): installing it without that check, "+
 		"as [update] require_signature = false says\n")
 	if app.Current() != v {
@@ -350,7 +359,7 @@ func TestInstallExtensionRequiresASignature(t *testing.T) {
 	}
 }
 
-// An update of a running AgentK switches while it runs and restarts it with me_kode restart, never
+// An update of a running Kode switches while it runs and restarts it with me_kode restart, never
 // stop and start (which would end its sessions), after checking the release with its selftest.
 func TestUpdateExtensionRestartsAgentK(t *testing.T) {
 	const old, next = "0.20261024.0", "0.20261025.0"
@@ -358,13 +367,13 @@ func TestUpdateExtensionRestartsAgentK(t *testing.T) {
 	noRealExtensions(t)
 	dir := shortDir(t)
 	app := installedAgentK(t, dir, old)
-	state := extensions.Dir(dir, "agentk")
+	state := extensions.Dir(dir, "kode")
 	if err := os.WriteFile(filepath.Join(state, "running"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	serveReleases(t, agentkRelease(t, "agentk-v"+next, next))
-	code, out, errs := run("extension", "update", "agentk", "--data-dir", dir)
-	want(t, "extension update", code, 0, out+errs, "AgentK is running "+next)
+	serveReleases(t, kodeRelease(t, "kode-v"+next, next))
+	code, out, errs := run("extension", "update", "kode", "--data-dir", dir)
+	want(t, "extension update", code, 0, out+errs, "Kode is running "+next)
 	if got := readLog(t, filepath.Join(state, "log")); got != "restart "+next+"\n" {
 		t.Errorf("log %q", got)
 	}
@@ -373,7 +382,7 @@ func TestUpdateExtensionRestartsAgentK(t *testing.T) {
 	}
 }
 
-// A stopped AgentK (its status exits non-zero) is switched to the new version and left stopped: an
+// A stopped Kode (its status exits non-zero) is switched to the new version and left stopped: an
 // update doesn't start it.
 func TestUpdateExtensionLeavesAStoppedAgentKStopped(t *testing.T) {
 	const old, next = "0.20261024.0", "0.20261025.0"
@@ -381,10 +390,10 @@ func TestUpdateExtensionLeavesAStoppedAgentKStopped(t *testing.T) {
 	noRealExtensions(t)
 	dir := shortDir(t)
 	app := installedAgentK(t, dir, old)
-	serveReleases(t, agentkRelease(t, "agentk-v"+next, next))
-	code, out, errs := run("extension", "update", "agentk", "--data-dir", dir)
-	want(t, "extension update", code, 0, out+errs, "Installed AgentK "+next+"; it runs at its next start")
-	if got := readLog(t, filepath.Join(extensions.Dir(dir, "agentk"), "log")); got != "" {
+	serveReleases(t, kodeRelease(t, "kode-v"+next, next))
+	code, out, errs := run("extension", "update", "kode", "--data-dir", dir)
+	want(t, "extension update", code, 0, out+errs, "Installed Kode "+next+"; it runs at its next start")
+	if got := readLog(t, filepath.Join(extensions.Dir(dir, "kode"), "log")); got != "" {
 		t.Errorf("log %q", got)
 	}
 	if app.Current() != next {
@@ -399,18 +408,18 @@ func TestUpdateExtensionReportsAgentKsRollBack(t *testing.T) {
 	noRealExtensions(t)
 	dir := shortDir(t)
 	installedAgentK(t, dir, old)
-	state := extensions.Dir(dir, "agentk")
+	state := extensions.Dir(dir, "kode")
 	for f, body := range map[string]string{"running": "", "rollback-to": old} {
 		if err := os.WriteFile(filepath.Join(state, f), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	serveReleases(t, agentkRelease(t, "agentk-v"+next, next))
-	code, _, errs := run("extension", "update", "agentk", "--data-dir", dir)
+	serveReleases(t, kodeRelease(t, "kode-v"+next, next))
+	code, _, errs := run("extension", "update", "kode", "--data-dir", dir)
 	want(t, "extension update", code, 1, errs, "rolled back to "+old+" and won't be offered again")
 }
 
-// An AgentK still in its old home isn't one Meko updates until it has moved.
+// A Kode still in its old home isn't one Meko updates until it has moved.
 func TestUpdateExtensionWaitsForAgentKsMove(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -424,38 +433,38 @@ func TestUpdateExtensionWaitsForAgentKsMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: exe}
+	reg.Entries["kode"] = extensions.Entry{Command: exe}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs := run("extension", "update", "agentk", "--data-dir", dir)
-	want(t, "an unmoved AgentK", code, 1, errs, "once it has moved into Meko's data folder")
-	if u := testListener(t, dir).ExtensionUpdates("agentk"); u.Updatable ||
+	code, _, errs := run("extension", "update", "kode", "--data-dir", dir)
+	want(t, "an unmoved Kode", code, 1, errs, "once it has moved into Meko's data folder")
+	if u := testListener(t, dir).ExtensionUpdates("kode"); u.Updatable ||
 		!strings.Contains(u.NotUpdatable, "once it has moved into Meko's data folder") {
 		t.Errorf("ExtensionUpdates = %+v", u)
 	}
 }
 
-// AgentK's own [update] channel = "off" turns Update automatically off, saved, so it stays off once
-// AgentK's config no longer says so.
+// Kode's own [update] channel = "off" turns Update automatically off, saved, so it stays off once
+// Kode's config no longer says so.
 func TestAgentKsOldUpdatesOffCarriesOver(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	noRealExtensions(t)
 	dir := shortDir(t)
 	installedAgentK(t, dir, installedVersion)
-	cfg := filepath.Join(extensions.Dir(dir, "agentk"), "config.toml")
+	cfg := filepath.Join(extensions.Dir(dir, "kode"), "config.toml")
 	if err := os.WriteFile(cfg, []byte("[update]\nchannel = \"off\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	w := testListener(t, dir)
-	if u := w.ExtensionUpdates("agentk"); u.AutoUpdate {
-		t.Errorf("on with AgentK's updates off: %+v", u)
+	if u := w.ExtensionUpdates("kode"); u.AutoUpdate {
+		t.Errorf("on with Kode's updates off: %+v", u)
 	}
 	if err := os.Remove(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Auto() || w.ExtensionUpdates("agentk").AutoUpdate {
-		t.Errorf("came back on: %+v", reg.Entries["agentk"])
+	if reg, _ := extensions.Load(dir); reg.Entries["kode"].Auto() || w.ExtensionUpdates("kode").AutoUpdate {
+		t.Errorf("came back on: %+v", reg.Entries["kode"])
 	}
 }
 
@@ -467,20 +476,20 @@ func TestUpdateExtensionAllAndAuto(t *testing.T) {
 	dir := shortDir(t)
 	installedAgentK(t, dir, installedVersion)
 	installedPresenter(t, dir)
-	serveReleases(t, agentkRelease(t, "agentk-v"+next, next),
+	serveReleases(t, kodeRelease(t, "kode-v"+next, next),
 		fakeRelease{tag: "present-v" + next, pkg: "present", version: next,
 			tgz: presentTarball(t, next, "")})
 	code, out, errs := run("extension", "update", "--all", "--check", "--data-dir", dir)
-	want(t, "--all --check", code, 0, out+errs, "AgentK "+next+" is available")
+	want(t, "--all --check", code, 0, out+errs, "Kode "+next+" is available")
 	want(t, "--all --check", code, 0, out, "Presenter "+next+" is available")
 	code, out, errs = run("extension", "update", "--all", "--data-dir", dir)
 	want(t, "--all", code, 0, out+errs, "Installed Presenter "+next)
-	want(t, "--all", code, 0, out, "Installed AgentK "+next)
+	want(t, "--all", code, 0, out, "Installed Kode "+next)
 
 	code, out, errs = run("extension", "update", "present", "--auto=off", "--data-dir", dir)
 	want(t, "--auto=off", code, 0, out+errs, "only reports Presenter's updates")
 	reg, _ := extensions.Load(dir)
-	if reg.Entries["present"].Auto() || !reg.Entries["agentk"].Auto() {
+	if reg.Entries["present"].Auto() || !reg.Entries["kode"].Auto() {
 		t.Errorf("auto %+v", reg.Entries)
 	}
 	code, _, errs = run("extension", "update", "present", "--auto=maybe", "--data-dir", dir)

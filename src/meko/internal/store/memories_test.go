@@ -302,21 +302,21 @@ func TestListAndFilters(t *testing.T) {
 func TestEntities(t *testing.T) {
 	ctx := context.Background()
 	s := openMem(t)
-	insert(t, s, Entities, "a", "e1", unit(1, 0, 0), map[string]any{"data": "AgentK", "entityType": "PROPER",
+	insert(t, s, Entities, "a", "e1", unit(1, 0, 0), map[string]any{"data": "Kode", "entityType": "PROPER",
 		"linkedMemoryIds": []any{"m1", "m2"}, "user_id": "u"})
 	r, err := s.GetVector(ctx, Entities, "a", "e1")
 	if err != nil || r == nil {
 		t.Fatal(r, err)
 	}
 	if got, _ := json.Marshal(r.Payload); string(got) !=
-		`{"data":"AgentK","entityType":"PROPER","linkedMemoryIds":["m1","m2"],"user_id":"u"}` {
+		`{"data":"Kode","entityType":"PROPER","linkedMemoryIds":["m1","m2"],"user_id":"u"}` {
 		t.Errorf("entity payload %s", got)
 	}
 	res, err := s.SearchVectors(ctx, Entities, "a", unit(1, 0, 0), 5, Filter{"user_id": "u"})
 	if err != nil || ids(res) != "e1" {
 		t.Errorf("entity search %v %v", ids(res), err)
 	}
-	if res, _, _ := s.ListVectors(ctx, Entities, "a", Filter{"data": "AgentK"}, 0); ids(res) != "e1" {
+	if res, _, _ := s.ListVectors(ctx, Entities, "a", Filter{"data": "Kode"}, 0); ids(res) != "e1" {
 		t.Errorf("entity by text: %s", ids(res))
 	}
 }

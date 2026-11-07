@@ -1,6 +1,6 @@
 {
-  "name": "agentk",
+  "name": "kode",
   "version": "1.0.0",
-  "description": "AgentK's link into the Claude Code sessions it runs: takes AgentK's prompts and reports usage.",
-  "author": { "name": "AgentK" }
+  "description": "Kode's link into the Claude Code sessions it runs: takes Kode's prompts and reports usage.",
+  "author": { "name": "Kode" }
 }

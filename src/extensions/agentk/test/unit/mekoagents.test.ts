@@ -58,7 +58,7 @@ describe("Meko's list of agents: reading it", () => {
   });
 });
 
-describe("Meko's list of agents: what AgentK gates on", () => {
+describe("Meko's list of agents: what Kode gates on", () => {
   const setup = (db = openDb(':memory:')) => {
     const r: { value: MekoAgentsRead } = { value: { kind: 'list', list: LIST } };
     let changes = 0;

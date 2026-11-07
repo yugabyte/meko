@@ -13,7 +13,7 @@ import type {
   CloseWorkItemsRequest, CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
 } from '../shared/types.js';
 import { ACTIONS_MAX, LINK_GRANTS, MAX_IDLE_STOP_HOURS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, SHARE_GRANTS, WORK_SYNC_MINUTES_MAX } from '../shared/types.js';
-import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
+import { KODE_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
 import { MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type CodeReviewDetail, type CodeReviewFinding } from '../shared/codereview.js';
@@ -73,11 +73,23 @@ export function appCsp(host: string | undefined): string {
 export const SHUTDOWN_CLOSE_MS = 1000;
 
 /** The page learns where Meko serves it from the `<base href>` stamped into it (stampPage). */
-const BASE_PATH = AGENTK_PATH;
+const BASE_PATH = KODE_PATH;
+
+/** Where Meko served Kode before it called it Kode, and where a Meko from before still does. */
+const OLD_BASE_PATH = '/ext/agentk/';
+
+/**
+ * The path the page is served at, for its `<base href>`: the one Meko names in X-Meko-Prefix (the
+ * path it served the request under), else `/ext/agentk/`, where a Meko that sends none serves Kode.
+ */
+export function pageBase(prefix: string | string[] | undefined): string {
+  const p = Array.isArray(prefix) ? prefix[0] : prefix;
+  return p && /^\/ext\/[a-z][a-z0-9-]{0,39}\/$/.test(p) ? p : OLD_BASE_PATH;
+}
 
 export interface ServerOptions {
   webDir: string | null;
-  /** What AgentK knows of its updates (updates.ts); null in tests, where `core.updateStatus` stands in. */
+  /** What Kode knows of its updates (updates.ts); null in tests, where `core.updateStatus` stands in. */
   updates: Updates | null;
 }
 
@@ -162,7 +174,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   // ---- sharing (Meko's share API) ----
-  /** Throws unless the datapack is in a live project here and AgentK can share. */
+  /** Throws unless the datapack is in a live project here and Kode can share. */
   const shareable = (datapackId: string): void => {
     const inUse = get(db, `SELECT 1 AS x FROM project_datapacks d JOIN projects p ON p.id = d.project_id
                            WHERE d.datapack_id = ? AND p.deleted_at IS NULL`, datapackId);
@@ -247,7 +259,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
    * link to build or to take a token from, as the palette's `joinEntry` finds too.
    */
   const noWebUrl = (what: string) =>
-    new HttpError(409, `Meko names no web app for share links, so AgentK can't ${what}. Link Meko Cloud, or set its web app, in Meko's web UI (Settings › Meko Cloud).`);
+    new HttpError(409, `Meko names no web app for share links, so Kode can't ${what}. Link Meko Cloud, or set its web app, in Meko's web UI (Settings › Meko Cloud).`);
   /** For the browser: the link on Meko's web app while it's on. The token goes nowhere else, the log included. */
   const shareLinkOut = (l: ShareLinkRow, webUrl: string): ShareLink => ({
     active: l.active,
@@ -409,14 +421,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post<{ Body: StartFromLinkRequest }>('/api/github-link/start', async (req): Promise<StartFromLinkResult> =>
     core.githubLinks.start(req.body && typeof req.body === 'object' ? req.body : ({} as StartFromLinkRequest)));
   // Claude answers while the request is open: a browser that goes away (the palette closed) stops it.
-  app.post<{ Body: AskAgentkRequest }>('/api/ask-agentk', async (req, reply): Promise<AskAgentkResult> => {
+  app.post<{ Body: AskAgentkRequest }>('/api/ask-kode', async (req, reply): Promise<AskAgentkResult> => {
     const gone = new AbortController();
     reply.raw.on('close', () => {
       if (!reply.raw.writableFinished) gone.abort();
     });
-    return core.askAgentk.ask(req.body, gone.signal);
+    return core.askKode.ask(req.body, gone.signal);
   });
-  // Ask AgentK's Do all: checked again against the state now, then run in order.
+  // Ask Kode's Do all: checked again against the state now, then run in order.
   app.post<{ Body: RunActionsRequest }>('/api/actions/run', async (req): Promise<RunActionsResult> => {
     const raw = req.body && typeof req.body === 'object' && Array.isArray(req.body.actions) ? req.body.actions : [];
     if (raw.length > ACTIONS_MAX) throw new HttpError(400, `Run at most ${ACTIONS_MAX} actions at once.`);
@@ -654,7 +666,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
     // off forgets its last read, so it isn't offered on that read once it's turned on again.
     // Another of its own settings changed: its files follow now, not at its next launch (Kiro's
-    // agentk-trusted goes as soon as [kiro] trust_tools is off).
+    // kode-trusted goes as soon as [kiro] trust_tools is off).
     for (const id of HARNESS_IDS) {
       const h = core.harnesses.of(id);
       const prepare = () => h.prepare(core.paths, core.config).catch((e) => core.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
@@ -700,7 +712,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return settings();
   });
 
-  // Meko, on AgentK's socket: something AgentK reads from Meko changed (`cloud`: the Meko Cloud link).
+  // Meko, on Kode's socket: something Kode reads from Meko changed (`cloud`: the Meko Cloud link).
   // Outside /api, so the same-origin rule is checked here; all it does is read Meko again.
   app.post<{ Body: { what?: unknown } }>('/_meko/changed', async (req, reply) => {
     if (!sameOrigin(req)) return reply.code(403).send({ error: 'Cross-origin request refused.' });
@@ -730,7 +742,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return core.harnesses.statusOf(h, core.config);
   });
   // Meko installs updates: the page checks, updates and sets Update automatically through Meko's own
-  // routes. What AgentK keeps is which update this version came from, and What's new.
+  // routes. What Kode keeps is which update this version came from, and What's new.
   app.get('/api/update', async () => (opts.updates ? opts.updates.status() : core.updateStatus()));
   app.get<{ Querystring: { from?: string; to?: string } }>('/api/update/notes', async (req) => {
     const { from, to } = req.query;
@@ -869,7 +881,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   if (opts.webDir) {
     // `/` is served by the not-found handler below too, so every page carries this server's version.
     await app.register(fastifyStatic, { root: opts.webDir, wildcard: false, index: false });
-    const indexHtml = stampPage(readFileSync(join(opts.webDir, 'index.html'), 'utf8'), core.version);
+    const html = readFileSync(join(opts.webDir, 'index.html'), 'utf8');
+    const pages = new Map<string, string>();
+    const indexHtml = (base: string) => pages.get(base) ?? pages.set(base, stampPage(html, core.version, base)).get(base)!;
     app.setNotFoundHandler((req, reply) => {
       const path = req.url.split('?')[0];
       // A missing file (say /favicon.ico) is a 404, not the app: a browser would take the HTML for the file.
@@ -877,7 +891,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if ((req.method !== 'GET' && req.method !== 'HEAD') || path.startsWith('/api/') || path.startsWith('/ws/') || missingFile) {
         return reply.code(404).send({ error: 'Not found.' });
       }
-      return reply.type('text/html').header('Cache-Control', 'no-cache').send(indexHtml);
+      return reply.type('text/html').header('Cache-Control', 'no-cache').send(indexHtml(pageBase(req.headers['x-meko-prefix'])));
     });
   }
 
@@ -885,15 +899,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 }
 
 /**
- * Readies the built page: `<base href>` names BASE_PATH, where Meko serves AgentK, so the page's
+ * Readies the built page: `<base href>` names `base` (BASE_PATH, where Meko serves Kode), so the page's
  * relative URLs (its assets, API calls and WebSockets: src/web/base.ts) resolve under it on every
  * route; and `<meta name="ak-version">` carries the server's version, so an open page that sees the
  * server report another version reloads itself (src/web/reload.ts).
  */
-export function stampPage(html: string, version: string): string {
+export function stampPage(html: string, version: string, base = BASE_PATH): string {
   const v = version.replace(/[&"<>]/g, (c) => `&#${c.charCodeAt(0)};`);
   return html
-    .replace('<head>', `<head>\n    <base href="${BASE_PATH}" />`)
+    .replace('<head>', `<head>\n    <base href="${base}" />`)
     .replace('</head>', `  <meta name="ak-version" content="${v}" />\n  </head>`);
 }
 

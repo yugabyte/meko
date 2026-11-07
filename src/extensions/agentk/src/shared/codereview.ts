@@ -1,7 +1,7 @@
 /**
- * AgentK's code review (docs/design/code-review.md): the review strategies, the four
+ * Kode's code review (docs/design/code-review.md): the review strategies, the four
  * settings (strategy, re-review rounds, depth, check) and how a session's, its project's and the global
- * values resolve, the `me_ak_review:` line a PR description carries, and the short label the
+ * values resolve, the `me_kode_review:` line a PR description carries, and the short label the
  * review's part of a task's tab shows. Used by the server and the web UI.
  */
 
@@ -149,14 +149,22 @@ function severityPart(s: Severity, n: number): string {
 }
 
 /** The prefix of the PR description's line. */
-export const ME_AK_REVIEW = 'me_ak_review:';
+export const ME_AK_REVIEW = 'me_kode_review:';
+
+/** Its prefix in PRs opened before Kode was called Kode, which is read as this one. */
+export const OLD_ME_AK_REVIEW = 'me_ak_review:';
+
+/** The line's prefix, the new or the old one, or null for a line that isn't one. */
+function reviewPrefix(line: string): string | null {
+  return [ME_AK_REVIEW, OLD_ME_AK_REVIEW].find((p) => line.startsWith(p)) ?? null;
+}
 
 /** A strategy as the line names it: its display name without spaces (`Sagittarius3.0`). */
 export function strategyTag(id: string): string {
   return strategyName(id).replace(/\s+/g, '');
 }
 
-/** What a `me_ak_review:` line says: the findings and, after `;`, the strategy's tag (null on a line without one). */
+/** What a `me_kode_review:` line says: the findings and, after `;`, the strategy's tag (null on a line without one). */
 export interface MeAkReview {
   counts: SeverityCounts;
   strategy: string | null;
@@ -172,11 +180,12 @@ export function meAkReviewLine(counts: SeverityCounts, strategy: string): string
   return `${ME_AK_REVIEW}${parts.length ? `${parts.join(',')} addressed` : 'LGTM'};${strategyTag(strategy)}`;
 }
 
-/** Reads a `me_ak_review:` line back, with or without its strategy, or null when it isn't one. */
+/** Reads a `me_kode_review:` line back, with or without its strategy, or null when it isn't one. */
 export function parseMeAkReviewLine(line: string): MeAkReview | null {
   const t = line.trim();
-  if (!t.startsWith(ME_AK_REVIEW)) return null;
-  const body = t.slice(ME_AK_REVIEW.length).trim();
+  const prefix = reviewPrefix(t);
+  if (!prefix) return null;
+  const body = t.slice(prefix.length).trim();
   const sm = /^(.*);([^\s;]+)$/.exec(body);
   const rest = (sm ? sm[1] : body).trim();
   const strategy = sm ? sm[2] : null;
@@ -193,16 +202,16 @@ export function parseMeAkReviewLine(line: string): MeAkReview | null {
   return totalCount(counts) ? { counts, strategy } : null;
 }
 
-/** The `me_ak_review:` line in a PR description, or null when it has none. */
+/** The `me_kode_review:` line in a PR description, or null when it has none. */
 export function findMeAkReviewLine(body: string): string | null {
-  for (const line of body.split('\n')) if (line.trim().startsWith(ME_AK_REVIEW)) return line.trim();
+  for (const line of body.split('\n')) if (reviewPrefix(line.trim())) return line.trim();
   return null;
 }
 
-/** A PR description with its `me_ak_review:` line set to `line` (replaced, or added at the end). */
+/** A PR description with its `me_kode_review:` line set to `line` (replaced, or added at the end). */
 export function withMeAkReviewLine(body: string, line: string): string {
   const lines = body.split('\n');
-  const i = lines.findIndex((l) => l.trim().startsWith(ME_AK_REVIEW));
+  const i = lines.findIndex((l) => reviewPrefix(l.trim()) !== null);
   if (i >= 0) {
     lines[i] = line;
     return lines.join('\n');

@@ -82,7 +82,7 @@ export function closeRequest(body: unknown): CloseSessionRequest {
 /** The status detail while Claude asks the user something: its first question, shortened. */
 export function askDetail(question: string): string {
   const q = question.replace(/\s+/g, ' ').trim();
-  return `AgentK asks: ${q.length > 120 ? `${q.slice(0, 119)}…` : q}`;
+  return `Kode asks: ${q.length > 120 ? `${q.slice(0, 119)}…` : q}`;
 }
 
 /** The most background tasks a session keeps, and the longest line each keeps. */
@@ -96,7 +96,7 @@ const BACKGROUND_TEXT_MAX = 200;
 const ARTIFACT_WATCH = /^live updates for artifact /;
 
 /**
- * A turn end's `background_tasks` (Claude Code's `Stop`, OpenCode's from AgentK's plugin) as
+ * A turn end's `background_tasks` (Claude Code's `Stop`, OpenCode's from Kode's plugin) as
  * `Session.background`: each task's type and one line about it (a shell's command, else its
  * description, else a subagent's type). Missing, as from a Claude Code too old to send it, is none.
  * Claude Code's Artifact watches are left out: they never end, and nothing waits on them.
@@ -123,14 +123,14 @@ export function backgroundTasks(raw: unknown): BackgroundTask[] {
  */
 export function workflowLine(kind: SessionKind, stage: Stage): string {
   if (kind === 'code-review') {
-    return "This is AgentK's code review of a task's change, before its PR opens. You don't review the code yourself and you change no file: you run the review's steps as AgentK's prompts list them, each in a fresh subagent, and each step reports to AgentK with AgentK's tools.";
+    return "This is Kode's code review of a task's change, before its PR opens. You don't review the code yourself and you change no file: you run the review's steps as Kode's prompts list them, each in a fresh subagent, and each step reports to Kode with Kode's tools.";
   }
   if (kind === 'review-pr') {
-    return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK UI.";
+    return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the Kode UI.";
   }
-  const stages = 'Stages: Explore → Design → Code → Pull Request → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK UI.';
+  const stages = 'Stages: Explore → Design → Code → Pull Request → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the Kode UI.';
   if (stage !== 'explore') return stages;
-  return `${stages} It's in Explore now: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK runs no design approval, PR, review or merge until the user moves it on.`;
+  return `${stages} It's in Explore now: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. Kode runs no design approval, PR, review or merge until the user moves it on.`;
 }
 
 /** The old session types a create request may still name, and where each starts. */
@@ -230,7 +230,7 @@ export function checkLearn(b: unknown): LearnBrief {
   if (o.where != null && typeof o.where !== 'string') throw new HttpError(400, "The learn session's where must be text.");
   const about = (o.about ?? '').trim();
   const where = (o.where ?? '').trim();
-  if (!about) throw new HttpError(400, 'Say what the project is about, so AgentK knows what to learn.');
+  if (!about) throw new HttpError(400, 'Say what the project is about, so Kode knows what to learn.');
   if (about.length > LEARN_TEXT_MAX || where.length > LEARN_TEXT_MAX) {
     throw new HttpError(400, `Keep what the project is about, and where its files are, to ${LEARN_TEXT_MAX.toLocaleString('en-US')} characters each.`);
   }
@@ -304,7 +304,7 @@ export class SessionManager {
   private usedAt = new Map<string, number>();
   /** Sessions whose agent is being stopped for sitting idle (stopIdleOne): their own set, as archive's stops share `stopping`. */
   private idleStopping = new Set<string>();
-  /** Starts of agents AgentK stopped for sitting idle, under way: until the agent is up (`awake`). */
+  /** Starts of agents Kode stopped for sitting idle, under way: until the agent is up (`awake`). */
   private waking = new Map<string, Promise<void>>();
   /** stopIdle is running (one pass at a time). */
   private stoppingIdle = false;
@@ -347,7 +347,7 @@ export class SessionManager {
   private failed = new Map<string, FailedStart>();
   /** Each new session's Meko search on its task, until its SessionStart hook takes what it found. */
   private recall = new RecallStore((id, r) => recordPreload(this.db, id, r));
-  /** Each session's link to AgentK's mod in its Claude (modlink.ts): prompts go through it while it's live. */
+  /** Each session's link to Kode's mod in its Claude (modlink.ts): prompts go through it while it's live. */
   readonly mod = new ModLinks((id, dropped) => this.promptDropped(id, dropped), Date.now, () => this.core.changed());
   /** Meko calls under way as the hooks of a CLI without the mod report them (Kiro's, OpenCode's). */
   private hookMeko = new MekoCalls();
@@ -435,7 +435,7 @@ export class SessionManager {
   }
 
   /**
-   * A turn is running: AgentK is working, or Claude waits on the user (a permission prompt, a
+   * A turn is running: Kode is working, or Claude waits on the user (a permission prompt, a
    * question) during a turn. Not a Needs you with no turn behind it (a parked recovery, a prompt
    * another plugin refused), nor a design waiting for approval.
    */
@@ -445,7 +445,7 @@ export class SessionManager {
     return r.status === 'working' || (r.status === 'needs_input' && r.status_detail !== DESIGN_READY && this.turns.has(id));
   }
 
-  /** AgentK's mod is on and running in the session's Claude: prompts go through it, and it can hold one mid-turn. */
+  /** Kode's mod is on and running in the session's Claude: prompts go through it, and it can hold one mid-turn. */
   modLive(id: string): boolean {
     return this.core.config.claude.mod && this.mod.live(id);
   }
@@ -636,7 +636,7 @@ export class SessionManager {
     const task = review
       ? `Review PR #${review.info.number} of ${review.repo}: ${review.info.title}`
       : learn ? learnTask(learn, Date.now()) : (req.prompt ?? '').trim() || name;
-    // A repo with no commits yet (one opened before AgentK gave it a first commit) gets one now.
+    // A repo with no commits yet (one opened before Kode gave it a first commit) gets one now.
     if (!review) {
       try {
         await ensureFirstCommit(repo);
@@ -721,7 +721,7 @@ export class SessionManager {
     if (missed.length) {
       // Removed meanwhile (by the daily sweep, the project closing, or another start that took them).
       const what = missed.length === 1 ? "An image you added wasn't" : `${missed.length} of the images you added weren't`;
-      this.event(id, 'images', `${what} on the host any more when the session started, so AgentK doesn't have ${missed.length === 1 ? 'it' : 'them'}. Paste ${missed.length === 1 ? 'it' : 'them'} into the terminal.`);
+      this.event(id, 'images', `${what} on the host any more when the session started, so Kode doesn't have ${missed.length === 1 ? 'it' : 'them'}. Paste ${missed.length === 1 ? 'it' : 'them'} into the terminal.`);
       this.core.log.warn(`${missed.length} of the images for ${id} were gone before they could be moved: ${missed.join(', ')}`);
     }
     // Until Claude is running, the row has no pane; reconcile must not mistake it for a lost session.
@@ -827,7 +827,7 @@ export class SessionManager {
 
     // The first prompt says where the PR's design is, if it came in time; one that comes later is still shown.
     if (design) await within(design, PR_DESIGN_TIMEOUT_MS);
-    // Before the first prompt, which a trusted repo's .agent-k/stages may write.
+    // Before the first prompt, which a trusted repo's .kode/stages may write.
     const row = await this.checkHead(id);
     const first = this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     const told = review && first ? prDesignSource(this.core, id) : null;
@@ -900,7 +900,7 @@ export class SessionManager {
   private failStart(id: string, request: CreateSessionRequest, message: string, release: () => void): HttpError {
     const row = sessionRow(this.db, id);
     if (row?.purpose === 'guide') {
-      this.notifyUser(id, "Couldn't start", `${message} Start the AgentK tour again to retry.`);
+      this.notifyUser(id, "Couldn't start", `${message} Start the Kode tour again to retry.`);
     } else if (row) {
       this.notifyUser(id, "Couldn't start", message);
       this.failed.set(id, { id, projectId: row.project_id, name: row.name, error: message, at: Date.now(), request });
@@ -939,7 +939,7 @@ export class SessionManager {
   }
 
   /**
-   * A slug no session of the project has. With a <prefix> (AgentK names the branch), the branch
+   * A slug no session of the project has. With a <prefix> (Kode names the branch), the branch
    * `<prefix><slug>` mustn't exist in <repo> either.
    */
   private async uniqueSlug(projectId: string, repo: string, prefix: string | null, base: string): Promise<string> {
@@ -1145,7 +1145,7 @@ export class SessionManager {
       }
       : {};
     // A workshop's host starts on its bundled script, never a repo's or the owner's own version.
-    // A PR's .agent-k/stages can't stand in for AgentK's prompts until its code is known to be trusted.
+    // A PR's .kode/stages can't stand in for Kode's prompts until its code is known to be trusted.
     const text = name === 'guide' ? this.core.workshops.guidePrompt(row) : render(loadPrompt(this.db, name, repoConfigTrusted(row) ? row.worktree_path : null), {
       // The images added in the New session dialog go with the task (a review's with its notes: its task is the PR).
       task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(taskWithName(row.name, row.initial_prompt ?? ''), startImages(row)),
@@ -1171,7 +1171,7 @@ export class SessionManager {
   /**
    * A prompt's lines about the design, added in code so a repo's own prompts get them too: for a
    * task with a design, the approval asks for its key design decisions in it before coding, and
-   * the prompts that change code later ask to keep it current; for a review, where AgentK put the
+   * the prompts that change code later ask to keep it current; for a review, where Kode put the
    * PR's design (in its first prompt, and in the summary after Update to latest when it changed).
    */
   private designLines(row: SessionRow, name: PromptName, extra: Record<string, string | number | null>): string[] {
@@ -1197,15 +1197,15 @@ export class SessionManager {
     const dps = this.sessionDatapacks(row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
     return {
-      AK_SESSION: row.id,
-      AK_HOOK_TOKEN: row.hook_token,
+      KODE_SESSION: row.id,
+      KODE_HOOK_TOKEN: row.hook_token,
       // Its local spelling too: Claude Code refuses a mod's $.http.fetch to a socket under /net.
-      AK_HOOK_SOCK: claudePath(this.core.paths.hookSock),
-      AK_DESIGN_FILE: this.designFile(row),
-      // For AgentK's view mod (src/mod/agentk-view): the first line of the prompt the conversation
+      KODE_HOOK_SOCK: claudePath(this.core.paths.hookSock),
+      KODE_DESIGN_FILE: this.designFile(row),
+      // For Kode's view mod (src/mod/agentk-view): the first line of the prompt the conversation
       // started with, which Claude Code draws like typed text, and of a workshop host's hidden events.
-      AK_FIRST_PROMPT: row.first_prompt ?? '',
-      AK_HIDDEN_PROMPT: row.purpose === 'guide' ? firstLine(this.prompt(row, 'guide-event', { events: '' })) : '',
+      KODE_FIRST_PROMPT: row.first_prompt ?? '',
+      KODE_HIDDEN_PROMPT: row.purpose === 'guide' ? firstLine(this.prompt(row, 'guide-event', { events: '' })) : '',
       MEKO_AGENT_ID: launchedAgentId(row),
       MEKO_DATAPACK_ID: dedicated?.id ?? '',
       MEKO_DATAPACK_IDS: dps.map((d) => d.id).join(','),
@@ -1218,7 +1218,7 @@ export class SessionManager {
     };
   }
 
-  /** Whether the session's agent gets AgentK's mod, as far as is known now, for the prompt lines that name its tools. */
+  /** Whether the session's agent gets Kode's mod, as far as is known now, for the prompt lines that name its tools. */
   private offersMod(row: SessionRow): boolean {
     return this.harness(row).offersMod?.(this.core.paths, this.core.config) ?? false;
   }
@@ -1229,7 +1229,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This ${this.harness(row).caps.label} session is managed by AgentK. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
+      `This ${this.harness(row).caps.label} session is managed by Kode. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
     ];
     if (row.kind !== 'review-pr' && row.kind !== 'code-review' && row.branch_reused) {
       lines.push(`The branch existed before this session${row.pr_number ? ` and is the branch of PR #${row.pr_number} (${row.pr_url ?? ''})` : ''}: build on its commits rather than starting over.${row.push_remote ? ` ${pushLine(row)}` : ''}`);
@@ -1304,7 +1304,7 @@ export class SessionManager {
   /**
    * Pins the project's dedicated datapack for the session's Meko agent id (the project may have
    * switched to another since the last launch), and records it as the one this launch uses
-   * (sessionDatapack), so AgentK's writes for the session stay with it after a switch, until the
+   * (sessionDatapack), so Kode's writes for the session stay with it after a switch, until the
    * session is launched again. A session from before sessions had their own agent id gets one now.
    */
   private pinDatapack(row: SessionRow): void {
@@ -1316,7 +1316,7 @@ export class SessionManager {
     row.meko_datapack_id = dp?.id ?? null;
     row.meko_datapack_name = dp?.name ?? null;
     run(this.db, 'UPDATE sessions SET meko_datapack_id = ?, meko_datapack_name = ? WHERE id = ?', row.meko_datapack_id, row.meko_datapack_name, row.id);
-    // Meko off: AgentK pins nothing. Claude Code's own Meko setup, if any, is left as it is.
+    // Meko off: Kode pins nothing. Claude Code's own Meko setup, if any, is left as it is.
     if (!dp) return;
     try {
       this.core.projects.writePin(launchedAgentId(row), dp);
@@ -1339,7 +1339,7 @@ export class SessionManager {
     const h = this.harness(row);
     await h.beforeLaunch({ paths: this.core.paths, cfg: this.core.config, log: this.core.log, row, repo: sessionRepo(this.db, row) });
     this.pinDatapack(row);
-    // In the background, reusing recent results: whether this session's Claude reaches AgentK's Meko.
+    // In the background, reusing recent results: whether this session's Claude reaches Kode's Meko.
     if (this.core.mekoStatus.configured) void this.core.claudeMeko.refresh();
     const designDir = join(this.core.paths.designs, row.id);
     mkdirSync(designDir, { recursive: true });
@@ -1350,7 +1350,7 @@ export class SessionManager {
     this.systemLines.set(row.id, systemPrompt);
     const untrusted = !repoConfigTrusted(row);
     // A code-review session reads its steps' prompts from its review's run folder, and always has
-    // AgentK's MCP server: its steps report through it, whatever `[tools] enabled` says.
+    // Kode's MCP server: its steps report through it, whatever `[tools] enabled` says.
     const review = row.kind === 'code-review' ? this.core.reviews.launchForSession(row) : null;
     const termTheme = this.core.termTheme();
     const script = writeLauncher(this.core.paths, h.launcher(this.core.paths, this.core.config, {
@@ -1413,20 +1413,20 @@ export class SessionManager {
   }
 
   /**
-   * Submits a prompt to the session's Claude: through AgentK's mod while it's live and `[claude] mod`
+   * Submits a prompt to the session's Claude: through Kode's mod while it's live and `[claude] mod`
    * is on (Claude takes it when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
    * that had to wait is refused if the one before it started a turn. `lost` runs if Claude goes
    * (exits, or is relaunched) after a prompt sent between turns counted as sent but before its turn started.
-   * For a `hidden` one (a workshop host's events) the mod draws a bare "OK" in its turn as nothing; AgentK's
-   * view mod hides the prompt's own row by its first line (AK_HIDDEN_PROMPT), not by this flag.
+   * For a `hidden` one (a workshop host's events) the mod draws a bare "OK" in its turn as nothing; Kode's
+   * view mod hides the prompt's own row by its first line (KODE_HIDDEN_PROMPT), not by this flag.
    */
   submit(id: string, text: string, lost?: () => void, hidden = false): Promise<void> {
     return this.inTurn(id, async (r, waited) => {
-      if (waited && r.status === 'working') throw new HttpError(409, 'AgentK is working on another prompt. Try again when the turn ends.');
+      if (waited && r.status === 'working') throw new HttpError(409, 'Kode is working on another prompt. Try again when the turn ends.');
       // Where the transcript ends before the prompt can reach it.
       const unstarted: Unstarted = { text, lost: lost ?? (() => undefined), mark: this.harness(r).transcriptMark?.(r) ?? null };
       if (this.modLive(id)) {
-        // Mid-turn (answers to a design sent while AgentK works), Claude holds the prompt until the
+        // Mid-turn (answers to a design sent while Kode works), Claude holds the prompt until the
         // turn ends, and its UserPromptSubmit says when it starts: the status stays as it is, so a
         // permission prompt still shows as Needs you.
         const midTurn = this.midTurn(id);
@@ -1504,15 +1504,15 @@ export class SessionManager {
     const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d), claudePath(d)]);
     const inRepo = (file: string) => roots.some((d) => file === d || file.startsWith(d + sep));
     if (!paths.some((f) => inRepo(resolve(p.cwd || row.worktree_path, f)))) return null;
-    if (review) return h.deny("This is AgentK's code review: it reads the change and changes no file. Report what you found with AgentK's review tools.");
+    if (review) return h.deny("This is Kode's code review: it reads the change and changes no file. Report what you found with Kode's review tools.");
     return h.deny(
-      `This session is in the Design stage: AgentK blocks changes to the repo until the user approves the design. ` +
+      `This session is in the Design stage: Kode blocks changes to the repo until the user approves the design. ` +
       (h.caps.artifacts ? `Publish the design as an Artifact, or write it to ${this.designFile(row)}.` : `Write the design to ${this.designFile(row)}.`),
     );
   }
 
   /**
-   * Context for a session's start hook: what AgentK's Meko search found for a new session's task,
+   * Context for a session's start hook: what Kode's Meko search found for a new session's task,
    * waiting briefly for a search still running. For Claude Code, only for a fresh start: on a
    * resume it's already in the transcript, and after /clear the user has moved on. A harness with no
    * system-prompt flag (Kiro) gets the session's system-prompt lines here first, at every start.
@@ -1532,20 +1532,20 @@ export class SessionManager {
   }
 
   /**
-   * AgentK's mod in the session's Claude (src/mod/agentk), on the hook socket's `/mod/*` routes:
+   * Kode's mod in the session's Claude (src/mod/agentk), on the hook socket's `/mod/*` routes:
    * hello when it loads, polls for prompts, acks them, and reports measurements after each turn;
    * Claude's AskUserQuestion calls, held until the user answers them here (`/mod/ask`) or the
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
    * design_questions tool (`/mod/questions`); Claude's Meko calls starting and ending
    * (`/mod/meko`), for the session's dot; and a turn you interrupted (`/mod/turn`), which fires
-   * no `Stop` hook. Also `/tools`: AgentK's session tools, called by `me_kode mcp` in a session of any harness.
+   * no `Stop` hook. Also `/tools`: Kode's session tools, called by `me_kode mcp` in a session of any harness.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
     const row = this.byToken(token);
     if (!row || row.desired !== 'running') return { status: 403 };
     switch (route) {
       case '/mod/hello':
-        if (this.mod.hello(row.id, body.protocol)) this.core.log.info(`AgentK's mod is running in ${row.id}; its prompts go through the mod`);
+        if (this.mod.hello(row.id, body.protocol)) this.core.log.info(`Kode's mod is running in ${row.id}; its prompts go through the mod`);
         return { status: 204 };
       case '/mod/poll': {
         // The socket is closing (a rebind or a stop), or the mod was turned off in the config: the
@@ -1561,7 +1561,7 @@ export class SessionManager {
           this.mod.dropped(row.id, body.id, body.reason, body.filled);
           return { status: 204 };
         }
-        // 204: submit it. 410: AgentK gave up on it (it reported the send failed), so don't.
+        // 204: submit it. 410: Kode gave up on it (it reported the send failed), so don't.
         return { status: body.state === 'accepted' && this.mod.accept(row.id, body.id) ? 204 : 410 };
       case '/mod/measure':
         this.measured(row.id, body);
@@ -1606,13 +1606,13 @@ export class SessionManager {
         }
         return { status: 204 };
       case '/tools':
-        // AgentK's session tools, from `me_kode mcp` in the session (any harness's).
+        // Kode's session tools, from `me_kode mcp` in the session (any harness's).
         return this.core.tools.call(row, body);
       case '/mod/learn/start':
-        // /agentk_learn in the terminal: the answer is the command's output there.
+        // /kode_learn in the terminal: the answer is the command's output there.
         try {
           await this.core.learn.start(row, 'manual');
-          return { status: 200, body: { text: 'AgentK is saving what this session learned to Meko.' } };
+          return { status: 200, body: { text: 'Kode is saving what this session learned to Meko.' } };
         } catch (e) {
           return { status: 200, body: { text: errMsg(e) } };
         }
@@ -1643,13 +1643,13 @@ export class SessionManager {
   answerAsk(id: string, askId: string, body: unknown): void {
     const row = this.row(id);
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
-    const gone = () => new HttpError(409, 'AgentK has moved on from that question: it was answered in the terminal, or its turn ended.');
+    const gone = () => new HttpError(409, 'Kode has moved on from that question: it was answered in the terminal, or its turn ended.');
     const asking = this.core.config.claude.mod ? this.mod.asking(id) : null;
     if (!asking || asking.id !== askId) throw gone();
     const answers = askAnswers(body, asking.questions);
     if (!this.mod.answerAsk(id, askId, answers)) throw gone();
     const n = Object.keys(answers).length;
-    this.event(id, 'ask', `Answered ${n === 1 ? "AgentK's question" : `${n} of AgentK's questions`} in the AgentK UI`);
+    this.event(id, 'ask', `Answered ${n === 1 ? "Kode's question" : `${n} of Kode's questions`} in the Kode UI`);
     // Claude takes the answer and carries on with its turn.
     if (row.status === 'needs_input') this.setStatus(id, 'working');
   }
@@ -1711,16 +1711,16 @@ export class SessionManager {
   }
 
   /**
-   * Another plugin in Claude refused a prompt AgentK sent through the mod, after the send had
+   * Another plugin in Claude refused a prompt Kode sent through the mod, after the send had
    * resolved (its caller counts it delivered): the user has to step in, so the detail names the
    * prompt and says how to send it.
    */
   private promptDropped(id: string, d: DroppedPrompt): void {
     const line = d.text?.split('\n').find((l) => l.trim())?.trim() ?? '';
     const name = line ? ` "${line.length > 80 ? `${line.slice(0, 79)}…` : line}"` : '';
-    const detail = `A plugin in Claude refused AgentK's prompt${name}: ${d.reason}. ` + (d.filled
+    const detail = `A plugin in Claude refused Kode's prompt${name}: ${d.reason}. ` + (d.filled
       ? "Its text is in Claude's prompt box: press Enter in the terminal to send it, or edit it first."
-      : 'Ask AgentK for it in the terminal.');
+      : 'Ask Kode for it in the terminal.');
     this.core.log.warn(`${id}: ${detail}`);
     if (sessionRow(this.db, id)?.desired !== 'running') return;
     this.event(id, 'mod', detail);
@@ -2018,7 +2018,7 @@ export class SessionManager {
       const now = sessionRow(this.db, row.id);
       if (now?.desired !== 'running') return;
       if (now.status === 'working') this.update(row.id, { interrupted: 1 });
-      this.setStatus(row.id, 'exited', gone ? errMsg(e) : `Couldn't restart ${agentName(row)}: ${errMsg(e)}. AgentK tries again in 5 minutes, or Resume it now.`);
+      this.setStatus(row.id, 'exited', gone ? errMsg(e) : `Couldn't restart ${agentName(row)}: ${errMsg(e)}. Kode tries again in 5 minutes, or Resume it now.`);
     }
   }
 
@@ -2085,7 +2085,7 @@ export class SessionManager {
     this.clearStartup(row.id);
     this.awaitingStart.delete(row.id);
     this.hookless.add(row.id);
-    this.event(row.id, 'started', `${agentName(row)} started, but its hooks never reached AgentK; its status follows the transcript until they do`);
+    this.event(row.id, 'started', `${agentName(row)} started, but its hooks never reached Kode; its status follows the transcript until they do`);
     this.syncFromTranscript(row);
     return true;
   }
@@ -2144,7 +2144,7 @@ export class SessionManager {
     const cont = wasWorking && autoContinue && !tooSoon && !parked;
     const resume = this.transcriptExists(row);
 
-    // Before the prompt, which a trusted repo's .agent-k/stages may write (launch reads it again).
+    // Before the prompt, which a trusted repo's .kode/stages may write (launch reads it again).
     row = await this.checkHead(row.id);
     let prompt: string | null = null;
     if (!resume) prompt = this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
@@ -2267,7 +2267,7 @@ export class SessionManager {
   }
 
   /**
-   * The session, with its agent started again first when AgentK stopped it for sitting idle, for
+   * The session, with its agent started again first when Kode stopped it for sitting idle, for
    * an action that sends it a prompt. `why` says what for in its activity ("for Open PR"). Waits up
    * to `waitMs` for the agent to be up, and refuses (409) when it isn't by then. Counts as activity
    * either way, so an idle stop can't begin under an action still on its way (one waiting on GitHub).
@@ -2280,7 +2280,7 @@ export class SessionManager {
     return this.row(row.id);
   }
 
-  /** As `awake`, for AgentK's own queued work: starts the agent and returns at once; what waits goes once it's up. */
+  /** As `awake`, for Kode's own queued work: starts the agent and returns at once; what waits goes once it's up. */
   wakeSoon(id: string, why: string): void {
     const row = sessionRow(this.db, id);
     if (!row?.idle_stopped_at || row.desired !== 'running' || this.waking.has(id)) return;
@@ -2292,7 +2292,7 @@ export class SessionManager {
       const until = Date.now() + waitMs;
       // A stop under way finishes first.
       while (this.idleStopping.has(id) && Date.now() < until) await sleep(100);
-      if (this.idleStopping.has(id)) throw new HttpError(409, `AgentK is still stopping ${agentName(this.row(id))}. Try again in a moment.`);
+      if (this.idleStopping.has(id)) throw new HttpError(409, `Kode is still stopping ${agentName(this.row(id))}. Try again in a moment.`);
       const row = this.row(id);
       // A Resume already under way is waited for like this start.
       if (row.idle_stopped_at && row.desired === 'running' && !this.launching.has(id)) {
@@ -2325,7 +2325,7 @@ export class SessionManager {
     if (!row?.idle_stopped_at || row.desired !== 'running') return;
     this.recoverRetryAt.set(id, Date.now() + RECOVERY_BACKOFF_MS);
     this.update(id, { idle_stopped_at: null });
-    this.setStatus(id, 'exited', `Couldn't start ${agentName(row)} again: ${errMsg(e)}. AgentK tries again in 5 minutes, or Resume it now.`);
+    this.setStatus(id, 'exited', `Couldn't start ${agentName(row)} again: ${errMsg(e)}. Kode tries again in 5 minutes, or Resume it now.`);
   }
 
   // ---- actions ----
@@ -2346,7 +2346,7 @@ export class SessionManager {
       case 'merge': await lc.merge(row, closeRequest(body)); break;
       case 'resume': await this.resume(row); break;
       case 'archive':
-        await this.refuseUncommitted(row, 'Ask AgentK to commit, or Discard the session to throw the changes away.');
+        await this.refuseUncommitted(row, 'Ask Kode to commit, or Discard the session to throw the changes away.');
         await this.archive(row, { keepBranch: true });
         break;
       case 'discard': await this.discard(row, closeRequest(body)); break;
@@ -2383,7 +2383,7 @@ export class SessionManager {
         if (!waits) this.update(row.id, { discarding: 0 });
       }
       if (waits) {
-        this.event(row.id, 'discarding', 'Discarding once AgentK has saved what this session learned');
+        this.event(row.id, 'discarding', 'Discarding once Kode has saved what this session learned');
         // It may have ended meanwhile, before the event.
         if (!this.core.learn.running(row.id)) await this.discardNow(row.id);
         return;
@@ -2884,7 +2884,7 @@ export class SessionManager {
 
   /**
    * The id of the session's Meko conversation in its project's dedicated datapack (keyed by the
-   * Claude session id, so the plugin's hooks and AgentK share it), titled after the session if
+   * Claude session id, so the plugin's hooks and Kode share it), titled after the session if
    * Meko doesn't have it yet. Callers check that Meko is on.
    */
   conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {

@@ -12,7 +12,7 @@ import { claudeAllowedTools } from './tooldefs.js';
 
 /**
  * Markers a running Claude Code session puts in its children's environment.
- * If AgentK itself was started from inside Claude Code, these must not
+ * If Kode itself was started from inside Claude Code, these must not
  * reach the sessions it launches (e.g. CLAUDE_CODE_CHILD_SESSION turns off
  * transcript saving, which breaks --resume). User settings such as
  * CLAUDE_CODE_USE_BEDROCK are deliberately kept.
@@ -29,10 +29,11 @@ export const CLAUDE_SESSION_MARKERS = [
  * so it always exits 0 and gives up after 3 seconds.
  */
 const HOOK_SCRIPT = `#!/bin/sh
-# Written by AgentK. Forwards Claude Code hook events to the server.
-[ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
-curl -s -o /dev/null --max-time 3 --unix-socket "$AK_HOOK_SOCK" \\
-  -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
+# Written by Kode. Forwards Claude Code hook events to the server.
+: "\${KODE_HOOK_TOKEN:=\${AK_HOOK_TOKEN:-}}" "\${KODE_HOOK_SOCK:=\${AK_HOOK_SOCK:-}}" # AK_*: sessions launched before Kode was called Kode
+[ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
+curl -s -o /dev/null --max-time 3 --unix-socket "$KODE_HOOK_SOCK" \\
+  -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
   --data-binary @- http://localhost/hook >/dev/null 2>&1
 exit 0
 `;
@@ -44,24 +45,26 @@ exit 0
  * ahead: the guard must never leave Claude stuck.
  */
 const GUARD_SCRIPT = `#!/bin/sh
-# Written by AgentK. Asks the server whether a file edit may go ahead.
-[ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
-curl -sf --max-time 3 --unix-socket "$AK_HOOK_SOCK" \\
-  -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
+# Written by Kode. Asks the server whether a file edit may go ahead.
+: "\${KODE_HOOK_TOKEN:=\${AK_HOOK_TOKEN:-}}" "\${KODE_HOOK_SOCK:=\${AK_HOOK_SOCK:-}}" # AK_*: sessions launched before Kode was called Kode
+[ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
+curl -sf --max-time 3 --unix-socket "$KODE_HOOK_SOCK" \\
+  -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
   --data-binary @- http://localhost/guard 2>/dev/null
 exit 0
 `;
 
 /**
- * SessionStart hook: asks the server for context to start the session with (what AgentK's Meko
+ * SessionStart hook: asks the server for context to start the session with (what Kode's Meko
  * search found, see recall.ts) and prints it for Claude Code. Like the guard, it prints nothing
  * when the server can't be reached or has nothing, and never fails or holds up Claude for long.
  */
 const CONTEXT_SCRIPT = `#!/bin/sh
-# Written by AgentK. Asks the server for context to start the session with.
-[ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
-curl -sf --max-time 4 --unix-socket "$AK_HOOK_SOCK" \\
-  -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
+# Written by Kode. Asks the server for context to start the session with.
+: "\${KODE_HOOK_TOKEN:=\${AK_HOOK_TOKEN:-}}" "\${KODE_HOOK_SOCK:=\${AK_HOOK_SOCK:-}}" # AK_*: sessions launched before Kode was called Kode
+[ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
+curl -sf --max-time 4 --unix-socket "$KODE_HOOK_SOCK" \\
+  -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
   --data-binary @- http://localhost/context 2>/dev/null
 exit 0
 `;
@@ -70,22 +73,26 @@ exit 0
  * Status line: Claude Code runs it with a JSON description of the session, which includes
  * the plan usage limits (5-hour and weekly) on Pro and Max plans. It passes those to the
  * server in the background, then runs the user's own status line command with the same
- * input, so the terminal looks as it would without AgentK.
+ * input, so the terminal looks as it would without Kode.
  */
 const STATUSLINE_SCRIPT = `#!/bin/sh
-# Written by AgentK. Reports plan usage limits, then prints the user's status line.
+# Written by Kode. Reports plan usage limits, then prints the user's status line.
 input=$(cat)
-if [ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ]; then
+: "\${KODE_HOOK_TOKEN:=\${AK_HOOK_TOKEN:-}}" "\${KODE_HOOK_SOCK:=\${AK_HOOK_SOCK:-}}" # AK_*: sessions launched before Kode was called Kode
+if [ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ]; then
   case $input in
     *'"rate_limits"'*)
-      printf '%s' "$input" | curl -s -o /dev/null --max-time 2 --unix-socket "$AK_HOOK_SOCK" \\
-        -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
+      printf '%s' "$input" | curl -s -o /dev/null --max-time 2 --unix-socket "$KODE_HOOK_SOCK" \\
+        -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
         --data-binary @- http://localhost/statusline >/dev/null 2>&1 &
       ;;
   esac
 fi
-# Sessions launched before this script existed don't have AK_USER_STATUSLINE; use the saved user one.
-if [ -n "\${AK_USER_STATUSLINE+x}" ]; then cmd=$AK_USER_STATUSLINE; else cmd=$(cat "$(dirname "$0")/user-statusline" 2>/dev/null); fi
+# Sessions launched before this script existed don't have KODE_USER_STATUSLINE (nor its name before,
+# AK_USER_STATUSLINE); use the saved user one.
+if [ -n "\${KODE_USER_STATUSLINE+x}" ]; then cmd=$KODE_USER_STATUSLINE
+elif [ -n "\${AK_USER_STATUSLINE+x}" ]; then cmd=$AK_USER_STATUSLINE
+else cmd=$(cat "$(dirname "$0")/user-statusline" 2>/dev/null); fi
 [ -n "$cmd" ] && printf '%s' "$input" | sh -c "$cmd"
 exit 0
 `;
@@ -188,7 +195,7 @@ export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] 
   writeScript(context, CONTEXT_SCRIPT);
   const statusLine = statusLineScriptPath(paths);
   writeScript(statusLine, STATUSLINE_SCRIPT);
-  // Keep the user's layout options; their command is run by our script (AK_USER_STATUSLINE, or
+  // Keep the user's layout options; their command is run by our script (KODE_USER_STATUSLINE, or
   // this file for sessions launched before the variable existed).
   const mine = userStatusLine(null, statusLine);
   writeFileSync(join(paths.run, 'user-statusline'), mine?.command ?? '');
@@ -211,7 +218,7 @@ export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] 
       ...(typeof mine?.refreshInterval === 'number' ? { refreshInterval: mine.refreshInterval } : {}),
     },
     hooks: {
-      // The second hook prints what AgentK's Meko search found for the task (recall.ts).
+      // The second hook prints what Kode's Meko search found for the task (recall.ts).
       SessionStart: [{ hooks: [cmd, { type: 'command', command: context, timeout: 5 }] }],
       UserPromptSubmit: all,
       PreToolUse: [
@@ -233,7 +240,7 @@ export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] 
 }
 
 /**
- * The oldest Claude Code AgentK's mod runs in: plugins' hooks modules, `$.prompt.submit` with
+ * The oldest Claude Code Kode's mod runs in: plugins' hooks modules, `$.prompt.submit` with
  * `asUser` (older ones frame the prompt as a plugin's message) and `session.measure` (2.1.286), and
  * for the learn step `$.model.fork`, `$.model.complete`, `$.command.register` and `command.run`
  * (checked in 2.1.287's declarations; 2.1.286's couldn't be).
@@ -241,34 +248,34 @@ export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] 
 export const MIN_MOD_CLAUDE = '2.1.287';
 
 /**
- * The files of AgentK's mod and of its view mod, relative to each one's folder: src/mod/agentk and
+ * The files of Kode's mod and of its view mod, relative to each one's folder: src/mod/agentk and
  * src/mod/agentk-view in the repo (tsx, tests), dist/mod/… in a build. Their tests stay behind.
  */
 const MOD_FILES = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.ts'];
 const MOD_SOURCE = join(dirname(fileURLToPath(import.meta.url)), '..', 'mod', 'agentk');
 const VIEW_SOURCE = join(dirname(fileURLToPath(import.meta.url)), '..', 'mod', 'agentk-view');
 
-/** Where sessions load AgentK's mod from (`--plugin-dir`). */
+/** Where sessions load Kode's mod from (`--plugin-dir`). */
 export function modDirPath(paths: Paths): string {
-  return join(paths.run, 'mod', 'agentk');
+  return join(paths.run, 'mod', 'kode');
 }
 
 /**
- * Where sessions load AgentK's view mod from (a second `--plugin-dir`, beside the mod): it draws
- * AgentK's prompts folded, which the mod can't, since Claude Code never shows a plugin the rows of
+ * Where sessions load Kode's view mod from (a second `--plugin-dir`, beside the mod): it draws
+ * Kode's prompts folded, which the mod can't, since Claude Code never shows a plugin the rows of
  * the prompts it submitted itself.
  */
 export function viewDirPath(paths: Paths): string {
-  return join(paths.run, 'mod', 'agentk-view');
+  return join(paths.run, 'mod', 'kode-view');
 }
 
-/** Copies AgentK's view mod to the run folder, as `writeModFiles` copies the mod. */
+/** Copies Kode's view mod to the run folder, as `writeModFiles` copies the mod. */
 export function writeViewFiles(paths: Paths, source = VIEW_SOURCE): boolean {
   return writeModFiles(paths, source, viewDirPath(paths));
 }
 
 /**
- * Copies AgentK's mod to the run folder. Claude reloads a `--plugin-dir` mod when its files change,
+ * Copies Kode's mod to the run folder. Claude reloads a `--plugin-dir` mod when its files change,
  * so only files that differ are written (a server restart reloads nothing), each through a temp
  * file renamed into place (a session never reads half a module). Every source file is read first:
  * when one is missing, or a write fails, the run copy is removed, so sessions start without the
@@ -334,7 +341,7 @@ export interface LaunchSpec {
   model?: string | null;
   /** Extra directories Claude may work in (the session's design folder). */
   addDirs: string[];
-  /** Plugins Claude loads for the session (AgentK's mod, the session tools' skill), each a `--plugin-dir`. */
+  /** Plugins Claude loads for the session (Kode's mod, the session tools' skill), each a `--plugin-dir`. */
   pluginDirs?: string[];
   /** MCP config files added to the user's servers (the session tools'), each an `--mcp-config`. */
   mcpConfigs?: string[];
@@ -361,13 +368,13 @@ export interface LaunchSpec {
 export const REVIEW_DISALLOWED_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch'];
 
 /**
- * What a Claude Code session's launcher runs: `claude` with AgentK's settings, the conversation
+ * What a Claude Code session's launcher runs: `claude` with Kode's settings, the conversation
  * (`--session-id` for a new one, named; `--resume` after), and every path in its local spelling
  * (see claudePath).
  */
 export function claudeLauncher(paths: Paths, spec: LaunchSpec): LauncherSpec {
   const args = ['--settings', claudePath(hooksSettingsPath(paths))];
-  // AgentK's --settings, its mod and the user's MCP servers still apply.
+  // Kode's --settings, its mod and the user's MCP servers still apply.
   if (spec.userSettingsOnly) args.push('--setting-sources', 'user');
   if (spec.resume) {
     args.push('--resume', spec.claudeSessionId);
@@ -434,7 +441,7 @@ export function promptInTranscript(mark: TranscriptMark, text: string): boolean 
 
 /**
  * Where Claude Code stores a session transcript for a given cwd. Claude keys the folder on the cwd
- * it started in: the local spelling (claudePath) for sessions launched since AgentK started using
+ * it started in: the local spelling (claudePath) for sessions launched since Kode started using
  * it, the stored one for older sessions (a resume from the local spelling finds and keeps adding
  * to their transcript). Whichever exists, the local one if neither does.
  */

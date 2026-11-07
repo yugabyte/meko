@@ -22,7 +22,7 @@ export function harnessCommand(cfg: Config, id: HarnessId): string {
 /** How long a version read is used before it's read again (the CLIs update themselves). */
 const VERSION_TTL_MS = 10 * 60 * 1000;
 
-/** A CLI's version as AgentK last read it, and its updates: what Kiro's and OpenCode's adapters share. */
+/** A CLI's version as Kode last read it, and its updates: what Kiro's and OpenCode's adapters share. */
 export interface CliState {
   /** Reads the version again when the last read is stale, is for another command, or `force`; null while it's turned off. */
   version(cfg: Config, force?: boolean): Promise<string | null>;

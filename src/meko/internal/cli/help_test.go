@@ -37,7 +37,7 @@ func TestEveryCommandHasHelp(t *testing.T) {
 				t.Errorf("%s %s: listed in --help %v, hidden %v", prog, c.name, listed, c.hidden)
 			}
 			if _, ok := extensionOfVerb(c.name); ok && prog == progMeko {
-				continue // meko kode --help is AgentK's own help: TestExtensionCommandRunsItsProgram
+				continue // meko kode --help is Kode's own help: TestExtensionCommandRunsItsProgram
 			}
 			var out, errb bytes.Buffer
 			code := runProg(prog, append(strings.Fields(c.name), "--help"), &out, &errb)
@@ -49,7 +49,7 @@ func TestEveryCommandHasHelp(t *testing.T) {
 	}
 }
 
-// AgentK's movehome.ts tells a Meko that keeps the extensions' data by --with-extensions in
+// Kode's movehome.ts tells a Meko that keeps the extensions' data by --with-extensions in
 // `meko destroy -h`, stdout and stderr together.
 func TestDestroyHelpNamesWithExtensions(t *testing.T) {
 	code, out, errs := run("destroy", "-h")
@@ -149,7 +149,7 @@ func TestExtensionCommands(t *testing.T) {
 		t.Errorf("meko help extension: exit %d, %q", code, help)
 	}
 	code, out, _ = run("extension", "delete", "-h")
-	want(t, "extension delete -h", code, 0, out, "Usage: meko extension delete agentk|present [flags]")
+	want(t, "extension delete -h", code, 0, out, "Usage: meko extension delete kode|present [flags]")
 	want(t, "extension delete -h", code, 0, out, "--purge")
 	want(t, "extension delete -h", code, 0, out, "More: "+docsURL+"#extension-delete")
 	_, help, _ = run("help", "extension", "delete")
@@ -175,7 +175,7 @@ func TestExtensionCommands(t *testing.T) {
 	code, _, errs = run("extension list")
 	want(t, "one word with a space", code, exitUsage, errs, `unknown command "extension list"`)
 	code, _, errs = run("extension", "delete", "--data-dir", t.TempDir())
-	want(t, "extension delete with no name", code, exitUsage, errs, "name the extension (agentk, present)")
+	want(t, "extension delete with no name", code, exitUsage, errs, "name the extension (kode, present)")
 	code, _, errs = run("extension", "delete", "frob", "--data-dir", t.TempDir())
 	want(t, "extension delete frob", code, exitUsage, errs, `no extension called "frob"`)
 }

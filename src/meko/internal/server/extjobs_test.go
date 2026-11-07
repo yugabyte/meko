@@ -37,10 +37,10 @@ func post(t *testing.T, url string, header map[string]string) (int, envelope.Res
 	return resp.StatusCode, env
 }
 
-// agentkRow is GET /api/v1/extensions' row for agentk.
-func agentkRow(t *testing.T, base string) ExtensionInfo {
+// kodeRow is GET /api/v1/extensions' row for kode.
+func kodeRow(t *testing.T, base string) ExtensionInfo {
 	t.Helper()
-	return extensionRow(t, base, "agentk")
+	return extensionRow(t, base, "kode")
 }
 
 // extensionRow is GET /api/v1/extensions' row for name.
@@ -76,16 +76,37 @@ func installed(names ...string) func(*Web) {
 // its socket up, is served at /ext/<name>/.
 func TestExtensionListShowsTheCatalog(t *testing.T) {
 	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed())
-	r := agentkRow(t, base)
-	if r.Title != "AgentK" || r.Description == "" || r.Installed || !r.WebUI || r.Path != "" || r.Available ||
+	r := kodeRow(t, base)
+	if r.Title != "Kode" || r.Description == "" || r.Installed || !r.WebUI || r.Path != "" || r.Available ||
 		r.Job != nil {
 		t.Errorf("not installed: %+v", r)
 	}
 
 	// A nil Installed reports the served ones as installed.
 	base, _ = startWeb(t, config.AccessLocal, fakeExtension(t))
-	if r = agentkRow(t, base); !r.Installed || r.Path != "/ext/agentk/" || !r.Available {
+	if r = kodeRow(t, base); !r.Installed || r.Path != "/ext/kode/" || !r.Available {
 		t.Errorf("installed: %+v", r)
+	}
+}
+
+// A Kode release from before Meko called it kode looks for its row, and calls its routes, by agentk:
+// the list has its row again under that name, and the routes take it.
+func TestExtensionRoutesTakeAnOldName(t *testing.T) {
+	base, _ := startWeb(t, config.AccessLocal, fakeExtension(t))
+	if r := extensionRow(t, base, "agentk"); r.RenamedTo != "kode" || !r.Installed || r.Title != "Kode" {
+		t.Errorf("the old name's row: %+v", r)
+	}
+	f := &fakeRun{release: make(chan struct{})}
+	base, _ = startWeb(t, config.AccessLocal, filepath.Join(shortTemp(t), "gone.sock"), installed("kode"),
+		func(w *Web) { w.Run = f.run })
+	code, env := post(t, base+"/api/v1/extensions/agentk/start", nil)
+	row, _ := env.Data.(map[string]any)
+	if code != http.StatusAccepted || row["name"] != "agentk" || row["renamed_to"] != "kode" {
+		t.Fatalf("start by the old name: %d %+v", code, env)
+	}
+	f.release <- struct{}{}
+	if r := waitJob(t, base); r.Job.Output != "start kode\n" {
+		t.Errorf("the job ran for %q", r.Job.Output)
 	}
 }
 
@@ -111,7 +132,7 @@ func (f *fakeRun) run(_ context.Context, name, action string, out io.Writer) err
 func waitJob(t *testing.T, base string) ExtensionInfo {
 	t.Helper()
 	for range 200 {
-		if r := agentkRow(t, base); r.Job != nil && r.Job.State != JobRunning {
+		if r := kodeRow(t, base); r.Job != nil && r.Job.State != JobRunning {
 			return r
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -124,28 +145,28 @@ func waitJob(t *testing.T, base string) ExtensionInfo {
 // output and error.
 func TestExtensionActions(t *testing.T) {
 	f := &fakeRun{release: make(chan struct{})}
-	base, _ := startWeb(t, config.AccessLocal, filepath.Join(shortTemp(t), "gone.sock"), installed("agentk"),
+	base, _ := startWeb(t, config.AccessLocal, filepath.Join(shortTemp(t), "gone.sock"), installed("kode"),
 		func(w *Web) { w.Run = f.run })
-	code, env := post(t, base+"/api/v1/extensions/agentk/start", nil)
+	code, env := post(t, base+"/api/v1/extensions/kode/start", nil)
 	row, _ := env.Data.(map[string]any)
 	job, _ := row["job"].(map[string]any)
 	if code != http.StatusAccepted || job["action"] != "start" || job["state"] != JobRunning {
 		t.Fatalf("start: %d %+v", code, env)
 	}
-	if code, env = post(t, base+"/api/v1/extensions/agentk/stop", nil); code != 409 || env.Error.Code != "CONFLICT" ||
+	if code, env = post(t, base+"/api/v1/extensions/kode/stop", nil); code != 409 || env.Error.Code != "CONFLICT" ||
 		!strings.Contains(env.Error.Message, "its start hasn't finished") {
 		t.Errorf("a second action: %d %+v", code, env.Error)
 	}
-	if r := agentkRow(t, base); r.Job == nil || r.Job.Output != "start agentk\n" {
+	if r := kodeRow(t, base); r.Job == nil || r.Job.Output != "start kode\n" {
 		t.Errorf("output while it runs: %+v", r.Job)
 	}
 	f.release <- struct{}{}
 	r := waitJob(t, base)
-	if r.Job.State != JobDone || r.Job.Error != "" || r.Job.FinishedAt == nil || r.Job.Output != "start agentk\n" {
+	if r.Job.State != JobDone || r.Job.Error != "" || r.Job.FinishedAt == nil || r.Job.Output != "start kode\n" {
 		t.Errorf("done: %+v", r.Job)
 	}
 
-	if code, _ = post(t, base+"/api/v1/extensions/agentk/stop", nil); code != http.StatusAccepted {
+	if code, _ = post(t, base+"/api/v1/extensions/kode/stop", nil); code != http.StatusAccepted {
 		t.Fatalf("stop: %d", code)
 	}
 	f.release <- struct{}{}
@@ -153,12 +174,12 @@ func TestExtensionActions(t *testing.T) {
 		t.Errorf("failed: %+v", r.Job)
 	}
 
-	for _, path := range []string{"/frob/start", "/agentk/uninstall"} {
+	for _, path := range []string{"/frob/start", "/kode/uninstall"} {
 		if code, _ = post(t, base+"/api/v1/extensions"+path, nil); code != 404 {
 			t.Errorf("%s: %d", path, code)
 		}
 	}
-	if code, _ = post(t, base+"/api/v1/extensions/agentk/start",
+	if code, _ = post(t, base+"/api/v1/extensions/kode/start",
 		map[string]string{"Origin": "http://example.com"}); code != 403 {
 		t.Errorf("another origin: %d", code)
 	}
@@ -183,7 +204,7 @@ func TestFailedJobOvertaken(t *testing.T) {
 			w.Run = fail
 			w.Installed = func() []string { mu.Lock(); defer mu.Unlock(); return names }
 		})
-	if code, _ := post(t, base+"/api/v1/extensions/agentk/install", nil); code != http.StatusAccepted {
+	if code, _ := post(t, base+"/api/v1/extensions/kode/install", nil); code != http.StatusAccepted {
 		t.Fatalf("install: %d", code)
 	}
 	if r := waitJob(t, base); r.Job.State != JobFailed || r.Installed {
@@ -191,8 +212,8 @@ func TestFailedJobOvertaken(t *testing.T) {
 	}
 
 	// Registered, but not answering: the install's own failure, so it stays.
-	register("agentk")
-	if r := agentkRow(t, base); !r.Installed || r.Available || r.Job == nil || r.Job.State != JobFailed {
+	register("kode")
+	if r := kodeRow(t, base); !r.Installed || r.Available || r.Job == nil || r.Job.State != JobFailed {
 		t.Errorf("registered, not answering: %+v", r)
 	}
 
@@ -201,13 +222,13 @@ func TestFailedJobOvertaken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := agentkRow(t, base); !r.Installed || !r.Available || r.Job != nil {
+	if r := kodeRow(t, base); !r.Installed || !r.Available || r.Job != nil {
 		t.Errorf("installed from a terminal: %+v", r)
 	}
 
 	// A failed start of one that isn't running stays.
 	_ = ln.Close()
-	if code, _ := post(t, base+"/api/v1/extensions/agentk/start", nil); code != http.StatusAccepted {
+	if code, _ := post(t, base+"/api/v1/extensions/kode/start", nil); code != http.StatusAccepted {
 		t.Fatalf("start: %d", code)
 	}
 	if r := waitJob(t, base); r.Available || r.Job.State != JobFailed || r.Job.Action != "start" {
@@ -228,13 +249,13 @@ func TestExtensionListShowsReleasesMekoUpdates(t *testing.T) {
 			return ExtensionUpdate{RolledBack: []string{}}
 		}
 	}
-	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("agentk", "present"), release,
+	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("kode", "present"), release,
 		func(w *Web) { w.Run = f.run })
 	if r := extensionRow(t, base, "present"); r.Version != "0.20261024.0" || !r.Updatable {
 		t.Errorf("present: %+v", r)
 	}
-	if r := agentkRow(t, base); r.Version != "" || r.Updatable {
-		t.Errorf("agentk: %+v", r)
+	if r := kodeRow(t, base); r.Version != "" || r.Updatable {
+		t.Errorf("kode: %+v", r)
 	}
 	if code, _ := post(t, base+"/api/v1/extensions/present/update", nil); code != http.StatusAccepted {
 		t.Fatalf("update: %d", code)
@@ -256,19 +277,19 @@ func TestExtensionActionsNeedAnInstall(t *testing.T) {
 	f := &fakeRun{release: make(chan struct{})}
 	close(f.release)
 	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed(), func(w *Web) { w.Run = f.run })
-	if code, env := post(t, base+"/api/v1/extensions/agentk/start", nil); code != 409 ||
-		env.Error.Message != "AgentK isn't installed." {
+	if code, env := post(t, base+"/api/v1/extensions/kode/start", nil); code != 409 ||
+		env.Error.Message != "Kode isn't installed." {
 		t.Errorf("start: %d %+v", code, env.Error)
 	}
-	if code, _ := post(t, base+"/api/v1/extensions/agentk/install", nil); code != http.StatusAccepted {
+	if code, _ := post(t, base+"/api/v1/extensions/kode/install", nil); code != http.StatusAccepted {
 		t.Errorf("install: %d", code)
 	}
-	if r := waitJob(t, base); r.Job.State != JobDone || r.Job.Output != "install agentk\n" {
+	if r := waitJob(t, base); r.Job.State != JobDone || r.Job.Output != "install kode\n" {
 		t.Errorf("install: %+v", r.Job)
 	}
 
 	base, _ = startWeb(t, config.AccessLocal, "", noProxies, installed())
-	if code, _ := post(t, base+"/api/v1/extensions/agentk/install", nil); code != 404 {
+	if code, _ := post(t, base+"/api/v1/extensions/kode/install", nil); code != 404 {
 		t.Errorf("no runner: %d", code)
 	}
 }
@@ -276,9 +297,9 @@ func TestExtensionActionsNeedAnInstall(t *testing.T) {
 // With remote access, another site's page can't run an action.
 func TestExtensionActionsRefuseOtherSites(t *testing.T) {
 	f := &fakeRun{release: make(chan struct{})}
-	base, _ := startWeb(t, config.AccessRemote, "", installed("agentk"), func(w *Web) { w.Run = f.run })
+	base, _ := startWeb(t, config.AccessRemote, "", installed("kode"), func(w *Web) { w.Run = f.run })
 	crossSite := map[string]string{"Sec-Fetch-Site": "cross-site"}
-	if code, _ := post(t, base+"/api/v1/extensions/agentk/start", crossSite); code != 403 {
+	if code, _ := post(t, base+"/api/v1/extensions/kode/start", crossSite); code != 403 {
 		t.Errorf("another site's page: %d", code)
 	}
 	if len(f.calls) != 0 {
@@ -292,15 +313,15 @@ func TestJobsOutliveTheServer(t *testing.T) {
 	f := &fakeRun{release: make(chan struct{})}
 	jobs := NewExtensionJobs()
 	shared := func(w *Web) { w.Run, w.Jobs = f.run, jobs }
-	first, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("agentk"), shared)
-	if code, _ := post(t, first+"/api/v1/extensions/agentk/install", nil); code != http.StatusAccepted {
+	first, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("kode"), shared)
+	if code, _ := post(t, first+"/api/v1/extensions/kode/install", nil); code != http.StatusAccepted {
 		t.Fatalf("install: %d", code)
 	}
-	second, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("agentk"), shared)
-	if r := agentkRow(t, second); r.Job == nil || r.Job.State != JobRunning || r.Job.Action != "install" {
+	second, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("kode"), shared)
+	if r := kodeRow(t, second); r.Job == nil || r.Job.State != JobRunning || r.Job.Action != "install" {
 		t.Errorf("the new server's job: %+v", r.Job)
 	}
-	if code, _ := post(t, second+"/api/v1/extensions/agentk/start", nil); code != 409 {
+	if code, _ := post(t, second+"/api/v1/extensions/kode/start", nil); code != 409 {
 		t.Errorf("a second action on the new server: %d", code)
 	}
 	if !jobs.Busy() {
@@ -324,11 +345,11 @@ func TestCancelStopsTheJobs(t *testing.T) {
 	}
 	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed(),
 		func(w *Web) { w.Run, w.Jobs = run, jobs })
-	if code, _ := post(t, base+"/api/v1/extensions/agentk/install", nil); code != http.StatusAccepted {
+	if code, _ := post(t, base+"/api/v1/extensions/kode/install", nil); code != http.StatusAccepted {
 		t.Fatalf("install: %d", code)
 	}
 	jobs.Cancel(5 * time.Second)
-	if r := agentkRow(t, base); jobs.Busy() || r.Job.State != JobFailed || r.Job.Error != "it was stopped" {
+	if r := kodeRow(t, base); jobs.Busy() || r.Job.State != JobFailed || r.Job.Error != "it was stopped" {
 		t.Errorf("after Cancel: busy %v, %+v", jobs.Busy(), r.Job)
 	}
 }
@@ -336,11 +357,11 @@ func TestCancelStopsTheJobs(t *testing.T) {
 // A job keeps the end of its output, from a line's start, while it's written and read at once.
 func TestJobOutputKeepsTheEnd(t *testing.T) {
 	x := NewExtensionJobs()
-	j, ok := x.start("agentk", "install", false)
+	j, ok := x.start("kode", "install", false)
 	if !ok {
 		t.Fatal("not started")
 	}
-	if _, again := x.start("agentk", "stop", false); again {
+	if _, again := x.start("kode", "stop", false); again {
 		t.Error("a second job started while one runs")
 	}
 	var wg sync.WaitGroup
@@ -350,16 +371,16 @@ func TestJobOutputKeepsTheEnd(t *testing.T) {
 		}
 	})
 	for range 100 {
-		_ = x.get("agentk")
+		_ = x.get("kode")
 	}
 	wg.Wait()
 	x.done(j, nil)
-	got := x.get("agentk")
+	got := x.get("kode")
 	if len(got.Output) > JobOutputLimit || !strings.HasPrefix(got.Output, "line ") ||
 		!strings.HasSuffix(got.Output, "line 1999 of the installer's output\n") || got.State != JobDone {
 		t.Errorf("%d bytes, state %s, starting %q", len(got.Output), got.State, got.Output[:20])
 	}
-	if _, ok = x.start("agentk", "stop", false); !ok {
+	if _, ok = x.start("kode", "stop", false); !ok {
 		t.Error("a finished job blocks the next")
 	}
 }
@@ -416,7 +437,7 @@ func TestExtensionCheckAndAutoUpdate(t *testing.T) {
 	if code, _ = patch("present", `{}`); code != http.StatusBadRequest {
 		t.Errorf("patch without auto_update: %d", code)
 	}
-	if code, _ = patch("agentk", `{"auto_update": true}`); code != http.StatusConflict {
+	if code, _ = patch("kode", `{"auto_update": true}`); code != http.StatusConflict {
 		t.Errorf("patch of one not installed: %d", code)
 	}
 }

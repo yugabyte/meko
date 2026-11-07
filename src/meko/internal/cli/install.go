@@ -202,8 +202,8 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 }
 
 // setWebAccess writes the web listener's access to web.toml (config.AddWeb) when neither it nor
-// config.toml sets one: with access, or, unless an AgentK is on this computer (whose own access Meko
-// takes over when it hands over its port), with the default AgentK had: remote over SSH or on Linux
+// config.toml sets one: with access, or, unless a Kode is on this computer (whose own access Meko
+// takes over when it hands over its port), with the default Kode had: remote over SSH or on Linux
 // with no display, local otherwise. The summary's Web UI link row says which. With noUI it turns
 // the web UI off there too (config.SetWebEnabled), which the summary's Web UI row says.
 func setWebAccess(l paths.Layout, access string, noUI bool, home string) error {
@@ -217,11 +217,11 @@ func setWebAccess(l paths.Layout, access string, noUI bool, home string) error {
 	return addWebAccess(l, access, home)
 }
 
-// addWebAccess writes setWebAccess's access, unless web.toml or config.toml sets one, or an AgentK
+// addWebAccess writes setWebAccess's access, unless web.toml or config.toml sets one, or a Kode
 // on this computer will hand its own over.
 func addWebAccess(l paths.Layout, access, home string) error {
 	if access == "" {
-		if cat := extensions.Known["agentk"]; cat.Find("agentk", home, l.Root) != "" {
+		if cat := extensions.Known["kode"]; cat.Find("kode", home, l.Root) != "" {
 			return nil
 		}
 		access = config.AccessLocal
@@ -501,7 +501,7 @@ func installExtension(ctx context.Context, l paths.Layout, name string, o extIns
 	}
 	if tooOld(cmd) {
 		return fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
-			"needs: update it (the Update button in AgentK), then run this again", cat.Title)
+			"needs: update it (the Update button in Kode), then run this again", cat.Title)
 	}
 	fmt.Fprintf(stdout, "  %s %s is installed\n", spin.Mark(spin.OK, spin.Color(stdout)), cat.Title)
 	env := extensions.CommandEnv(l.Root, cmd)
@@ -562,10 +562,10 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 	var rel update.Release
 	ver, ok := version, false
 	if version == "" {
-		rel, ver, ok = update.PickPackage(rels, cat.TagPrefixes, name, goos, arch, app.BadVersions())
+		rel, ver, ok = update.PickPackage(rels, cat.TagPrefixes, app.Packages(), goos, arch, app.BadVersions())
 	} else {
 		// That version, even one that was rolled back: it was asked for by name.
-		rel, ok = update.PickPackageVersion(rels, cat.TagPrefixes, name, version, goos, arch)
+		rel, ok = update.PickPackageVersion(rels, cat.TagPrefixes, app.Packages(), version, goos, arch)
 	}
 	if !ok {
 		what := "no release of " + cat.Title
@@ -597,8 +597,8 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 	return app.CurrentExe(), cat.UnlinkCommands(app, home)
 }
 
-// tooOld reports whether an installed AgentK is a release from before --meko-url: its
-// install.js (AgentK's release layout, <version>/lib/dist/server/install.js beside bin/) doesn't name
+// tooOld reports whether an installed Kode is a release from before --meko-url: its
+// install.js (Kode's release layout, <version>/lib/dist/server/install.js beside bin/) doesn't name
 // the flag. A layout it doesn't recognize (a build from source) isn't judged.
 func tooOld(cmd string) bool {
 	real, err := filepath.EvalSymlinks(cmd)
@@ -606,7 +606,7 @@ func tooOld(cmd string) bool {
 		return false
 	}
 	js := filepath.Join(filepath.Dir(filepath.Dir(real)), "lib", "dist", "server", "install.js")
-	b, err := os.ReadFile(js) //nolint:gosec // G304: AgentK's own file
+	b, err := os.ReadFile(js) //nolint:gosec // G304: Kode's own file
 	if err != nil {
 		return false
 	}

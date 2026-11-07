@@ -66,7 +66,7 @@ export const YB_DIAGNOSTICS_URL = 'https://diagnostics.meko.yugabyte.com';
 
 /**
  * The schedule: when the last report was received, and the first. Named `yb_` from when reports also
- * went to AgentK's own collector, whose `call_home_last_sent` and `call_home_first_sent` are no longer read.
+ * went to Kode's own collector, whose `call_home_last_sent` and `call_home_first_sent` are no longer read.
  */
 const KV_LAST_SENT = 'yb_call_home_last_sent';
 const KV_FIRST_SENT = 'yb_call_home_first_sent';
@@ -172,7 +172,7 @@ function capModels(rows: (CallHomeTokens & { model: string })[]): (CallHomeToken
   return [...keep, other];
 }
 
-/** What AgentK did with Meko itself, for a day or all time: learn steps, its own calls, transcript captures. */
+/** What Kode did with Meko itself, for a day or all time: learn steps, its own calls, transcript captures. */
 interface MekoExtras {
   sentByTool: CallHomeMeko['byTool'];
   learns: LearnRun[];
@@ -182,7 +182,7 @@ interface MekoExtras {
 
 /**
  * Meko use as the report has it: counts only, calls by tool, the dollars in whole cents, nothing
- * below 0. Learn steps, AgentK's own calls and captures only when there were some.
+ * below 0. Learn steps, Kode's own calls and captures only when there were some.
  */
 function callHomeMeko(u: MekoUsage, byTool: CallHomeMeko['byTool'], starts: MekoStart[], x: MekoExtras): CallHomeMeko {
   const s: CallHomeMeko['starts'] = { found: 0, empty: 0, error: 0, late: 0, ms: 0 };
@@ -322,9 +322,9 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     const d = dayOf(e.at);
     if (!d) continue;
     if (e.kind === 'pr') d.prsOpened++;
-    // Reviews that arrived on the PR; not the session's other review notes. `AgentK review:` events,
-    // the AgentK GitHub reviewer's before it was removed, are kept 30 days and reported again.
-    else if (e.kind === 'review' && /^(AgentK review:|Review from )/.test(e.text ?? '')) d.reviews++;
+    // Reviews that arrived on the PR; not the session's other review notes. `Kode review:` events,
+    // the Kode GitHub reviewer's before it was removed, are kept 30 days and reported again.
+    else if (e.kind === 'review' && /^(Kode review:|Review from )/.test(e.text ?? '')) d.reviews++;
     else if (e.kind === 'ci') d.ciFailures++;
     else if (e.kind === 'comments') d.commentBatches++;
     else if (e.kind === 'recovered') d.recoveries++;
@@ -365,7 +365,7 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
   for (const [day, lists] of dayFiles) days.get(day)!.fileTypes = sumFileTypes(lists);
 
   // Meko: calls and seeds on the day they were made, searches at start on the day they ran, learn
-  // steps on the day they began, and AgentK's own calls and captures on the day they ran. A day with
+  // steps on the day they began, and Kode's own calls and captures on the day they ran. A day with
   // none of them leaves `meko` out.
   const calls = mekoCalls(db);
   const starts = mekoStarts(db);
@@ -389,7 +389,7 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     days.get(day)!.meko = callHomeMeko(summarizeMeko(m.calls), toolCounts(m.calls), m.starts, { sentByTool: toolSent(m.calls), ...m });
   }
 
-  // Ask AgentK: asks on the day they were made; a day with none leaves `askAgentk` out.
+  // Ask Kode: asks on the day they were made; a day with none leaves `askAgentk` out (the report's wire name, kept from before Kode was called Kode).
   for (const a of all<{ at: number; ok: number; actions: number }>(db, 'SELECT at, ok, actions FROM agentk_asks WHERE at >= ?', start)) {
     const d = dayOf(a.at);
     if (!d) continue;
@@ -471,7 +471,7 @@ async function probeVersion(probe: Probe, cmd: string, args: string[], re: RegEx
   }
 }
 
-/** Whether a launchd job's label (`XPC_SERVICE_NAME`) is one of AgentK's, by any name the command has had (service.ts). */
+/** Whether a launchd job's label (`XPC_SERVICE_NAME`) is one of Kode's, by any name the command has had (service.ts). */
 export function isAgentKJob(label: string): boolean {
   return [COMMAND, ...OLD_COMMANDS].some((c) => label === `com.yugabyte.${c}` || label.startsWith(`com.yugabyte.${c}.`));
 }
@@ -498,7 +498,7 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
   const meko = mekoConfigured();
   return {
     version: reportVersion(o.version),
-    // Meko installs AgentK's updates by its own [update] channel, which AgentK doesn't read.
+    // Meko installs Kode's updates by its own [update] channel, which Kode doesn't read.
     channel: 'stable',
     platform: process.platform,
     arch: process.arch,
@@ -535,7 +535,7 @@ export interface CallHomeOptions {
   log: Logger;
   fetch?: typeof fetch;
   now?: () => number;
-  /** Whether this is a release install, which sends with no URL configured; by default AK_APP_DIR is set. */
+  /** Whether this is a release install, which sends with no URL configured; by default KODE_APP_DIR is set. */
   release?: () => boolean;
   /** Where YB_DISABLE_CALLHOME is read; process.env by default. */
   env?: NodeJS.ProcessEnv;
@@ -563,7 +563,7 @@ export class CallHomeService {
   endpoint(): string | null {
     const configured = this.o.config().callHome.diagnosticsUrl;
     if (configured.trim()) return httpUrl(configured);
-    return (this.o.release ?? (() => !!process.env.AK_APP_DIR))() ? YB_DIAGNOSTICS_URL : null;
+    return (this.o.release ?? (() => !!process.env.KODE_APP_DIR))() ? YB_DIAGNOSTICS_URL : null;
   }
 
   enabled(): boolean {

@@ -114,7 +114,7 @@ export interface FileChange {
   symbols: string[];
   /**
    * Where its patch was written for the passes to read, when the diff isn't inline; null otherwise.
-   * AgentK's spelling: the prompts give it through `claudePath`.
+   * Kode's spelling: the prompts give it through `claudePath`.
    */
   patchPath: string | null;
 }
@@ -143,7 +143,7 @@ export interface ReviewDatapack {
 export interface ReviewIssue {
   title: string;
   /**
-   * Where its text was written (absolute, AgentK's spelling: the prompts give it through
+   * Where its text was written (absolute, Kode's spelling: the prompts give it through
    * `claudePath`), or null for a link the passes only see named.
    */
   path: string | null;
@@ -180,7 +180,7 @@ export interface ReviewContext {
   /** The task's first prompt. */
   description: string;
   /**
-   * Where the task's design is, when it has one: its Artifact's link, or its file in AgentK's
+   * Where the task's design is, when it has one: its Artifact's link, or its file in Kode's
    * spelling (the prompts give it through `claudePath`). Absent in a context saved before it was kept
    * apart from the description, which named it.
    */
@@ -194,8 +194,8 @@ export interface ReviewContext {
   issues: ReviewIssue[];
   datapacks: ReviewDatapack[];
   prior: PriorRound[];
-  /** The worktree the passes read (absolute), in AgentK's spelling: the prompts give it through `claudePath`. */
+  /** The worktree the passes read (absolute), in Kode's spelling: the prompts give it through `claudePath`. */
   worktree: string;
-  /** The review's run folder (absolute): prompts, patches, issues. AgentK's spelling, as `worktree`. */
+  /** The review's run folder (absolute): prompts, patches, issues. Kode's spelling, as `worktree`. */
   runDir: string;
 }

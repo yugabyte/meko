@@ -217,7 +217,7 @@ func TestEntitiesCollection(t *testing.T) {
 	a.hello()
 	col := "/v1/collections/" + a.dp + "_entities"
 	a.do(http.MethodPost, col+"/insert", map[string]any{"ids": []string{"e1"}, "vectors": [][]float32{{1, 0}},
-		"payloads": []map[string]any{{"data": "AgentK", "linkedMemoryIds": []string{"m1"}}}}, nil)
+		"payloads": []map[string]any{{"data": "Kode", "linkedMemoryIds": []string{"m1"}}}}, nil)
 	var res struct {
 		Results []store.Record `json:"results"`
 	}

@@ -3,8 +3,8 @@ import { createInterface } from 'node:readline';
 import { TOOL_DEFS, TOOLS_SERVER, TOOLS_VERSION } from './tooldefs.js';
 
 /**
- * `me_kode mcp`: AgentK's session tools as a stdio MCP server, started by a session's CLI (Claude
- * Code's `--mcp-config`, Kiro's `agentk` agent) as its own child. It lists the tools and forwards
+ * `me_kode mcp`: Kode's session tools as a stdio MCP server, started by a session's CLI (Claude
+ * Code's `--mcp-config`, Kiro's `kode` agent) as its own child. It lists the tools and forwards
  * each call to the server over the hook socket with the session's token, both from the environment
  * the session's CLI passes on, so the server knows which session asked. It loads no config, no
  * database and nothing of the server's: the server checks and runs every call.
@@ -13,13 +13,13 @@ import { TOOL_DEFS, TOOLS_SERVER, TOOLS_VERSION } from './tooldefs.js';
  * tools/call, ping) rather than through the SDK, whose schemas cost about 30 MB in every session.
  */
 
-/** How long a call may take: starting a session on a repo AgentK has to clone first can take minutes. */
+/** How long a call may take: starting a session on a repo Kode has to clone first can take minutes. */
 const CALL_TIMEOUT_MS = 10 * 60 * 1000;
 /** The MCP versions it speaks, newest first: a client asking for another gets the newest. */
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export interface ToolsLink {
-  /** The hook socket (AK_HOOK_SOCK) and the session's hook token (AK_HOOK_TOKEN). */
+  /** The hook socket (KODE_HOOK_SOCK) and the session's hook token (KODE_HOOK_TOKEN). */
   sock: string | undefined;
   token: string | undefined;
 }
@@ -36,7 +36,7 @@ const fail = (text: string) => result(text, true);
 /** One call to the server's `/tools`, read as the tool's result. Never throws: a failure is the result's text. */
 export function callServer(link: ToolsLink, tool: string, input: unknown): Promise<ToolResult> {
   if (!link.sock || !link.token) {
-    return Promise.resolve(fail("This isn't an AgentK session, so AgentK's session tools can't be used here."));
+    return Promise.resolve(fail("This isn't a Kode session, so Kode's session tools can't be used here."));
   }
   const body = JSON.stringify({ v: TOOLS_VERSION, tool, input: input ?? {} });
   return new Promise((resolve) => {
@@ -56,13 +56,13 @@ export function callServer(link: ToolsLink, tool: string, input: unknown): Promi
           /* said below */
         }
         if (res.statusCode === 200 && typeof reply?.text === 'string') resolve(result(reply.text, reply.isError === true));
-        else if (res.statusCode === 403) resolve(fail('AgentK no longer runs this session, so its session tools are off.'));
-        else if (res.statusCode === 404) resolve(fail('This AgentK server has no session tools. Update AgentK.'));
-        else resolve(fail(`AgentK couldn't answer (HTTP ${res.statusCode ?? 'error'}). Try again.`));
+        else if (res.statusCode === 403) resolve(fail('Kode no longer runs this session, so its session tools are off.'));
+        else if (res.statusCode === 404) resolve(fail('This Kode server has no session tools. Update Kode.'));
+        else resolve(fail(`Kode couldn't answer (HTTP ${res.statusCode ?? 'error'}). Try again.`));
       });
     });
     req.on('timeout', () => req.destroy(new Error('timed out')));
-    req.on('error', (e) => resolve(fail(`AgentK isn't reachable (${e.message}). Is AgentK running? Try again once it is.`)));
+    req.on('error', (e) => resolve(fail(`Kode isn't reachable (${e.message}). Is Kode running? Try again once it is.`)));
     req.end(body);
   });
 }
@@ -109,7 +109,8 @@ export async function handle(link: ToolsLink, msg: Message, version = '1'): Prom
 
 /** Runs the server on stdio until the session's CLI closes it: a message per line in, one per line out. */
 export async function runMcp(version: string): Promise<void> {
-  const link = { sock: process.env.AK_HOOK_SOCK, token: process.env.AK_HOOK_TOKEN };
+  // AK_*: their names in a session launched before Kode was called Kode.
+  const link = { sock: process.env.KODE_HOOK_SOCK ?? process.env.AK_HOOK_SOCK, token: process.env.KODE_HOOK_TOKEN ?? process.env.AK_HOOK_TOKEN };
   const send = (m: unknown) => process.stdout.write(`${JSON.stringify(m)}\n`);
   for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
     if (!line.trim()) continue;

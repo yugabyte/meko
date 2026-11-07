@@ -6,7 +6,7 @@ import { mekoGapsPath } from '../../src/shared/mekourls.js';
 import type { ProjectHome } from '../../src/shared/types.js';
 import { fakeMekoQuestions, makeEnv, useLocalMeko, waitFor, type TestEnv } from '../helpers.js';
 
-describe("Meko's Context Gaps in AgentK", () => {
+describe("Meko's Context Gaps in Kode", () => {
   let env: TestEnv;
   let app: FastifyInstance;
   let meko: Awaited<ReturnType<typeof fakeMekoQuestions>>;
@@ -60,7 +60,7 @@ describe("Meko's Context Gaps in AgentK", () => {
     const asked = meko.requests.length;
     expect((await home(plain.id)).mekoGaps).toBeNull();
     expect(meko.requests).toHaveLength(asked);
-    // AgentK's own page is gone.
+    // Kode's own page is gone.
     expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/meko-gaps` })).statusCode).toBe(404);
   });
 

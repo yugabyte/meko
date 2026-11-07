@@ -610,7 +610,7 @@ export function ReviewSegment({ review, selected, className, tab = false, onOpen
 }
 
 /**
- * Optional instructions for AgentK, sent after a move's or Open PR's prompt; left empty, nothing
+ * Optional instructions for Kode, sent after a move's or Open PR's prompt; left empty, nothing
  * extra goes. Says so in place of the hint when the text is too long (instructionsBlocker).
  */
 export function InstructionsField({
@@ -630,7 +630,7 @@ export function InstructionsField({
 }) {
   const tooLong = instructionsBlocker(value);
   return (
-    <Field label="Instructions for AgentK (optional)" hint={tooLong ? <span className="over">{tooLong}</span> : hint}>
+    <Field label="Instructions for Kode (optional)" hint={tooLong ? <span className="over">{tooLong}</span> : hint}>
       <textarea
         id={id}
         className="input"
@@ -817,8 +817,8 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
           for: `${id}-strategy`,
           text: (
             <>
-              AgentK reviews the change on this computer before it opens the PR, the task fixes or answers what the
-              review found, and the PR says so in a <span className="mono">me_ak_review:</span> line.{' '}
+              Kode reviews the change on this computer before it opens the PR, the task fixes or answers what the
+              review found, and the PR says so in a <span className="mono">me_kode_review:</span> line.{' '}
               {STRATEGIES.map((s) => `${s.name}: ${s.summary}`).join(' ')}
             </>
           ),
@@ -838,7 +838,7 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
         label="Review depth"
         info={{
           for: `${id}-depth`,
-          text: "The number of times a review runs before AgentK gets the findings to fix. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it. Costs more tokens.",
+          text: "The number of times a review runs before Kode gets the findings to fix. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it. Costs more tokens.",
         }}
       >
         <select id={`${id}-depth`} className="input" disabled={disabled} value={value.depth ?? ''} onChange={(e) => set('depth', e.target.value)}>
@@ -854,7 +854,7 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
         label="Re-review rounds"
         info={{
           for: `${id}-rounds`,
-          text: "The number of times the code review runs again after AgentK fixes the last review's findings, before the PR opens. A review that finds nothing ends it early.",
+          text: "The number of times the code review runs again after Kode fixes the last review's findings, before the PR opens. A review that finds nothing ends it early.",
         }}
       >
         <select id={`${id}-rounds`} className="input" disabled={disabled} value={value.rounds ?? ''} onChange={(e) => set('rounds', e.target.value)}>
@@ -870,7 +870,7 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
         label="Check the findings first"
         info={{
           for: `${id}-check`,
-          text: "Yes: each round's findings wait for you. Add a note to any of them, or dismiss some, then send them to AgentK. No: AgentK fixes them at once. With Run to merge on, they never wait.",
+          text: "Yes: each round's findings wait for you. Add a note to any of them, or dismiss some, then send them to Kode. No: Kode fixes them at once. With Run to merge on, they never wait.",
         }}
       >
         <select id={`${id}-check`} className="input" disabled={disabled} value={value.check == null ? '' : value.check ? 'yes' : 'no'} onChange={(e) => set('check', e.target.value)}>

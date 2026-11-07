@@ -67,7 +67,7 @@ func TestMain(m *testing.M) {
 		"MEKO_WEB_ACCESS"} {
 		_ = os.Unsetenv(k)
 	}
-	// Never the web listener's real port (AgentK's, 7777): setup gives each test a free one, and this
+	// Never the web listener's real port (Kode's, 7777): setup gives each test a free one, and this
 	// covers the tests that don't call it.
 	if ln, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
 		if a, ok := ln.Addr().(*net.TCPAddr); ok {
@@ -190,7 +190,7 @@ func shortDir(t *testing.T) string {
 
 // setup gives a test its own home and data folder, and a free port. Its cleanup stops only the
 // server: cleanups run last first, so by then a test's fake extension is gone and PATH is restored
-// (noRealExtensions), and stopping the extensions would find and stop this machine's real AgentK.
+// (noRealExtensions), and stopping the extensions would find and stop this machine's real Kode.
 func setup(t *testing.T) (dir, port string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -221,7 +221,7 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 		return p
 	}
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: script("agentk", "sleep 1\necho 'AgentK 1.0'\n")}
+	reg.Entries["kode"] = extensions.Entry{Command: script("agentk", "sleep 1\necho 'Kode 1.0'\n")}
 	reg.Entries["present"] = extensions.Entry{Command: script("present", "echo 'Presenter 1.0'\nsleep 30\n")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
@@ -233,14 +233,14 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 	if took := time.Since(begun); took > 4*time.Second {
 		t.Errorf("status took %s", took)
 	}
-	want(t, "status", code, 0, out, "  ✓ AgentK          running, AgentK 1.0\n"+
+	want(t, "status", code, 0, out, "  ✓ Kode            running, Kode 1.0\n"+
 		"  ! Presenter       didn't answer in 2s (meko present status)\n")
 	want(t, "status's links", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
 	want(t, "status's Cloud", code, 0, out, "\n  Cloud   not linked\n")
 	want(t, "status's next steps", code, 0, out, "More detail: meko status --verbose\n\nNext:\n  meko ui ")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status --verbose", code, 0, out, "  Extension:      agentk, running (AgentK 1.0)\n"+
+	want(t, "status --verbose", code, 0, out, "  Extension:      kode, running (Kode 1.0)\n"+
 		"  Extension:      present, didn't answer in 2s (meko present status)\n")
 }
 
@@ -1019,8 +1019,8 @@ func TestDestroyRemovesTheLinkWhenRemovalFails(t *testing.T) {
 	}
 }
 
-// withExtensionData makes dir a stopped server's data folder holding AgentK's folder (with a file in
-// it) and AgentK registered as an extension, whose program logs its arguments and MEKO_HOME to the
+// withExtensionData makes dir a stopped server's data folder holding Kode's folder (with a file in
+// it) and Kode registered as an extension, whose program logs its arguments and MEKO_HOME to the
 // returned log; uninstall fails when failUninstall.
 func withExtensionData(t *testing.T, dir string, failUninstall bool) (log, kept string) {
 	t.Helper()
@@ -1032,7 +1032,7 @@ func withExtensionData(t *testing.T, dir string, failUninstall bool) (log, kept 
 	if err := os.MkdirAll(l.LogDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	kept = filepath.Join(extensions.Dir(dir, "agentk"), "state.db")
+	kept = filepath.Join(extensions.Dir(dir, "kode"), "state.db")
 	if err := os.MkdirAll(filepath.Dir(kept), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1050,7 +1050,7 @@ func withExtensionData(t *testing.T, dir string, failUninstall bool) (log, kept 
 		t.Fatal(err)
 	}
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: ext, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -1084,8 +1084,8 @@ func TestDestroyWithExtensionData(t *testing.T) {
 			defer func() { _ = held.Close() }()
 			withStdin(t, c.answers)
 			code, out, errs := run(append([]string{"destroy", "--data-dir", dir}, c.flags...)...)
-			want(t, "destroy", code, 0, out+errs, "It also holds extension data:\n  AgentK in "+
-				extensions.Dir(dir, "agentk")+" (")
+			want(t, "destroy", code, 0, out+errs, "It also holds extension data:\n  Kode in "+
+				extensions.Dir(dir, "kode")+" (")
 			for _, q := range []string{"Destroy it?", "Also uninstall the extensions"} {
 				if asked := strings.Contains(out, q); asked != slices.Contains(c.asked, q) {
 					t.Errorf("asked %q: %v, want %v:\n%s", q, asked, !asked, out)
@@ -1111,8 +1111,8 @@ func TestDestroyWithExtensionData(t *testing.T) {
 			if err != nil || string(b) != "SESSIONS" {
 				t.Errorf("the extension's file: %q, %v", b, err)
 			}
-			if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Command == "" {
-				t.Errorf("the registry lost agentk: %+v", reg.Entries)
+			if reg, _ := extensions.Load(dir); reg.Entries["kode"].Command == "" {
+				t.Errorf("the registry lost kode: %+v", reg.Entries)
 			}
 			if left, _ := filepath.Glob(dir + ".destroying-*"); len(left) > 0 {
 				t.Errorf("left behind: %v", left)
@@ -1130,7 +1130,7 @@ func TestDestroyWithExtensionDataRemovesNothingOnNoOrFailure(t *testing.T) {
 	want(t, "destroy declined", code, 1, errs, "Nothing was removed\n")
 	code, out, errs := run("destroy", "--data-dir", dir, "--force", "--with-extensions")
 	want(t, "destroy with a failing uninstall", code, 1, out+errs,
-		"uninstalling AgentK failed: ")
+		"uninstalling Kode failed: ")
 	want(t, "destroy with a failing uninstall", code, 1, errs, "Nothing of Meko's was removed")
 	for _, p := range []string{paths.New(dir).DB, kept} {
 		if _, err := os.Stat(p); err != nil {
@@ -1180,7 +1180,7 @@ func TestDestroyKeepingExtensionsHoldsTheLockAndRollsBack(t *testing.T) {
 	}
 }
 
-// A data folder with only extension data (AgentK installed without Meko) has nothing of Meko's to
+// A data folder with only extension data (Kode installed without Meko) has nothing of Meko's to
 // remove, unless --with-extensions.
 func TestDestroyOnlyExtensionData(t *testing.T) {
 	dir, _ := setup(t)
@@ -1232,8 +1232,8 @@ func TestUI(t *testing.T) {
 		t.Errorf("ui with no browser: %d %q, opened %v", code, out, opened)
 	}
 	// It opens Meko's web UI only: an extension's page is opened through Meko's, or its own command.
-	code, _, errs = run("ui", "/ext/agentk/", "--data-dir", dir)
-	want(t, "ui with a path", code, exitUsage, errs, `unexpected argument "/ext/agentk/"`)
+	code, _, errs = run("ui", "/ext/kode/", "--data-dir", dir)
+	want(t, "ui with a path", code, exitUsage, errs, `unexpected argument "/ext/kode/"`)
 	code, _, errs = run("ui", "--no-open", "--data-dir", dir)
 	want(t, "ui --no-open", code, exitUsage, errs, "Run meko ui --help for its flags")
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")

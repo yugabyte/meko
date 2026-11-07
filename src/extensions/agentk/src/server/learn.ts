@@ -83,7 +83,7 @@ function questionsText(questions: { query: string; own: boolean }[]): string {
     own && `Meko couldn't answer these searches from this session:\n${own}`,
     others && (own ? `Nor these, other searches on this datapack:\n${others}` : `Meko couldn't answer these other searches on this datapack:\n${others}`),
   ].filter(Boolean).join('\n\n');
-  return `\n\n${lists}\nFor each one this session found the answer to, include a fact that answers it, and list its number in that fact's "answers" (a fact that answers none has "answers":[]). One fact can answer several that ask the same thing. Include it even if you saved the answer to Meko yourself: AgentK checks it against what Meko has. Leave a question out when this session didn't find the answer, or when the only answer is about this task or this machine. Don't guess: answer another search's question only when this session established the answer itself.`;
+  return `\n\n${lists}\nFor each one this session found the answer to, include a fact that answers it, and list its number in that fact's "answers" (a fact that answers none has "answers":[]). One fact can answer several that ask the same thing. Include it even if you saved the answer to Meko yourself: Kode checks it against what Meko has. Leave a question out when this session didn't find the answer, or when the only answer is about this task or this machine. Don't guess: answer another search's question only when this session established the answer itself.`;
 }
 
 /**
@@ -154,7 +154,7 @@ export function parseFacts(text: string, questions = 0): Fact[] | null {
 }
 
 /**
- * Text that names this machine is left out, whatever the model thought: the home folder, AgentK's
+ * Text that names this machine is left out, whatever the model thought: the home folder, Kode's
  * own folders, the worktree, the repo. The datapack is shared by a team, so it never helps anyone else.
  * A path counts only whole: a short one (a home's local spelling can be just `/data`) doesn't
  * match inside a longer name such as `src/database.ts`.
@@ -255,7 +255,7 @@ interface Job {
   sessionId: string;
   trigger: LearnTrigger;
   datapack: DatapackRef;
-  /** extract: waiting for the fork; search: AgentK looks up what Meko has; check: waiting for the duplicate check; save: AgentK writes. */
+  /** extract: waiting for the fork; search: Kode looks up what Meko has; check: waiting for the duplicate check; save: Kode writes. */
   step: 'extract' | 'search' | 'check' | 'save';
   facts: Fact[];
   similar: SimilarMemory[][];
@@ -277,13 +277,13 @@ interface Job {
 
 /**
  * The learn step: what a session learned about the product and repo goes to the project's
- * dedicated datapack. Through AgentK's mod when it's live: the mod forks the session's own context
- * for the facts, AgentK finds the saved memories most like each, the mod asks a small model which
- * are new, known or corrections, and AgentK writes them. Every part of it reaches the mod on a poll
+ * dedicated datapack. Through Kode's mod when it's live: the mod forks the session's own context
+ * for the facts, Kode finds the saved memories most like each, the mod asks a small model which
+ * are new, known or corrections, and Kode writes them. Every part of it reaches the mod on a poll
  * and its reply comes back on /mod/learn, which answers at once, so no request is held while Meko
  * works. Without the mod, a typed `learn` prompt asks Claude to save them itself. Runs at Merge &
  * Close (before cleanup) and Discard (before the session ends), unless the user asked to skip it,
- * and when the user asks (the session menu, or /agentk_learn in the terminal).
+ * and when the user asks (the session menu, or /kode_learn in the terminal).
  */
 export class Learner {
   private jobs = new Map<string, Job>();
@@ -373,7 +373,7 @@ export class Learner {
   async start(row: SessionRow, trigger: LearnTrigger, spentMs = 0): Promise<LearnPath> {
     const dp = this.datapack(row);
     if (!dp) throw new HttpError(409, "This session's project has no Meko datapack to save to.");
-    if (this.openRow(row.id)) throw new HttpError(409, 'AgentK is already saving what this session learned.');
+    if (this.openRow(row.id)) throw new HttpError(409, 'Kode is already saving what this session learned.');
     row = await this.core.sessions.awake(row, 'to save what it learned');
     const why = this.notNow(row);
     if (why) throw new HttpError(409, why);
@@ -472,7 +472,7 @@ export class Learner {
     timer.unref?.();
     const job: Job = { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions: [], conversation: null, saves: 0, updates: 0, skips: 0, tried: 0, taught: 0, dismissed: 0, timer };
     this.jobs.set(id, job);
-    this.core.log.info(`saving what ${row.id} learned to ${dp.name} through AgentK's mod`);
+    this.core.log.info(`saving what ${row.id} learned to ${dp.name} through Kode's mod`);
     void (async () => {
       const conversation = await this.core.sessions.conversationId(row, dp).catch(() => null);
       const questions = learnQuestions((await this.core.mekoQuestions.openQuestions(dp.id, conversation)) ?? []);
@@ -491,7 +491,7 @@ export class Learner {
   /**
    * The mod's `/mod/learn` posts: the fork's reply (`step: "facts"`), then the duplicate check's
    * (`step: "decisions"`). Answered at once (204); what follows comes on the mod's polls. Each post's
-   * usage is recorded as the session's tokens, even for a step AgentK gave up on meanwhile (410).
+   * usage is recorded as the session's tokens, even for a step Kode gave up on meanwhile (410).
    */
   fromMod(row: SessionRow, body: Record<string, unknown>): ModReply {
     const id = typeof body.id === 'string' ? body.id : '';
@@ -515,7 +515,7 @@ export class Learner {
   private facts(row: SessionRow, job: Job, body: Record<string, unknown>): void {
     if (typeof body.text !== 'string') return this.fail(job, 'extract', noReply(body.reason, 'look back over the session'));
     const parsed = parseFacts(body.text, job.questions.length);
-    if (!parsed) return this.fail(job, 'extract', "Claude didn't list them in a form AgentK could read");
+    if (!parsed) return this.fail(job, 'extract', "Claude didn't list them in a form Kode could read");
     const local = this.localPaths(row);
     job.facts = parsed.filter((f) => !machineSpecific(`${f.component} ${f.text}`, local));
     run(this.db, 'UPDATE meko_learns SET candidates = ? WHERE id = ?', job.facts.length, job.id);
@@ -545,7 +545,7 @@ export class Learner {
   private decisions(row: SessionRow, job: Job, body: Record<string, unknown>): void {
     if (typeof body.text !== 'string') return this.fail(job, 'dedup', noReply(body.reason, 'check them against what Meko has'));
     const decided = parseDecisions(body.text);
-    if (!decided) return this.fail(job, 'dedup', "the check against what Meko has didn't answer in a form AgentK could read");
+    if (!decided) return this.fail(job, 'dedup', "the check against what Meko has didn't answer in a form Kode could read");
     job.step = 'save';
     this.core.changed();
     void this.save(row, job, decided);
@@ -658,7 +658,7 @@ export class Learner {
       ? ` (${learnSummary(job.saves, job.updates, job.datapack.name, job.taught, job.dismissed).replace(/^S/, 's')} first)` : '';
     // Save learnings can be tried again; at Merge & Close or Discard the session is closing.
     const again = job.trigger === 'manual' ? ' Try Save learnings again.' : '';
-    const text = `AgentK couldn't save what this session learned: ${reason}${saved}.${again}`;
+    const text = `Kode couldn't save what this session learned: ${reason}${saved}.${again}`;
     this.core.sessions.event(job.sessionId, 'learned', text);
     this.core.sessions.mod.queueToast(job.sessionId, text);
     this.core.log.warn(`the learn step for ${job.sessionId} failed at ${step}`, reason);
@@ -760,9 +760,9 @@ export const SKIPPED_TEXT = "Didn't save what this session learned: you asked to
 
 /** What a step's timer says, by the part the step was in. */
 const TIMED_OUT: Record<Job['step'], string> = {
-  extract: "AgentK's mod in Claude didn't answer in time",
+  extract: "Kode's mod in Claude didn't answer in time",
   search: 'Meko took too long to look them up',
-  check: "AgentK's mod in Claude didn't answer in time",
+  check: "Kode's mod in Claude didn't answer in time",
   save: 'Meko took too long to save them',
 };
 

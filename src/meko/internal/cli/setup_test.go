@@ -132,9 +132,9 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	code, out, errs := run("install", "--data-dir", dir)
 	want(t, "install", code, 0, out+errs, "  ✓ Server          started in ")
 	want(t, "install's agents link", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
-	want(t, "install's next steps", code, 0, out, "meko extension install agentk")
+	want(t, "install's next steps", code, 0, out, "meko extension install kode")
 	want(t, "install's way out", code, 0, out,
-		"  meko status                      check on Meko at any time · meko uninstall removes it\n")
+		"  meko status                    check on Meko at any time · meko uninstall removes it\n")
 	if f.spec.DataDir != dir || f.spec.ServiceLog != paths.New(dir).ServiceLog || f.spec.Exe == "" {
 		t.Errorf("spec %+v", f.spec)
 	}
@@ -145,7 +145,7 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	ext := filepath.Join(t.TempDir(), "ext")
 	log := fakeExtension(t, ext)
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: ext, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("#!/bin/sh\n[ \"$1\" = uninstall ] && exit 1\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	reg.Entries["agentk"] = extensions.Entry{Command: bad, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: bad, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	_, linkErr := os.Lstat(mekoLink) //nolint:gosec // G703: the test's own HOME
 	code, out, errs = run("uninstall", "--data-dir", dir)
 	want(t, "uninstall, an extension failing", code, 1, errs,
-		"couldn't remove AgentK: ")
+		"couldn't remove Kode: ")
 	want(t, "uninstall, an extension failing", code, 1, errs,
 		"Meko is still installed: run meko uninstall again once that's fixed")
 	if strings.Contains(out, "Removed") {
@@ -206,10 +206,10 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	if got := readFile(t, bashrc); !strings.Contains(got, pathMark) {
 		t.Errorf("the PATH line went though an extension failed: %q", got)
 	}
-	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Command != bad {
+	if reg, _ = extensions.Load(dir); reg.Entries["kode"].Command != bad {
 		t.Errorf("the extension was unregistered though it failed: %v", reg.Entries)
 	}
-	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: ext, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	}
 	// It removes the extensions first, asking nothing, as meko extension delete does: their own
 	// uninstall keeps their data, as Meko's stays.
-	want(t, "uninstall's extensions", code, 0, out, "Removed AgentK\n")
+	want(t, "uninstall's extensions", code, 0, out, "Removed Kode\n")
 	if got := readLog(t, log); !strings.HasSuffix(got, "uninstall --non-interactive\n") {
 		t.Errorf("extension ran %q", got)
 	}
@@ -233,7 +233,7 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	if _, err := os.Stat(paths.New(dir).DB); err != nil {
 		t.Errorf("uninstall deleted the data: %v", err)
 	}
-	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: ext, InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -263,15 +263,15 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	}
 }
 
-// A registered extension whose command is missing (AgentK's home moved into the data folder) is found
+// A registered extension whose command is missing (Kode's home moved into the data folder) is found
 // again in its release install there, and the registry keeps the new path.
 func TestAGoneExtensionIsFoundAgain(t *testing.T) {
 	dir, _ := setup(t)
 	noRealExtensions(t)
-	moved := filepath.Join(extensions.Dir(dir, "agentk"), "app", "current", "bin", "agentk")
+	moved := filepath.Join(extensions.Dir(dir, "kode"), "app", "current", "bin", "agentk")
 	log := fakeExtension(t, moved)
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "agentk"), InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "agentk"), InstalledByMeko: true}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestAGoneExtensionIsFoundAgain(t *testing.T) {
 	if got := readLog(t, log); got != "stop\n" {
 		t.Errorf("extension ran %q", got)
 	}
-	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Command != moved || !reg.Entries["agentk"].InstalledByMeko {
+	if reg, _ = extensions.Load(dir); reg.Entries["kode"].Command != moved || !reg.Entries["kode"].InstalledByMeko {
 		t.Errorf("registry %+v", reg.Entries)
 	}
 }
@@ -296,14 +296,14 @@ func TestAFailingExtensionGetsAFailRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg, _ := extensions.Load(dir)
-	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	reg.Entries["kode"] = extensions.Entry{Command: ext, InstalledByMeko: true}
 	reg.Entries["present"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "me_present")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
 	code, out, errs := run("stop", "--data-dir", dir)
 	want(t, "the failing extension's own output", code, 0, errs, "it broke\n")
-	want(t, "the failing extension's row", code, 0, out, "  ✗ AgentK          didn't stop: ")
+	want(t, "the failing extension's row", code, 0, out, "  ✗ Kode            didn't stop: ")
 	want(t, "the damaged extension's row", code, 0, out, "  ✗ Presenter       is damaged (")
 	want(t, "Meko's row", code, 0, out, "  ✓ Server          isn't running\n")
 }
@@ -360,18 +360,18 @@ func TestInstallWithoutAServiceLeavesStartToTheUser(t *testing.T) {
 func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	dir, port := setup(t)
 	noRealExtensions(t)
-	code, _, errs := run("extension", "install", "agentk", "--data-dir", dir)
+	code, _, errs := run("extension", "install", "kode", "--data-dir", dir)
 	want(t, "extension install with no server", code, 1, errs, "meko start")
 	var out string
 	code, out, errs = run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	_, tok, _ := run("token", "--data-dir", dir)
 	home, _ := os.UserHomeDir()
-	// An install from before the rename to AgentK, found by its old command.
+	// An install from before the rename to Kode, found by its old command.
 	ak := filepath.Join(home, ".local", "bin", "agent-k-local")
 	log := fakeExtension(t, ak)
-	code, out, errs = run("extension", "install", "agentk", "--data-dir", dir)
-	want(t, "extension install", code, 0, out+errs, "  ✓ AgentK is installed\n")
+	code, out, errs = run("extension", "install", "kode", "--data-dir", dir)
+	want(t, "extension install", code, 0, out+errs, "  ✓ Kode is installed\n")
 	if strings.Contains(out, "start and stop it") {
 		t.Errorf("extension install says how meko start and stop run it:\n%s", out)
 	}
@@ -381,16 +381,16 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 		t.Errorf("agent-k-local got %q, want %q", got, wantArgs)
 	}
 	reg, _ := extensions.Load(dir)
-	if e := reg.Entries["agentk"]; e.Command != ak || !e.InstalledByMeko {
+	if e := reg.Entries["kode"]; e.Command != ak || !e.InstalledByMeko {
 		t.Errorf("registry %+v", reg.Entries)
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Extension:      agentk, running (ext status)")
+	want(t, "status", code, 0, out, "Extension:      kode, running (ext status)")
 	// It isn't Meko's release, so delete runs its uninstall and forgets it, and Meko leaves the
-	// command (the fake's uninstall leaves it too; AgentK's own removes its ~/.local/bin links).
-	code, out, _ = run("extension", "delete", "agentk", "--force", "--data-dir", dir)
+	// command (the fake's uninstall leaves it too; Kode's own removes its ~/.local/bin links).
+	code, out, _ = run("extension", "delete", "kode", "--force", "--data-dir", dir)
 	want(t, "extension delete", code, 0, out, "Its command ("+ak+") isn't a release Meko installed, so Meko leaves it")
-	want(t, "extension delete", code, 0, out, "Deleted AgentK")
+	want(t, "extension delete", code, 0, out, "Deleted Kode")
 	if got := readLog(t, log); !strings.HasSuffix(got, "uninstall --non-interactive\n") {
 		t.Errorf("agent-k-local got %q", got)
 	}
@@ -401,7 +401,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 		t.Errorf("a command Meko didn't install was removed: %v", err)
 	}
 	code, _, errs = run("extension", "install", "frob", "--data-dir", dir)
-	want(t, "an unknown extension", code, 1, errs, "meko knows agentk, present")
+	want(t, "an unknown extension", code, 1, errs, "meko knows kode, present")
 }
 
 // meko update on a Meko built from source updates no Meko, and goes on to the extensions.
@@ -521,7 +521,7 @@ func TestInstallExtensionRefusesAnAgentKTooOld(t *testing.T) {
 	noRealExtensions(t)
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	// An AgentK release from before --meko-url, in its release layout.
+	// A Kode release from before --meko-url, in its release layout.
 	home, _ := os.UserHomeDir()
 	ver := filepath.Join(home, ".agent-k-local", "app", "0.20261001.0")
 	log := fakeExtension(t, filepath.Join(ver, "bin", "agent-k-local"))
@@ -539,10 +539,10 @@ func TestInstallExtensionRefusesAnAgentKTooOld(t *testing.T) {
 	if err := os.Symlink(filepath.Join(ver, "bin", "agent-k-local"), filepath.Join(bin, "agent-k-local")); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs = run("extension", "install", "agentk", "--data-dir", dir)
-	want(t, "extension install on an old AgentK", code, 1, errs, "predates --meko-url")
+	code, _, errs = run("extension", "install", "kode", "--data-dir", dir)
+	want(t, "extension install on an old Kode", code, 1, errs, "predates --meko-url")
 	if got := readLog(t, log); got != "" {
-		t.Errorf("the old AgentK was run: %q", got)
+		t.Errorf("the old Kode was run: %q", got)
 	}
 }
 
@@ -729,7 +729,7 @@ func TestUninstallPurgeRemovesTheExtensionsToo(t *testing.T) {
 	withStdin(t, "y\n")
 	code, out, errs := run("uninstall", "--data-dir", dir, "--purge")
 	want(t, "uninstall --purge", code, 0, out+errs, "Destroying it uninstalls them too and deletes their data")
-	want(t, "uninstall --purge", code, 0, out, "Uninstalling AgentK\n")
+	want(t, "uninstall --purge", code, 0, out, "Uninstalling Kode\n")
 	for _, said := range []string{"Also uninstall the extensions", "still installed", "The meko binary is still",
 		"run meko agent connect", "--non-interactive", "Meko isn't running", "stopped first"} {
 		if strings.Contains(out+errs, said) {

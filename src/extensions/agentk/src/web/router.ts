@@ -21,7 +21,7 @@ function decode(segment: string): string {
   }
 }
 
-/** The route a page's path names; `base` is where AgentK is served (`/ext/agentk/` behind Meko). */
+/** The route a page's path names; `base` is where Kode is served (`/ext/kode/` behind Meko). */
 export function parseRoute(pathname: string, base = BASE): Route {
   const rest = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
   const parts = rest.split('/').filter(Boolean).map(decode);

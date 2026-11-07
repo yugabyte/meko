@@ -3,8 +3,8 @@ import type { HarnessStatus } from '../shared/types.js';
 import { kvGet, kvSet, type Db } from './db.js';
 
 /**
- * The agents AgentK has connected to Meko by itself (`HarnessCaps.autoConnect`, `HarnessStatus.autoConnect`),
- * once each, ever. The page does the connect, through Meko's owner-only route (AgentK's server can't:
+ * The agents Kode has connected to Meko by itself (`HarnessCaps.autoConnect`, `HarnessStatus.autoConnect`),
+ * once each, ever. The page does the connect, through Meko's owner-only route (Kode's server can't:
  * its client token is refused), after claiming it here, so several open pages connect an agent once,
  * and an agent the user disconnects afterwards stays disconnected. Kept in state.db's kv as the ids
  * and when each was tried; a failed try is the user's to retry, with Connect to Meko.
