@@ -189,7 +189,10 @@ and then Meko is told (`POST …/questions/mark`, with the session's conversatio
   written (and, for a correction, the memory's id);
 - skipped, since a saved memory already says it: each is **dismissed** as a duplicate of what Meko
   has, with the id of the memory the check named;
-- not written (its write failed, it was filtered out, or the step ran out of time): nothing is marked.
+- not written (its write failed, it was filtered out, or the step ran out of time): nothing is marked;
+- written, but with no conversation to mark in (the one the write used): nothing is marked, since
+  Meko takes a mark without a `conversation_id` for a person's and would count it in its usage
+  stats as one.
 
 A question is marked only while it's still open (Meko's list is read again before the marks), so one
 a person (or another session's learn step) taught or dismissed while the step ran keeps their mark.
@@ -306,4 +309,7 @@ fails.
 - **The usage stats** are Meko's: its report counts the poor searches, people's marks and agents'
   marks apart (`contextGaps.agentTaught` and `agentDismissed` are the learn step's, since its marks
   carry its conversation), never a query. Kode's report used to send the learn step's as
-  `learn.taught` and `learn.dismissed`, and sends neither now.
+  `learn.taught` and `learn.dismissed`, and sends neither now. The two don't count alike: Kode's
+  counted every mark a step made, on the day the step began; Meko's count each question's latest
+  agent mark still standing, on the day it was made (a question marked again counts once, and an
+  agent's dismissal a restore undid counts none).

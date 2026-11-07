@@ -83,7 +83,9 @@ on them), which Meko's own schema number marks.
   when there was none. Versions from before Meko's own report counted them also sent the questions
   on Meko's [Context Gaps](recall-and-learn.md#mekos-context-gaps) the learn steps marked taught and
   dismissed (`learn.taught`, `learn.dismissed`; the schema keeps them, optional, so those reports
-  still check); Meko's report counts them now, as `contextGaps.agentTaught` and `agentDismissed`.
+  still check); Meko's report counts them now, as `contextGaps.agentTaught` and `agentDismissed`,
+  though not alike: Kode's counted every mark a step made, on the day the step began; Meko's count
+  each question's latest agent mark still standing, on the day it was made ([recall-and-learn.md](recall-and-learn.md#mekos-context-gaps)).
   Versions from before Meko kept its Context Gaps sent searches that found nothing relevant
   (`meko.weak`) and the questions people dismissed and taught (`meko.gaps {dismissed, taught}`),
   and those that haven't updated still do. The schema was chosen not to describe them any more, so

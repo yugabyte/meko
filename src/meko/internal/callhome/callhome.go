@@ -123,8 +123,13 @@ type Day struct {
 // relevant), and the questions people dismissed and taught on Context Gaps, all on this Meko's own
 // datapacks; and the questions agents dismissed and taught there (an agent's mark names its
 // conversation: Kode's learn step), on every datapack whose questions this Meko keeps, a linked
-// Meko Cloud's too. Each question counts once a day for its latest mark of each kind. Never a query.
-// Schema 4 added the agents' counts, which Kode's report had sent as learn.taught/dismissed.
+// Meko Cloud's too. A mark counts on the day of a question's latest one of its kind, by people or
+// by agents, while it stands: a question marked again moves to the later day, and a dismissal a
+// restore undid counts none. Never a query.
+//
+// Schema 4 added the agents' counts. Kode's report had sent the learn step's marks as
+// learn.taught/dismissed, counted otherwise: every mark a step made, on the day the step began.
+// Marks from before schema 4 count only where the agent's mark still stood at the upgrade.
 type ContextGaps struct {
 	Empty          int `json:"empty"`
 	Weak           int `json:"weak"`
