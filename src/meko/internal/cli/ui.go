@@ -8,13 +8,21 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/server"
 )
+
+// canOpenBrowser reports whether there's a browser here to open a link in: none over SSH, or on
+// Linux without a display. Tests replace it.
+var canOpenBrowser = func() bool {
+	if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {
+		return false
+	}
+	return runtime.GOOS == "darwin" || os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
+}
 
 // openBrowser opens a URL in the user's browser; tests replace it.
 var openBrowser = func(url string) error {
@@ -25,9 +33,9 @@ var openBrowser = func(url string) error {
 	return exec.Command(name, url).Start() //nolint:gosec // G204: the URL is the server's own
 }
 
-// runUI opens the web listener's page at path ("/" for Meko's web UI, /ext/agentk/ for AgentK's).
-// The link carries no credential: there's no login, with local or remote access.
-func runUI(l paths.Layout, path string, open bool, stdout, stderr io.Writer) int {
+// runUI opens Meko's web UI in the browser, when there's one here, and prints its link. The link
+// carries no credential: there's no login, with local or remote access.
+func runUI(l paths.Layout, stdout, stderr io.Writer) int {
 	up, err := running(l.Lock)
 	if err != nil {
 		return fail(stderr, err)
@@ -64,14 +72,8 @@ func runUI(l paths.Layout, path string, open bool, stdout, stderr io.Writer) int
 		}
 		return fail(stderr, fmt.Errorf("the web UI isn't listening at %s yet: %s", w.URL, why))
 	}
-	if path == "" {
-		path = "/"
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	link := w.URL + path
-	if open {
+	link := w.URL + "/"
+	if canOpenBrowser() {
 		if err = openBrowser(link); err != nil {
 			fmt.Fprintf(stderr, "meko: couldn't open the browser (%v); open the link below instead\n", err)
 		}

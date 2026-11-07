@@ -141,7 +141,7 @@ func readCloudToken(t *testing.T, dir string) cloudToken {
 	return tj.Cloud
 }
 
-// meko cloud_link saves the link itself while no server runs, and through the server while one does;
+// meko cloud-link saves the link itself while no server runs, and through the server while one does;
 // extensions read it from token --json, and status names it.
 func TestCloudLink(t *testing.T) {
 	dir, port := setup(t)
@@ -149,15 +149,15 @@ func TestCloudLink(t *testing.T) {
 	cloud := fakeCloud(t)
 
 	withStdin(t, "wrong_key_0123456789\n")
-	code, _, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
+	code, _, errs := run("cloud-link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "a key the server refuses", code, 1, errs, "didn't accept that key")
 	if c := readCloudToken(t, dir); c.Set {
 		t.Fatalf("a refused link was saved: %+v", c)
 	}
 
 	withStdin(t, testCloudKey+"\n")
-	code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
-	want(t, "cloud_link with no server", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …wxyz)")
+	code, out, errs := run("cloud-link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
+	want(t, "cloud-link with no server", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …wxyz)")
 	c := readCloudToken(t, dir)
 	wantCloud := cloudToken{Set: true, Linked: true, WebURL: cloud,
 		Account: cloudlink.Link{URL: cloud + "/mcp", Key: testCloudKey}.Account(), DatapackRouting: true}
@@ -177,8 +177,8 @@ func TestCloudLink(t *testing.T) {
 
 	code, out, errs = run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	code, out, errs = run("cloud_link", "--data-dir", dir, "--off")
-	want(t, "cloud_link --off through the server", code, 0, out+errs, "Meko Cloud is unlinked")
+	code, out, errs = run("cloud-link", "--data-dir", dir, "--off")
+	want(t, "cloud-link --off through the server", code, 0, out+errs, "Meko Cloud is unlinked")
 	if strings.Contains(out, "Next:") {
 		t.Errorf("unlinking says what to run next:\n%s", out)
 	}
@@ -187,13 +187,13 @@ func TestCloudLink(t *testing.T) {
 	}
 	// Linking again with only the key keeps the URLs saved before.
 	withStdin(t, testCloudKey+"\n")
-	code, out, errs = run("cloud_link", "--data-dir", dir)
-	want(t, "cloud_link through the server", code, 0, out+errs, "✓ Linked to "+cloud+"/mcp")
-	want(t, "cloud_link's next steps", code, 0, out, "\n\nNext:\n  meko ui ")
+	code, out, errs = run("cloud-link", "--data-dir", dir)
+	want(t, "cloud-link through the server", code, 0, out+errs, "✓ Linked to "+cloud+"/mcp")
+	want(t, "cloud-link's next steps", code, 0, out, "\n\nNext:\n  meko ui ")
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status's Cloud row", code, 0, out, "\n  Cloud   "+cloud+"\n")
 
-	code, _, errs = run("cloud_link", "--data-dir", dir, "--off", "--url", "x")
+	code, _, errs = run("cloud-link", "--data-dir", dir, "--off", "--url", "x")
 	want(t, "--off with a URL", code, exitUsage, errs, "--off takes no URLs")
 
 	// A link that can't be read says so, and the rest of token --json still answers.
@@ -205,7 +205,7 @@ func TestCloudLink(t *testing.T) {
 	}
 }
 
-// asTerminal makes meko cloud_link take its input as a person's at a terminal, and openBrowser call
+// asTerminal makes meko cloud-link take its input as a person's at a terminal, and openBrowser call
 // browse with each address it's asked to open.
 func asTerminal(t *testing.T, browse func(string)) {
 	t.Helper()
@@ -232,7 +232,7 @@ func followTo(t *testing.T) func(string) {
 	}
 }
 
-// On a terminal, meko cloud_link asks how to link: signing in with the browser (Enter) makes a key
+// On a terminal, meko cloud-link asks how to link: signing in with the browser (Enter) makes a key
 // and links with it, as the Meko installer does; 2 takes a key. A browser on another computer
 // finishes by pasting the address it ended on, and a key the link then refuses is named, since
 // Meko Cloud can't delete it.
@@ -243,7 +243,7 @@ func TestCloudLinkSignIn(t *testing.T) {
 	asTerminal(t, followTo(t))
 
 	withStdin(t, "\n")
-	code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
+	code, out, errs := run("cloud-link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "sign in with the browser", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …abcd)")
 	want(t, "the choice", code, 0, errs, "1) Sign in with your browser\n  2) Enter an API key\n")
 	want(t, "the browser", code, 0, errs, "Opened your browser to sign in to Meko Cloud.")
@@ -256,15 +256,15 @@ func TestCloudLinkSignIn(t *testing.T) {
 	}
 
 	withStdin(t, "2\n"+testCloudKey+"\n")
-	code, out, errs = run("cloud_link", "--data-dir", dir)
+	code, out, errs = run("cloud-link", "--data-dir", dir)
 	want(t, "enter a key", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …wxyz)")
 
 	withStdin(t, "3\n")
-	code, _, errs = run("cloud_link", "--data-dir", dir)
+	code, _, errs = run("cloud-link", "--data-dir", dir)
 	want(t, "neither", code, 1, errs, "choose 1 to sign in with your browser, or 2 to enter an API key")
 
 	withStdin(t, "\n")
-	code, _, errs = run("cloud_link", "--data-dir", dir, "--url", "not a url")
+	code, _, errs = run("cloud-link", "--data-dir", dir, "--url", "not a url")
 	want(t, "a bad URL, signing in", code, 1, errs, "isn't a URL. It should look like https://meko.example.com\n")
 
 	// The browser is elsewhere: its redirect never reaches this computer, and its address is pasted.
@@ -283,7 +283,7 @@ func TestCloudLinkSignIn(t *testing.T) {
 		_ = res.Body.Close()
 		go func() { _, _ = io.WriteString(pw, res.Header.Get("Location")+"\n") }()
 	})
-	code, out, errs = run("cloud_link", "--data-dir", dir)
+	code, out, errs = run("cloud-link", "--data-dir", dir)
 	want(t, "a pasted address", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …abcd)")
 	want(t, "the paste prompt", code, 0, errs, "paste the address it ended on here")
 
@@ -292,7 +292,7 @@ func TestCloudLinkSignIn(t *testing.T) {
 	t.Cleanup(func() { fakeCloudMints.Store("") })
 	asTerminal(t, followTo(t))
 	withStdin(t, "1\n")
-	code, _, errs = run("cloud_link", "--data-dir", dir)
+	code, _, errs = run("cloud-link", "--data-dir", dir)
 	want(t, "a refused key", code, 1, errs, `The key Meko made, "Meko on test", is still in your Meko Cloud account`)
 	fakeCloudMints.Store("")
 
@@ -303,14 +303,14 @@ func TestCloudLinkSignIn(t *testing.T) {
 	opened := false
 	asTerminal(t, func(string) { opened = true })
 	withStdin(t, "\n")
-	code, _, errs = run("cloud_link", "--data-dir", dir, "--no-browser")
+	code, _, errs = run("cloud-link", "--data-dir", dir, "--no-browser")
 	want(t, "--no-browser", code, 1, errs,
 		"Open this address in a browser to sign in to Meko Cloud:\n  "+cloud+"/authorize?")
 	want(t, "no sign-in", code, 1, errs, "timed out after 100ms waiting for the sign-in")
 	if opened {
 		t.Fatal("--no-browser opened the browser")
 	}
-	code, _, errs = run("cloud_link", "--data-dir", dir, "--off", "--no-browser")
+	code, _, errs = run("cloud-link", "--data-dir", dir, "--off", "--no-browser")
 	want(t, "--off --no-browser", code, exitUsage, errs, "--off and --no-browser don't go together")
 }
 
@@ -331,8 +331,8 @@ func TestDatapacksLinked(t *testing.T) {
 	}
 
 	withStdin(t, testCloudKey+"\n")
-	code, out, errs = run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
-	want(t, "cloud_link", code, 0, out+errs, "Linked to")
+	code, out, errs = run("cloud-link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
+	want(t, "cloud-link", code, 0, out+errs, "Linked to")
 
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
 	if code != 0 || errs != "" ||
@@ -382,8 +382,8 @@ func TestCloudDatapacks(t *testing.T) {
 	_, key, _ := run("token", "--data-dir", cloudDir)
 	withStdin(t, key)
 	cloud := "http://127.0.0.1:" + cloudPort
-	code, out, errs = run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--api-url", cloud+"/api/v1")
-	want(t, "cloud_link", code, 0, out+errs, "Linked to "+cloud+"/mcp")
+	code, out, errs = run("cloud-link", "--data-dir", dir, "--url", cloud+"/mcp", "--api-url", cloud+"/api/v1")
+	want(t, "cloud-link", code, 0, out+errs, "Linked to "+cloud+"/mcp")
 
 	code, out, errs = runSh("create_datapack", "--data-dir", dir, "team-notes")
 	want(t, "create_datapack linked", code, 0, out+errs, "Created datapack team-notes (")
@@ -557,8 +557,8 @@ func TestCloudDatapacks(t *testing.T) {
 	want(t, "search this Meko's by id with Meko Cloud down", code, 0, out+errs, oncall)
 
 	// Unlinked, this Meko's datapacks alone.
-	code, out, errs = run("cloud_link", "--data-dir", dir, "--off")
-	want(t, "cloud_link --off", code, 0, out+errs, "unlinked")
+	code, out, errs = run("cloud-link", "--data-dir", dir, "--off")
+	want(t, "cloud-link --off", code, 0, out+errs, "unlinked")
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
 	want(t, "datapacks unlinked", code, 0, "\n"+out+errs, "\nkept-here\n")
 	if strings.Contains(out, "rest-made") {
@@ -619,8 +619,8 @@ func TestCloudDatapacksKeyRefused(t *testing.T) {
 	t.Setenv("MEKO_SECRETS", "file")
 	cloud := fakeCloud(t)
 	withStdin(t, testCloudKey+"\n")
-	code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
-	want(t, "cloud_link", code, 0, out+errs, "Linked to")
+	code, out, errs := run("cloud-link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
+	want(t, "cloud-link", code, 0, out+errs, "Linked to")
 	// The key changes behind Meko's back (the server reads it at start).
 	const stale = "mko_tkn_stale_0123456789abcd"
 	if err := os.WriteFile(filepath.Join(dir, "secrets", "meko_cloud_key"), []byte(stale), 0o600); err != nil {
@@ -631,7 +631,7 @@ func TestCloudDatapacksKeyRefused(t *testing.T) {
 	for _, args := range [][]string{{"datapacks"}, {"create_datapack", "x"}} {
 		code, out, errs = runSh(append(args, "--data-dir", dir)...)
 		want(t, args[0]+" with a refused key", code, 1, errs,
-			"meko-cli: Meko Cloud refused the key. Link it again in Settings › Meko Cloud, or with meko cloud_link\n")
+			"meko-cli: Meko Cloud refused the key. Link it again in Settings › Meko Cloud, or with meko cloud-link\n")
 		if strings.Contains(out+errs, stale) {
 			t.Fatalf("the key is in the output:\n%s%s", out, errs)
 		}
@@ -705,7 +705,7 @@ func postFile(t *testing.T, link string, fields map[string]string, name string, 
 	}
 }
 
-// meko cloud_link's choice, read a key at a time on a terminal: the arrows (or k and j) move the
+// meko cloud-link's choice, read a key at a time on a terminal: the arrows (or k and j) move the
 // mark and wrap, Enter picks it, a number picks its choice at once, Ctrl+C and Ctrl+D cancel, and
 // other keys do nothing.
 func TestPickKeyPress(t *testing.T) {
@@ -749,15 +749,15 @@ func TestCloudRow(t *testing.T) {
 		t.Errorf("unlinked: %q", r)
 	}
 	withStdin(t, testCloudKey+"\n")
-	if code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp"); code != 0 {
-		t.Fatalf("cloud_link: %d %s%s", code, out, errs)
+	if code, out, errs := run("cloud-link", "--data-dir", dir, "--url", cloud+"/mcp"); code != 0 {
+		t.Fatalf("cloud-link: %d %s%s", code, out, errs)
 	}
 	if r := cloudRow(paths.New(dir)); r != (linkRow{label: "Cloud", note: cloud + "/mcp (key …wxyz)"}) {
 		t.Errorf("linked with no web app: %q", r)
 	}
 	withStdin(t, testCloudKey+"\n")
-	if code, out, errs := run("cloud_link", "--data-dir", dir, "--web-url", cloud); code != 0 {
-		t.Fatalf("cloud_link --web-url: %d %s%s", code, out, errs)
+	if code, out, errs := run("cloud-link", "--data-dir", dir, "--web-url", cloud); code != 0 {
+		t.Fatalf("cloud-link --web-url: %d %s%s", code, out, errs)
 	}
 	if r := cloudRow(paths.New(dir)); r != (linkRow{label: "Cloud", url: cloud}) {
 		t.Errorf("linked with a web app: %q", r)

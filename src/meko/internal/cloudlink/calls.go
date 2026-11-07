@@ -42,7 +42,7 @@ func (s *Service) linked() (Link, error) {
 
 func notLinked() error {
 	return &CallError{Status: http.StatusConflict, Code: CodeNotLinked,
-		msg: "This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link."}
+		msg: "This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud-link."}
 }
 
 // API calls the linked Meko Cloud's REST API with the key: method on path, which follows the API URL
@@ -57,7 +57,7 @@ func (s *Service) API(ctx context.Context, method, path string, body any) (json.
 	base := strings.TrimRight(l.EffectiveAPIURL(), "/")
 	if base == "" {
 		return nil, &CallError{Code: CodeNoAPIURL, msg: "The Meko Cloud link has no API URL. " +
-			"Set the web app or API URL in Settings › Meko Cloud, or meko cloud_link --api-url."}
+			"Set the web app or API URL in Settings › Meko Cloud, or meko cloud-link --api-url."}
 	}
 	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
 	defer cancel()
@@ -131,7 +131,7 @@ func serverFailed(status string, b []byte) error {
 
 func keyRefused() error {
 	return &CallError{Code: CodeKeyRefused,
-		msg: "Meko Cloud refused the key. Link it again in Settings › Meko Cloud, or with meko cloud_link."}
+		msg: "Meko Cloud refused the key. Link it again in Settings › Meko Cloud, or with meko cloud-link."}
 }
 
 // Tool calls one of the linked Meko Cloud's MCP tools with the key, within CallTimeout, and returns
@@ -184,7 +184,7 @@ func (s *Service) Pass(ctx context.Context, method, pathQuery string, body io.Re
 	base := strings.TrimRight(l.EffectiveAPIURL(), "/")
 	if base == "" {
 		return Reply{}, &CallError{Code: CodeNoAPIURL, msg: "The Meko Cloud link has no API URL. " +
-			"Set the web app or API URL in Settings › Meko Cloud, or meko cloud_link --api-url."}
+			"Set the web app or API URL in Settings › Meko Cloud, or meko cloud-link --api-url."}
 	}
 	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
 	defer cancel()

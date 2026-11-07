@@ -167,13 +167,13 @@ func started(cat Catalog, app update.App, next string, err error, out io.Writer)
 	if now := app.Current(); now != next {
 		if err != nil {
 			return false, fmt.Errorf("%s %s failed to start %d times, so it was rolled back to %s, which didn't "+
-				"start either: %w. See %s status", cat.Title, next, update.MaxFailedStarts, now, err, cat.Command)
+				"start either: %w. See %s", cat.Title, next, update.MaxFailedStarts, now, err, cat.UserCommand("status"))
 		}
 		return true, fmt.Errorf("%s %s failed to start %d times, so it was rolled back to %s and won't be "+
 			"offered again", cat.Title, next, update.MaxFailedStarts, now)
 	}
 	if err != nil {
-		return false, fmt.Errorf("%s %s didn't start: %w. See %s status", cat.Title, next, err, cat.Command)
+		return false, fmt.Errorf("%s %s didn't start: %w. See %s", cat.Title, next, err, cat.UserCommand("status"))
 	}
 	fmt.Fprintf(out, "%s is running %s\n", cat.Title, next)
 	return true, nil

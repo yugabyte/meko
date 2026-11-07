@@ -1,12 +1,14 @@
-// The Connect page's Agents card: the agents installed on this computer (GET /agents), whether each
-// reaches Meko (which sends their calls to the linked Meko Cloud), and Connect or Disconnect, which post the agent's route and
-// then read the list again. A server older than the card (a 404) shows nothing.
+// The Agents page's card: the agents installed on this computer (GET /agents), whether each reaches
+// Meko (which sends their calls to the linked Meko Cloud), and Connect or Disconnect, which post the
+// agent's route and then read the list again; then where any other MCP client connects, from the
+// reply's target. A server older than the route (a 404) gets a note saying what to run instead.
 
 import { useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type { Agent, AgentState } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { Badge, Button, Card, ErrorNote, Spinner } from "./ui";
+import { CopyBlock } from "./CopyBlock";
+import { Badge, Button, Card, Code, ErrorNote, Loading, Spinner } from "./ui";
 
 type Action = "connect" | "disconnect";
 
@@ -29,8 +31,17 @@ export function AgentsCard() {
   const [result, setResult] = useState<{ name: string; lines: string[] }>();
   const [error, setError] = useState<{ name: string; error: Error }>();
 
-  if (list.error instanceof ApiError && list.error.status === 404) return null;
-  if (!list.data && !list.error) return null;
+  if (list.error instanceof ApiError && list.error.status === 404) {
+    return (
+      <Card className="p-4">
+        <p className="text-sm text-muted-foreground">
+          This Meko is older than the Agents page: run <Code>meko agent connect &lt;agent&gt;</Code> on this computer, or
+          update Meko.
+        </p>
+      </Card>
+    );
+  }
+  if (!list.data && !list.error) return <Loading />;
 
   const act = async (agent: Agent, action: Action) => {
     setBusy({ name: agent.name, action });
@@ -52,14 +63,11 @@ export function AgentsCard() {
   const data = list.data;
   return (
     <Card className="space-y-3 p-4">
-      <div className="space-y-1">
-        <h3 className="font-medium">Agents</h3>
-        {data && (
-          <p className="text-sm text-muted-foreground">
-            Agents connect to Meko on this computer, which reaches Meko Cloud for them while it's linked.
-          </p>
-        )}
-      </div>
+      {data && (
+        <p className="text-sm text-muted-foreground">
+          Agents connect to Meko on this computer, which reaches Meko Cloud for them while it's linked.
+        </p>
+      )}
       {list.error && <ErrorNote error={list.error} />}
       {data && data.agents.length === 0 && (
         <p className="text-sm text-muted-foreground">
@@ -79,6 +87,15 @@ export function AgentsCard() {
             />
           ))}
         </ul>
+      )}
+      {data && (
+        <div className="space-y-2 border-t pt-3">
+          <p className="text-sm text-muted-foreground">
+            Any other MCP client: Streamable HTTP at this URL, with the token <Code>meko token</Code> prints as a Bearer
+            header.
+          </p>
+          <CopyBlock text={data.target.url} />
+        </div>
       )}
     </Card>
   );

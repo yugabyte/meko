@@ -11,7 +11,7 @@ import type { Logger } from '../../src/server/log.js';
 import {
   CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_DAY_MS, FIRST_DAY_SEND_AFTER_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, NEW_INSTALL_FIRST_CHECK_MS, REPORT_DAYS,
   SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, buildReport, callHomeKind,
-  installFacts, ybCallHomeDisabled, ybTimestamp, type Probe,
+  installFacts, isAgentKJob, ybCallHomeDisabled, ybTimestamp, type Probe,
 } from '../../src/server/callhome.js';
 import { REPORTED_TOOLS, firstTurnMeko } from '../../src/server/mekousage.js';
 import { usageOverview } from '../../src/server/usage.js';
@@ -911,5 +911,20 @@ describe('sending the report', () => {
 
   it('stamps a report as the service parses it: UTC with microseconds and no zone', () => {
     expect(ybTimestamp(Date.UTC(2026, 10, 9, 17, 5, 32, 123))).toBe('2026-11-09T17:05:32.123000');
+  });
+});
+
+describe('isAgentKJob (launchd runs this server)', () => {
+  it.each([
+    ['com.yugabyte.me_kode', true],
+    ['com.yugabyte.me_kode.host', true],
+    ['com.yugabyte.me_koder', true],
+    ['com.yugabyte.agentk', true],
+    ['com.yugabyte.agent-k-local', true],
+    ['com.yugabyte.meko', false],
+    ['com.yugabyte.me_present', false],
+    ['', false],
+  ])('%s: %s', (label, ours) => {
+    expect(isAgentKJob(label)).toBe(ours);
   });
 });

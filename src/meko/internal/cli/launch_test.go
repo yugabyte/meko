@@ -80,19 +80,19 @@ func TestLaunchSupported(t *testing.T) {
 // and on the fourth start rolled back to the old version, which runs instead and is recorded bad.
 func TestLaunchRollsBackAFailingVersion(t *testing.T) {
 	const old, next = "0.20261024.0", "0.20261025.0"
-	app, log := launchApp(t, "presenter", map[string]string{old: "exit 0", next: "exit 1"})
+	app, log := launchApp(t, "present", map[string]string{old: "exit 0", next: "exit 1"})
 	if err := app.Switch(old, next, 0); err != nil {
 		t.Fatal(err)
 	}
 	for i := 1; i <= update.MaxFailedStarts; i++ {
-		if code := exitCode(launch(t, app, "presenter", next, "serve").Run()); code != 1 {
+		if code := exitCode(launch(t, app, "present", next, "serve").Run()); code != 1 {
 			t.Fatalf("start %d: exit %d", i, code)
 		}
 		if p, _ := app.ReadPending(); p == nil || p.Attempts != i {
 			t.Fatalf("start %d: pending %+v", i, p)
 		}
 	}
-	if code := exitCode(launch(t, app, "presenter", next, "serve").Run()); code != 0 {
+	if code := exitCode(launch(t, app, "present", next, "serve").Run()); code != 0 {
 		t.Fatalf("the rolled-back start: exit %d", code)
 	}
 	if p, _ := app.ReadPending(); p != nil || app.Current() != old || !app.BadVersions()[next] {
@@ -146,11 +146,11 @@ func TestLaunchDoesntCountACleanStop(t *testing.T) {
 // before the one it replaced are pruned.
 func TestLaunchFinishesAHealthyUpdate(t *testing.T) {
 	const older, old, next = "0.20261023.0", "0.20261024.0", "0.20261025.0"
-	app, _ := launchApp(t, "presenter", map[string]string{older: "exit 0", old: "exit 0", next: "sleep 1"})
+	app, _ := launchApp(t, "present", map[string]string{older: "exit 0", old: "exit 0", next: "sleep 1"})
 	if err := app.Switch(old, next, 0); err != nil {
 		t.Fatal(err)
 	}
-	cmd := launch(t, app, "presenter", next, "serve")
+	cmd := launch(t, app, "present", next, "serve")
 	cmd.Env = append(cmd.Env, testHealthyAfterEnv+"=200ms")
 	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "its update is done") {
 		t.Fatalf("%v %s", err, out)

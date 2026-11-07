@@ -5,23 +5,24 @@
 #           releases were tagged by product (installed AgentKs from before read only those, so
 #           the newest v… release, which reads both, stays: prune-releases.sh never deletes it)
 #   meko    Meko (src/meko): tags meko-v<version>
-#   presenter
-#           Presenter (src/extensions/presenter): tags presenter-v<version>, whose tarballs Meko
+#   present
+#           Presenter (src/extensions/present): tags present-v<version>, whose tarballs Meko
 #           installs and updates (meko extension install, meko extension update)
 #
-# Takes `--product agentk|meko|presenter` (default agentk) out of the script's arguments and sets:
+# Takes `--product agentk|meko|present` (default agentk) out of the script's arguments and sets:
 #
-#   product       agentk, meko or presenter
+#   product       agentk, meko or present
 #   tag_prefix    the prefix of the product's new tags: tag = <tag_prefix><version>
 #   tag_prefixes  every prefix the product's tags have used, newest scheme first
 #   scope         an extended regex for the `(<component>[/<area>])` of the subjects that may
 #                 release the product, and
 #   exclude       one for those that don't, even though scope matches them. Meko takes the
 #                 subjects that name meko, alone or in a list (feat(agentk,meko): ...), and
-#                 Presenter those that name presenter. AgentK takes every subject but those that
-#                 name only meko or presenter: agentk, repo, lists naming agentk or repo, and old
-#                 subjects with no component or with the free-form one subjects had before
-#                 2026-10-20. So a subject naming agentk and meko releases both
+#                 Presenter those that name present. AgentK takes every subject but those that
+#                 name only meko or present (or presenter, Presenter's component before it was
+#                 present): agentk, repo, lists naming agentk or repo, and old subjects with no
+#                 component or with the free-form one subjects had before 2026-10-20. So a
+#                 subject naming agentk and meko releases both
 #
 # and newest_tag, which prints the product's newest tag (by version, across its prefixes).
 
@@ -29,7 +30,7 @@ product=agentk
 _args=''
 while [ $# -gt 0 ]; do
   case $1 in
-    --product) [ $# -ge 2 ] || { echo "--product needs a value: agentk, meko or presenter" >&2; exit 2; }; product=$2; shift 2 ;;
+    --product) [ $# -ge 2 ] || { echo "--product needs a value: agentk, meko or present" >&2; exit 2; }; product=$2; shift 2 ;;
     --product=*) product=${1#--product=}; shift ;;
     *) _args="$_args '$(printf '%s' "$1" | sed "s/'/'\\\\''/g")'"; shift ;;
   esac
@@ -42,7 +43,7 @@ case $product in
     tag_prefix=agentk-v
     tag_prefixes='agentk-v v'
     scope='(\([^)]*\))?'
-    exclude='\((meko|presenter)(/[^,)]*)?(,(meko|presenter)(/[^,)]*)?)*\)'
+    exclude='\((meko|present|presenter)(/[^,)]*)?(,(meko|present|presenter)(/[^,)]*)?)*\)'
     ;;
   meko)
     tag_prefix=meko-v
@@ -50,13 +51,13 @@ case $product in
     scope='\(([^,)]*,)*meko(/[^,)]*)?(,[^)]*)?\)'
     exclude=''
     ;;
-  presenter)
-    tag_prefix=presenter-v
-    tag_prefixes='presenter-v'
-    scope='\(([^,)]*,)*presenter(/[^,)]*)?(,[^)]*)?\)'
+  present)
+    tag_prefix=present-v
+    tag_prefixes='present-v'
+    scope='\(([^,)]*,)*present(/[^,)]*)?(,[^)]*)?\)'
     exclude=''
     ;;
-  *) echo "unknown product: $product (agentk, meko or presenter)" >&2; exit 2 ;;
+  *) echo "unknown product: $product (agentk, meko or present)" >&2; exit 2 ;;
 esac
 
 # The product's newest tag of the form <prefix>0.<date>.<n>[-<pre>], or nothing. A release sorts

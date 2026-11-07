@@ -8,19 +8,21 @@
 # <out-dir>/agentk-<version>-<linux|darwin>-<arch>.tar.gz containing:
 #
 #   agentk-<version>/
-#     bin/me_koder             POSIX sh wrapper (packaging/me_koder): the command
-#     bin/agentk               a link to it: its name before, which services installed then, older
+#     bin/me_kode              POSIX sh wrapper (packaging/me_kode): the program `meko kode` runs
+#     bin/me_koder             a link to it: its name before, which services installed then, older
 #                              Mekos and their registries run
+#     bin/agentk               a link to it: its name before me_koder, run the same way, and the
+#                              services' launcher's fallback (every release has it)
 #     bin/agent-k-local        a link to it: its name before the rename to AgentK, which older services start
-#     node/bin/me_koder        bundled Node runtime, named so its processes say they're AgentK's
+#     node/bin/me_kode         bundled Node runtime, named so its processes say they're AgentK's
 #     node/bin/node            a link to it, which the MCP configs AgentK writes for sessions name
 #     node/LICENSE
 #     lib/package.json
 #     lib/dist/                compiled server + web assets, AgentK's mod for Claude Code (dist/mod), the session tools' skill (dist/tools) and the bundled workshops (dist/workshops)
 #     lib/node_modules/        production dependencies only
-#     lib/packaging/systemd/   service templates used by `me_koder install` (Linux)
-#     lib/packaging/launchd/   service templates used by `me_koder install` (macOS)
-#     lib/scripts/deps.sh      the prerequisites check `me_koder install` runs first (git, curl, gh, a coding agent)
+#     lib/packaging/systemd/   service templates used by `meko kode install` (Linux)
+#     lib/packaging/launchd/   service templates used by `meko kode install` (macOS)
+#     lib/scripts/deps.sh      the prerequisites check `meko kode install` runs first (git, curl, gh, a coding agent)
 #     VERSION
 #
 # and the same files as <out-dir>/agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz, in
@@ -60,13 +62,14 @@ trap 'rm -rf "$stage"' EXIT INT TERM
 root="$stage/$name"
 
 mkdir -p "$root/bin" "$root/node/bin" "$root/lib/packaging" "$root/lib/scripts"
-cp "$repo/packaging/me_koder" "$root/bin/me_koder"
-chmod 755 "$root/bin/me_koder"
-ln -s me_koder "$root/bin/agentk"
-ln -s me_koder "$root/bin/agent-k-local"
+cp "$repo/packaging/me_kode" "$root/bin/me_kode"
+chmod 755 "$root/bin/me_kode"
+ln -s me_kode "$root/bin/me_koder"
+ln -s me_kode "$root/bin/agentk"
+ln -s me_kode "$root/bin/agent-k-local"
 
-cp "$node_dir/bin/node" "$root/node/bin/me_koder"
-ln -s me_koder "$root/node/bin/node"
+cp "$node_dir/bin/node" "$root/node/bin/me_kode"
+ln -s me_kode "$root/node/bin/node"
 cp "$node_dir/LICENSE" "$root/node/LICENSE"
 
 cp "$repo/package.json" "$root/lib/package.json"

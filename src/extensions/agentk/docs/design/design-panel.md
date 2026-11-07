@@ -2,8 +2,12 @@
 
 Part of the [AgentK design](../design.md).
 
-During Design the panel opens as soon as the design exists and again whenever it's revised, at
-about 60% of the work area. An Artifact design is shown in a sandboxed frame (scripts allowed, no
+During Design the panel opens as the session comes on screen or enters Design, before the design
+exists (`designPending()` in `src/web/util.ts`; not while Claude starts, so the terminal's startup
+steps stay on screen, but as its first turn begins), as soon as the design is written, and again whenever
+it's revised, at about 60% of the work area. Until the first design is written, the panel shows
+AgentK at work on it (the header's working line, below, and a placeholder page whose blocks shimmer)
+while it works, and a plain line while it doesn't. An Artifact design is shown in a sandboxed frame (scripts allowed, no
 same-origin access, and a content policy that blocks network requests and limits scripts, styles
 and fonts to what Artifacts use, placed first in the frame's document so nothing of the page runs
 before it), so the page can't read the app's cookies or call the API. **Open on claude.ai** links to
@@ -186,7 +190,7 @@ While AgentK works on the design, the panel's header shows it: a bar runs along 
 bottom edge, and the header's "updated" time reads **Revising** (after **Send for revision** from
 this page) or **Working** (any other turn), with the keycaps. `designWorking()` in `src/web/util.ts`
 decides it from the session's status, so a reload or another screen shows it too: a session in
-Design with a design on screen and AgentK working (or Claude holding answers for its next turn,
+Design, with a design or writing the first one, and AgentK working (or Claude holding answers for its next turn,
 through the mod), never while Claude waits on the user. A Send for revision from this page
 (`revisionSent()` in `src/web/design-answers.ts`, kept for this page only) is timed from the click
 and covers the 10 seconds (`REVISION_GRACE_MS`) before Claude reports the turn. `settleRevision()`
