@@ -189,10 +189,10 @@ var mekoCommands = []command{
 			{"meko kode attach <session>", "show a session's terminal in yours (Ctrl+\\ detaches)"},
 			{"meko kode --help", "AgentK's commands"},
 		}},
-	{name: "present", group: "Extensions", summary: "Run one of Presenter's commands",
+	{name: "present", group: "Extensions", summary: "Run one of Present's commands",
 		usage: "meko present <command> [args]", examples: []example{
-			{"meko present status", "whether Presenter is running"},
-			{"meko present --help", "Presenter's commands"},
+			{"meko present status", "whether Present is running"},
+			{"meko present --help", "Present's commands"},
 		}},
 	{name: "destroy", group: "Remove", summary: "Stop Meko and delete its data",
 		usage: "meko destroy [flags]", examples: []example{

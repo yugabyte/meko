@@ -193,7 +193,7 @@ export class PieceStore {
     progress(done, total);
     await pool(uploads, AT_ONCE, async (u) => {
       const got = await this.meko.putArtifact(datapackId, u.filename, u.bytes, u.filename.endsWith('.json') ? 'application/json' : 'application/octet-stream');
-      if (got !== u.hash) throw new MekoError(`Meko kept ${u.filename} under another hash than Presenter made.`);
+      if (got !== u.hash) throw new MekoError(`Meko kept ${u.filename} under another hash than Present made.`);
       known.add(u.hash);
       progress(++done, total);
     });

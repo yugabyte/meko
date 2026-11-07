@@ -2,7 +2,7 @@
 # Release notes for one product from commit subjects (<type>(<component>[/<area>])[!]: <summary>,
 # see scripts/check-title.sh; older ones may have no component) since its previous release tag.
 # Only the product's own components count (product.sh): AgentK's notes skip subjects naming only
-# meko or present, and Meko's and Presenter's take every subject naming theirs, alone or in a list
+# meko or present, and Meko's and Present's take every subject naming theirs, alone or in a list
 # (feat(agentk,meko): ...), so such a subject is in both.
 #
 #   scripts/release/release-notes.sh [--product agentk|meko|present] [<from-ref>]

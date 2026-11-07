@@ -176,7 +176,7 @@ describe('building a deck with Claude', () => {
     expect(ended.status).toBe('failed');
     expect(ended.error).toMatch(/would break the deck: .*doesn't have/);
     expect(calls()).toHaveLength(2);
-    expect(calls()[1]!.input).toMatch(/^Presenter couldn't use that answer/);
+    expect(calls()[1]!.input).toMatch(/^Present couldn't use that answer/);
   });
 });
 
@@ -256,7 +256,7 @@ describe('when Meko\'s Meko Cloud link changes', () => {
     meko.datapacks = [];
     expect((await api<Health>('GET', '/api/health')).body.mekoAt).toEqual({ kind: 'cloud', host: 'mcp.meko.example' });
     expect((await api<DeckSummary[]>('GET', '/api/decks')).body).toEqual([expect.objectContaining({ id: deck.id, draft: true, elsewhere: { kind: 'local', host: '127.0.0.1:7778' } })]);
-    const refused = "This deck is saved in the Meko on this computer, and Presenter now uses Meko Cloud (mcp.meko.example). Unlink Meko Cloud in Meko's Settings › Meko Cloud to open it.";
+    const refused = "This deck is saved in the Meko on this computer, and Present now uses Meko Cloud (mcp.meko.example). Unlink Meko Cloud in Meko's Settings › Meko Cloud to open it.";
     for (const [method, url, body] of [
       ['GET', `/api/decks/${deck.id}`],
       ['POST', `/api/decks/${deck.id}/ops`, { ops: [{ op: 'setTitle', title: 'Moved' }] }],

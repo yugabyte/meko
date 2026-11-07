@@ -1,6 +1,6 @@
 #!/bin/sh
 # Check a release tarball on this machine: it unpacks, says its version, and its server starts and
-# serves Presenter's page on its socket, with a scratch Meko data folder (no Meko needed).
+# serves Present's page on its socket, with a scratch Meko data folder (no Meko needed).
 #
 #   scripts/smoke-release.sh <tarball> <version>
 set -eu

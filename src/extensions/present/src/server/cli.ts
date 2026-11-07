@@ -41,7 +41,7 @@ function onPath(cmd: string): boolean {
 }
 
 /**
- * Whether a pid is a Presenter server: `me_present serve` (the release's launcher, before it
+ * Whether a pid is a Present server: `me_present serve` (the release's launcher, before it
  * execs Node; its `present serve` end matches) or `cli.js serve` (Node, as start and the launcher
  * run it).
  */
@@ -54,7 +54,7 @@ function isServer(pid: number): boolean {
 }
 
 /**
- * The pid in the pid file, when that process is alive and is Presenter's server: a server that
+ * The pid in the pid file, when that process is alive and is Present's server: a server that
  * crashed or was killed leaves the file, and its pid can belong to another process by now.
  */
 function runningPid(paths: Paths): number | null {
@@ -85,7 +85,7 @@ async function serve(paths: Paths): Promise<void> {
   // For a long home the socket's folder is under /tmp, where another user could have made it first.
   const st = lstatSync(sockDir);
   if (!st.isDirectory() || (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
-    throw new Error(`${sockDir} isn't a folder of this user's. Remove it, then start Presenter again.`);
+    throw new Error(`${sockDir} isn't a folder of this user's. Remove it, then start Present again.`);
   }
   chmodSync(sockDir, 0o700);
   const v = version();
@@ -102,12 +102,12 @@ async function serve(paths: Paths): Promise<void> {
   const runs = new Runs(decks, join(paths.run, 'runs'));
   const core: Core = { version: v, meko, decks, jobs, runs, events, claudeFound: () => onPath(claude[0]!), mekoChanged: () => meko.reset() };
   const app = await buildServer(core, { webDir: findWebDir(here) });
-  if (await socketAnswers(paths.webSock)) throw new Error(`Another Presenter is serving ${paths.webSock}.`);
+  if (await socketAnswers(paths.webSock)) throw new Error(`Another Present is serving ${paths.webSock}.`);
   if (existsSync(paths.webSock)) unlinkSync(paths.webSock);
   await app.listen({ path: paths.webSock });
   chmodSync(paths.webSock, 0o600);
   writeFileSync(paths.pid, String(process.pid), { mode: 0o600 });
-  console.log(`Presenter ${v} is serving ${paths.webSock}`);
+  console.log(`Present ${v} is serving ${paths.webSock}`);
   const stop = async () => {
     // Claude's runs end with the server (their results would be lost), and a page that doesn't
     // answer (a sleeping laptop) would hold close for ws's 30 s.
@@ -129,11 +129,11 @@ async function serve(paths: Paths): Promise<void> {
 
 /** What start and stop say: one row of Meko's summary when Meko runs them for it, else a line. */
 function say(row: string, line: string): void {
-  console.log(forMekoSummary() ? summaryRow('✓', 'Presenter', row) : line);
+  console.log(forMekoSummary() ? summaryRow('✓', 'Present', row) : line);
 }
 
 async function start(paths: Paths): Promise<void> {
-  if (runningPid(paths)) return say('running', 'Presenter is running');
+  if (runningPid(paths)) return say('running', 'Present is running');
   mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
   mkdirSync(paths.run, { recursive: true, mode: 0o700 });
   const log = openSync(join(paths.logs, 'server.log'), 'a', 0o600);
@@ -147,29 +147,29 @@ async function start(paths: Paths): Promise<void> {
   child.unref();
   closeSync(log);
   for (let i = 0; i < 100; i++) {
-    if (await socketAnswers(paths.webSock)) return say('started', 'Presenter started');
+    if (await socketAnswers(paths.webSock)) return say('started', 'Present started');
     if (child.exitCode !== null) break;
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`Presenter didn't start: see ${join(paths.logs, 'server.log')}`);
+  throw new Error(`Present didn't start: see ${join(paths.logs, 'server.log')}`);
 }
 
 async function stop(paths: Paths): Promise<void> {
   const pid = runningPid(paths);
-  if (!pid) return say("wasn't running", 'Presenter isn\'t running');
+  if (!pid) return say("wasn't running", 'Present isn\'t running');
   process.kill(pid, 'SIGTERM');
   for (let i = 0; i < 100; i++) {
-    if (!runningPid(paths)) return say('stopped', 'Presenter stopped');
+    if (!runningPid(paths)) return say('stopped', 'Present stopped');
     await new Promise((r) => setTimeout(r, 100));
   }
   process.kill(pid, 'SIGKILL');
   // Its own stop never ran, so the pid file is left for this to remove.
   rmSync(paths.pid, { force: true });
-  say('stopped', 'Presenter stopped');
+  say('stopped', 'Present stopped');
 }
 
 /**
- * `_busy`, which Meko runs before it updates Presenter on its own: exit 0 while a talk is live (the
+ * `_busy`, which Meko runs before it updates Present on its own: exit 0 while a talk is live (the
  * server says so on its socket, `GET /_meko/busy`), so the update waits for the next check. A
  * server that isn't running, or doesn't answer within 10 s, isn't busy.
  */
@@ -206,14 +206,14 @@ async function status(paths: Paths): Promise<void> {
     // gone since
   }
   const facts = { version: version(), pid, startedAt, answers: await socketAnswers(paths.webSock), claude: onPath('claude'), home: paths.home, now: Date.now() };
-  // meko status runs it so (MEKO_SUMMARY=1) for its Presenter row: the headline alone.
+  // meko status runs it so (MEKO_SUMMARY=1) for its Present row: the headline alone.
   if (forMekoSummary()) console.log(headline(facts));
   else for (const line of statusLines(facts)) console.log(line);
   if (!runs(facts)) process.exitCode = 3;
 }
 
 /**
- * A Meko URL and key an older Presenter kept in config.json: Meko's Meko Cloud link (or the Meko on
+ * A Meko URL and key an older Present kept in config.json: Meko's Meko Cloud link (or the Meko on
  * this computer) is used instead, so a key there is removed rather than left behind.
  */
 function forgetOldKey(paths: Paths): void {
@@ -235,13 +235,13 @@ function forgetOldKey(paths: Paths): void {
 
 /**
  * `install --meko-url <url> --meko-key <key> [--non-interactive]`: what `meko extension install
- * present` runs. Neither is kept: Presenter asks `meko token --json` which Meko to use each time
+ * present` runs. Neither is kept: Present asks `meko token --json` which Meko to use each time
  * (Meko's Meko Cloud link, else the Meko on this computer).
  */
 function install(paths: Paths): void {
   mkdirSync(paths.home, { recursive: true, mode: 0o700 });
   forgetOldKey(paths);
-  console.log(`Presenter is set up in ${paths.home}. It saves decks where Meko says: its Meko Cloud link, else the Meko on this computer`);
+  console.log(`Present is set up in ${paths.home}. It saves decks where Meko says: its Meko Cloud link, else the Meko on this computer`);
   if (!onPath('claude')) console.log('Install Claude Code (claude) to build decks; playing and editing them work without it');
 }
 
@@ -254,7 +254,7 @@ async function uninstall(paths: Paths, args: string[]): Promise<void> {
   }
 }
 
-const HELP = `meko present: Presenter, interactive, branching presentations from Meko datapacks
+const HELP = `meko present: Present, interactive, branching presentations from Meko datapacks
 
   meko present serve        run the server in the foreground
   meko present start        start the server in the background

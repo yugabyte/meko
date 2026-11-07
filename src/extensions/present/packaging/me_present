@@ -1,5 +1,5 @@
 #!/bin/sh
-# Presenter's launcher, in a release as present-<version>/bin/me_present. Meko installs releases
+# Present's launcher, in a release as present-<version>/bin/me_present. Meko installs releases
 # as <Meko's data folder>/extensions/present/app/<version>, with app/current pointing at the one in
 # use (meko extension install, meko extension update), and runs it for `meko present <command>`.
 #

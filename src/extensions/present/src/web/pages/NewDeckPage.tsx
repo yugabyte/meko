@@ -1,5 +1,5 @@
 // New deck: pick the datapacks to draw from (content can be any datapack; templates and animations
-// are Presenter's own), write the brief, and Claude drafts the story map.
+// are Present's own), write the brief, and Claude drafts the story map.
 
 import { ArrowRight } from 'lucide-react';
 import { useEffect, useState } from 'react';

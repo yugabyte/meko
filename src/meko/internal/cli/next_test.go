@@ -21,7 +21,7 @@ func TestNextSteps(t *testing.T) {
 	share := [2]string{"meko cloud-link", "share with your team through Meko Cloud"}
 	addAgentK := [2]string{"meko extension install agentk", "add AgentK, which runs coding agents from task to merged PR"}
 	openAgentK := [2]string{"meko kode ui", "open AgentK"}
-	openPresent := [2]string{"meko ui", "open the web UI, then Presenter in its sidebar"}
+	openPresent := [2]string{"meko ui", "open the web UI, then Present in its sidebar"}
 	status := [2]string{"meko status", "check on Meko at any time"}
 	statusInstall := [2]string{"meko status", "check on Meko at any time · meko uninstall removes it"}
 	for _, c := range []struct {
@@ -37,12 +37,12 @@ func TestNextSteps(t *testing.T) {
 			s.agentK, s.added = true, "agentk"
 			return s
 		}(), nextInstall, [][2]string{openAgentK, connect, learn, share, statusInstall}},
-		{"install, Presenter just added", func() nextState {
+		{"install, Present just added", func() nextState {
 			s := done
 			s.added = "present"
 			return s
 		}(), nextInstall, [][2]string{openPresent, openAgentK, statusInstall}},
-		{"install, Presenter just added, AgentK not installed", func() nextState {
+		{"install, Present just added, AgentK not installed", func() nextState {
 			s := fresh
 			s.added = "present"
 			return s
@@ -102,8 +102,19 @@ func TestExtensionState(t *testing.T) {
 		{stepOK, "running", "AgentK 0.2", " (%s)", stepOK, "running (AgentK 0.2)"},
 		{stepFail, "not running", "", ", %s", stepFail, "not running"},
 	} {
-		if k, got := extensionState("AgentK", c.k, c.state, c.line, c.format); k != c.wantK || got != c.want {
+		if k, got := extensionState("agentk", c.k, c.state, c.line, c.format); k != c.wantK || got != c.want {
 			t.Errorf("%q: got %v %q, want %v %q", c.line, k, got, c.wantK, c.want)
+		}
+	}
+}
+
+// Present's row drops its title from the headline, and the old title Presenter, which a release
+// from before the rename still prints.
+func TestExtensionStateOldTitle(t *testing.T) {
+	for _, line := range []string{"✓ Present 0.2 is running (pid 7, up 2h)", "✓ Presenter 0.2 is running (pid 7, up 2h)"} {
+		k, got := extensionState("present", stepOK, "running", line, ", %s")
+		if k != stepOK || got != "0.2 is running (pid 7, up 2h)" {
+			t.Errorf("%q: got %v %q", line, k, got)
 		}
 	}
 }

@@ -13,24 +13,24 @@ describe('meko present status, laid out as meko status', () => {
       '  ✓ Server          healthy',
       '  ✓ Claude Code     installed',
       '',
-      '  ● Presenter 0.20261103.4 is running · pid 4242, up 4m3s',
+      '  ● Present 0.20261103.4 is running · pid 4242, up 4m3s',
       '',
-      '  Pages  meko ui, then Presenter',
+      '  Pages  meko ui, then Present',
       '  Home   /home/alice/.meko/extensions/present',
       '',
       'Next:',
-      '  meko ui    open the web UI, then Presenter',
+      '  meko ui    open the web UI, then Present',
     ]);
     expect(runs(facts())).toBe(true);
   });
 
   it('says when it is stopped or not answering, and what to run', () => {
     const stopped = statusLines(facts({ pid: null, answers: false, claude: false }), false, true);
-    expect(stopped.slice(0, 3)).toEqual(['  ! Claude Code     not found: install it to build decks', '', "  ✗ Presenter 0.20261103.4 isn't running"]);
-    expect(stopped.slice(-2)).toEqual(['Next:', '  meko present start    start Presenter']);
+    expect(stopped.slice(0, 3)).toEqual(['  ! Claude Code     not found: install it to build decks', '', "  ✗ Present 0.20261103.4 isn't running"]);
+    expect(stopped.slice(-2)).toEqual(['Next:', '  meko present start    start Present']);
     const silent = statusLines(facts({ answers: false }), false, true);
     expect(silent[0]).toBe('  ✗ Server          not answering on its socket');
-    expect(silent).toContain("  ✗ Presenter 0.20261103.4 isn't answering · pid 4242");
+    expect(silent).toContain("  ✗ Present 0.20261103.4 isn't answering · pid 4242");
     expect(silent).toContain('  Logs   /home/alice/.meko/extensions/present/logs/server.log');
     expect(runs(facts({ answers: false }))).toBe(false);
     // start returns at once while that pid runs, so the next step is to stop it first.
@@ -44,17 +44,17 @@ describe('meko present status, laid out as meko status', () => {
   it("colors by Meko's roles: marks, a bold headline with a dim note, dim labels, and the call to action", () => {
     const lines = statusLines(facts(), true, true);
     expect(lines[0]).toBe('  \x1b[32m✓\x1b[0m Server          healthy');
-    expect(lines[3]).toBe('  \x1b[32m●\x1b[0m \x1b[1mPresenter 0.20261103.4 is running\x1b[0m\x1b[2m · pid 4242, up 4m3s\x1b[0m');
-    expect(lines[5]).toBe('  \x1b[2mPages\x1b[0m  meko ui, then Presenter');
-    expect(lines.at(-1)).toBe(' \x1b[1;97;44m meko ui \x1b[0m   open the web UI, then Presenter');
+    expect(lines[3]).toBe('  \x1b[32m●\x1b[0m \x1b[1mPresent 0.20261103.4 is running\x1b[0m\x1b[2m · pid 4242, up 4m3s\x1b[0m');
+    expect(lines[5]).toBe('  \x1b[2mPages\x1b[0m  meko ui, then Present');
+    expect(lines.at(-1)).toBe(' \x1b[1;97;44m meko ui \x1b[0m   open the web UI, then Present');
   });
 });
 
 describe('meko present status off a terminal', () => {
   it('starts with the headline Meko reads, for a Meko from before MEKO_SUMMARY', () => {
-    // A row first would give an older Meko its mark: a stopped Presenter read as ✓ (Claude Code installed).
+    // A row first would give an older Meko its mark: a stopped Present read as ✓ (Claude Code installed).
     const stopped = statusLines(facts({ pid: null, answers: false }), false, false);
-    expect(stopped.slice(0, 3)).toEqual(["✗ Presenter 0.20261103.4 isn't running", '', '  ✓ Claude Code     installed']);
+    expect(stopped.slice(0, 3)).toEqual(["✗ Present 0.20261103.4 isn't running", '', '  ✓ Claude Code     installed']);
     expect(statusLines(facts(), false, false).slice(2)).toEqual(statusLines(facts(), false, true));
   });
 
@@ -64,11 +64,11 @@ describe('meko present status off a terminal', () => {
   });
 });
 
-describe('the headline meko status shows in its Presenter row (MEKO_SUMMARY=1)', () => {
+describe('the headline meko status shows in its Present row (MEKO_SUMMARY=1)', () => {
   it('is one marked line, never colored, as before', () => {
-    expect(headline(facts())).toBe('✓ Presenter 0.20261103.4 is running (pid 4242, up 4m3s)');
-    expect(headline(facts({ answers: false }))).toBe("✗ Presenter 0.20261103.4 isn't answering (pid 4242)");
-    expect(headline(facts({ pid: null, answers: false }))).toBe("✗ Presenter 0.20261103.4 isn't running");
+    expect(headline(facts())).toBe('✓ Present 0.20261103.4 is running (pid 4242, up 4m3s)');
+    expect(headline(facts({ answers: false }))).toBe("✗ Present 0.20261103.4 isn't answering (pid 4242)");
+    expect(headline(facts({ pid: null, answers: false }))).toBe("✗ Present 0.20261103.4 isn't running");
   });
 });
 

@@ -130,7 +130,7 @@ describe('a deck in its datapack', () => {
   it.each([
     ['the Meko that has its datapack', true, /saved in Meko Cloud \(mcp\.meko\.example\).*Link Meko to Meko Cloud \(mcp\.meko\.example\) again/],
     ['the Meko on this computer, when the Meko it\'s opened under hasn\'t its datapack', false, null],
-  ])('gives a draft from before Presenter kept its Meko %s', async (_n, cloudHasIt, refusedLocally) => {
+  ])('gives a draft from before Present kept its Meko %s', async (_n, cloudHasIt, refusedLocally) => {
     meko.where = null;
     const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
     const d = await decks.create({ title: 'Untagged', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
@@ -189,7 +189,7 @@ describe('a deck in its datapack', () => {
     const cloud: MekoAt = { kind: 'cloud', host: 'cloud.meko.example' };
     const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
     const d = await decks.create({ title: 'Mislabeled', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
-    // An earlier Meko led an earlier Presenter to tag it so.
+    // An earlier Meko led an earlier Present to tag it so.
     const stateFile = join(dir, 'home', 'decks', d.id, 'state.json');
     writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, 'utf8')), meko: cloud }));
     const fresh = new DeckStore(getPaths(join(dir, 'home')), meko);

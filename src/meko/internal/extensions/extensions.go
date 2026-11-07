@@ -9,7 +9,7 @@
 // RestartArgs, CheckArgs, BusyArgs, RemoveArgs and UninstallArgs; and its launcher, which hands the commands in
 // Probation to meko _launch. Every command Meko runs of an extension gets MEKO_HOME set to Meko's
 // data folder, so the extension knows where its own folder in it is (Dir). AgentK's program is
-// me_kode; Presenter's me_present. Their names start with me_, so a process list and the services
+// me_kode; Present's me_present. Their names start with me_, so a process list and the services
 // say they're Meko's. Neither is a command on PATH: people run them through Meko, as meko kode and
 // meko present (Catalog.Verb), which runs the registered program.
 package extensions
@@ -44,7 +44,7 @@ var Known = map[string]Catalog{
 		Title: "AgentK",
 		Description: "Runs Claude Code, OpenCode and Kiro sessions across your projects, from task to merged PR, " +
 			"with Meko as their shared memory.",
-		Summary: "runs coding agents across your projects, from task to merged PR",
+		Summary: "agentic development — reviews, PRs, refactors",
 		Command: "me_kode",
 		Verb:    "kode",
 		// Its names before, newest first: me_koder, agentk, and agent-k-local before the rename to
@@ -72,12 +72,14 @@ var Known = map[string]Catalog{
 		// Its own [update] channel = "off" keeps Update automatically off until it's turned on.
 		LegacyUpdatesOff: "config.toml",
 	},
-	// Presenter (extensions/present): interactive, branching presentations built from datapacks.
+	// Present (extensions/present): interactive, branching presentations built from datapacks.
 	// Its program is me_present. Its releases (present-v<version>) carry
 	// present-<version>-<os>-<arch>.tar.gz and SHA256SUMS. A build from source on PATH is used as
 	// it is, and never updated.
 	"present": {
-		Title: "Presenter",
+		Title: "Present",
+		// An older release still says Presenter in its status headline.
+		OldTitles: []string{"Presenter"},
 		Description: "Builds presentations that branch with the room from your datapacks: Claude drafts the story " +
 			"map and the slides, and you pick each path live.",
 		Summary:       "presentations that branch with the room, built from your datapacks",
@@ -115,7 +117,10 @@ func (c Catalog) UserCommand(args string) string {
 
 // Catalog says how to find and install a known extension.
 type Catalog struct {
-	Title       string
+	Title string
+	// OldTitles are names it was shown by before, which an older release still prints in its own
+	// output, such as the status headline meko status shows without the title (Present: Presenter).
+	OldTitles   []string
 	Description string   // what it does, in a sentence, for the web UI's Extensions page
 	Summary     string   // what it does, in a few lowercase words, for meko install's picker
 	Command     string   // the program's name: a release's bin/<Command>, or a build from source's on PATH

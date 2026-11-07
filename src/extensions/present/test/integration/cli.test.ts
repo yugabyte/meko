@@ -47,7 +47,7 @@ describe('the commands Meko runs', () => {
   });
 
   it.each([
-    ['removes a Meko URL and key an older Presenter kept, and the file with nothing else in it', { meko: { url: 'https://meko.example.com/mcp', key: 'tok' } }, null],
+    ['removes a Meko URL and key an older Present kept, and the file with nothing else in it', { meko: { url: 'https://meko.example.com/mcp', key: 'tok' } }, null],
     ['keeps the rest of config.json, readable only by this user', { meko: { url: 'https://meko.example.com/mcp', key: 'tok' }, other: 1 }, { other: 1 }],
   ])('%s', (_n, before, after) => {
     mkdirSync(home, { recursive: true });
@@ -64,23 +64,23 @@ describe('the commands Meko runs', () => {
   it('starts, says it runs, and stops', () => {
     expect(present('status').code).toBe(3);
     const start = present('start');
-    expect(start.out, readFileSync(join(home, 'logs', 'server.log'), 'utf8')).toContain('Presenter started');
+    expect(start.out, readFileSync(join(home, 'logs', 'server.log'), 'utf8')).toContain('Present started');
     expect(statSync(getPaths(home).webSock).isSocket()).toBe(true);
     expect(statSync(join(home, 'run')).mode & 0o077).toBe(0);
     const status = present('status');
     // Off a terminal, the headline first, for a Meko from before MEKO_SUMMARY, then the layout.
-    expect([status.code, status.out]).toEqual([0, expect.stringMatching(/^✓ Presenter \S+ is running \(pid \d+, up \d+s\)\n\n {2}✓ Server {10}healthy\n[^]*\n {2}● Presenter \S+ is running · pid \d+, up \d+s\n/)]);
-    // Run by meko status, the one headline line its Presenter row shows.
-    expect(presentWith({ MEKO_SUMMARY: '1' }, 'status').out).toMatch(/^✓ Presenter \S+ is running \(pid \d+, up \d+s\)\n$/);
-    expect(present('stop').out).toContain('Presenter stopped');
+    expect([status.code, status.out]).toEqual([0, expect.stringMatching(/^✓ Present \S+ is running \(pid \d+, up \d+s\)\n\n {2}✓ Server {10}healthy\n[^]*\n {2}● Present \S+ is running · pid \d+, up \d+s\n/)]);
+    // Run by meko status, the one headline line its Present row shows.
+    expect(presentWith({ MEKO_SUMMARY: '1' }, 'status').out).toMatch(/^✓ Present \S+ is running \(pid \d+, up \d+s\)\n$/);
+    expect(present('stop').out).toContain('Present stopped');
     expect(existsSync(join(home, 'run', 'server.pid'))).toBe(false);
   });
 
   it("prints one row of Meko's summary when meko start and meko stop run it", () => {
-    expect(presentWith({ MEKO_SUMMARY: '1' }, 'start').out).toBe('  ✓ Presenter       started\n');
-    expect(presentWith({ MEKO_SUMMARY: '1' }, 'start').out).toBe('  ✓ Presenter       running\n');
-    expect(presentWith({ MEKO_SUMMARY: '1' }, 'stop').out).toBe('  ✓ Presenter       stopped\n');
-    expect(presentWith({ MEKO_SUMMARY: '1' }, 'stop').out).toBe("  ✓ Presenter       wasn't running\n");
+    expect(presentWith({ MEKO_SUMMARY: '1' }, 'start').out).toBe('  ✓ Present         started\n');
+    expect(presentWith({ MEKO_SUMMARY: '1' }, 'start').out).toBe('  ✓ Present         running\n');
+    expect(presentWith({ MEKO_SUMMARY: '1' }, 'stop').out).toBe('  ✓ Present         stopped\n');
+    expect(presentWith({ MEKO_SUMMARY: '1' }, 'stop').out).toBe("  ✓ Present         wasn't running\n");
   });
 
   it('starts the server through a release\'s launcher, which hands it to Meko\'s', () => {
@@ -88,14 +88,14 @@ describe('the commands Meko runs', () => {
     const launcher = join(dir, 'launcher');
     writeFileSync(launcher, `#!/bin/sh\necho "$@" >> "${join(dir, 'launched')}"\nexec "${process.execPath}" --import tsx "${CLI}" "$@"\n`);
     chmodSync(launcher, 0o755);
-    expect(presentWith({ PRESENT_LAUNCHER: launcher }, 'start').out).toContain('Presenter started');
+    expect(presentWith({ PRESENT_LAUNCHER: launcher }, 'start').out).toContain('Present started');
     expect(readFileSync(join(dir, 'launched'), 'utf8')).toBe('serve\n');
     expect(present('status').code).toBe(0);
   });
 
   it('says no talk is live when the server isn\'t running, or is but has no talk', () => {
     expect(present('_busy').code).toBe(1);
-    expect(present('start').out).toContain('Presenter started');
+    expect(present('start').out).toContain('Present started');
     expect(present('_busy')).toEqual({ code: 1, out: 'No presentation is live\n' });
   });
 
@@ -125,7 +125,7 @@ describe('the commands Meko runs', () => {
     try {
       mkdirSync(join(home, 'run'), { recursive: true });
       writeFileSync(join(home, 'run', 'server.pid'), String(other.pid));
-      expect(present('stop').out).toContain('Presenter isn\'t running');
+      expect(present('stop').out).toContain('Present isn\'t running');
       await new Promise((r) => setTimeout(r, 200));
       expect(other.exitCode === null && other.signalCode === null).toBe(true);
     } finally {

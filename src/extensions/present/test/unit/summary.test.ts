@@ -3,7 +3,7 @@ import { forMekoSummary, summaryRow } from '../../src/server/summary.js';
 
 describe('summaryRow', () => {
   it("prints the row in Meko's format: two spaces, the mark, the title padded to 15, the text", () => {
-    expect(summaryRow('✓', 'Presenter', 'started', false)).toBe('  ✓ Presenter       started');
+    expect(summaryRow('✓', 'Present', 'started', false)).toBe('  ✓ Present         started');
     expect(summaryRow('✗', 'AgentK', "didn't start", false)).toBe("  ✗ AgentK          didn't start");
   });
 

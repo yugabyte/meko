@@ -1,11 +1,11 @@
 // Runs Claude Code headless for a deck: one persisted session per deck, which every job continues
 // (`--session-id` the first time, `--resume` after, `--fork-session` for jobs that run side by side),
-// with all of Claude's tools and the user's own MCP servers, plus Meko under Presenter's own name.
+// with all of Claude's tools and the user's own MCP servers, plus Meko under Present's own name.
 // The answer must match a JSON schema; what Claude does on the way streams in as activity.
 
 import { spawn } from 'node:child_process';
 
-/** The name Meko gets in the MCP config Presenter passes, beside the user's own servers. */
+/** The name Meko gets in the MCP config Present passes, beside the user's own servers. */
 export const MEKO_SERVER = 'present_meko';
 /** The environment variable the MCP config reads Meko's key from, so it's never on the command line. */
 export const MEKO_KEY_ENV = 'PRESENT_MEKO_KEY';

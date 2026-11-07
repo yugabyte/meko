@@ -317,7 +317,7 @@ async function status(): Promise<void> {
     // Meko runs it so (MEKO_SUMMARY=1) for meko status's AgentK row, and an update deciding whether
     // to restart AgentK: the headline alone, which needs only the server's answer and the lease, so
     // the rest isn't read inside meko status's 3 s. Meko reads the exit code: 3 when no server runs
-    // this home, as Presenter's. One holding the lease that was only slow to answer runs.
+    // this home, as Present's. One holding the lease that was only slow to answer runs.
     const probe = await probing;
     const leasePid = heldLease(paths.lock)?.pid ?? null;
     console.log(headline({ version: version(), probe, leasePid, now: Date.now() }));
@@ -371,7 +371,7 @@ async function status(): Promise<void> {
     ? { color: true, mark: (k, m) => marks[k](m), bold: style.bold, dim: style.dim, link: style.link, cta: style.cta, blue: style.blue }
     : PLAIN;
   for (const line of formatStatus(facts, paint, process.stdout.isTTY === true)) console.log(line);
-  // 3 when no server runs this home, as Presenter's, and as above. One holding the lease that was
+  // 3 when no server runs this home, as Present's, and as above. One holding the lease that was
   // only slow to answer runs. (A Meko from before MEKO_SUMMARY reads this exit code.)
   if (!serverRuns(facts)) process.exitCode = 3;
 }

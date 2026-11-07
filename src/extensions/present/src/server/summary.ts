@@ -32,7 +32,7 @@ export function summaryRow(mark: Mark, title: string, text: string, color = colo
 
 /**
  * Whether Meko runs this command for its summary (MEKO_SUMMARY=1): `start` and `stop` then print
- * one row, and `status` only its headline, which `meko status` shows in Presenter's row.
+ * one row, and `status` only its headline, which `meko status` shows in Present's row.
  */
 export function forMekoSummary(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.MEKO_SUMMARY === '1';
