@@ -38,13 +38,10 @@ Part of the [Kode design](../design.md).
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
   node-pty (built from source: gcc-toolset-13 on Linux, Xcode's clang on macOS) and the web assets.
-  Each is published twice: as `kode-<version>-<platform>-<arch>.tar.gz` (in `kode-<version>/`;
-  `agentk-<version>-…` in `agentk-<version>/` before Meko called it Kode, which Meko still finds),
-  with `bin/me_kode`), and as `agent-k-local-<version>-…` (in `agent-k-local-<version>/`), the name
-  and layout that the updaters and installers from before the rename to Kode look for. An
-  updater from then skips any release without its name, so without the second copy those installs
-  would never update again. Both hold `bin/me_koder`, `bin/agentk` and `bin/agent-k-local`, links
-  to `bin/me_kode`, which the services installed then start. Meko reads only the new name. The copy goes a week after the first release that has it (#238): an install still on a release from before the rename by then needs a reinstall.
+  Each is published as `kode-<version>-<platform>-<arch>.tar.gz` (in `kode-<version>/`, with
+  `bin/me_kode`; `agentk-<version>-…` in `agentk-<version>/` before Meko called it Kode, which
+  Meko still finds). It holds `bin/me_koder` and `bin/agentk`, links to `bin/me_kode`, which
+  the services installed under those names start.
   Meko picks the tarball for its platform, and skips releases with no build for it. Releases
   since macOS support always include the macOS build: publishing waits for it. A hand-run rebuild
   takes only tags from after the move to `src/extensions/agentk`. Each release also includes
@@ -80,7 +77,6 @@ kode-<version>/
   bin/me_kode              launcher (packaging/me_kode), what `meko kode` runs: hands serve and host to Meko's launcher (meko _launch), which runs an update's probation and rollback
   bin/me_koder             a link to it, by its name before, which services installed then and older Mekos run
   bin/agentk               a link to it, by its name before me_koder, run the same way; the services' launcher falls back to it
-  bin/agent-k-local        a link to it, by its name before the rename to Kode
   node/bin/me_kode         bundled Node runtime, so Kode's processes are me_kode, not node
   node/bin/node            a link to it, which the MCP configs Kode writes for sessions name (tools.ts)
   lib/                     package.json, dist/, node_modules/, packaging/{systemd,launchd}/, scripts/deps.sh

@@ -16,9 +16,10 @@ that they were `me_koder-host.service` and `me_koder.service` (`com.yugabyte.me_
 (`com.yugabyte.agentk.host` and `com.yugabyte.agentk`), and until the rename to Kode `agent-k-local-host.service` and
 `agent-k-local.service` (`com.yugabyte.agent-k-local.host` and `com.yugabyte.agent-k-local`). A
 service installed under an old name keeps it: `service.ts` names whichever is installed, and an
-update doesn't touch the units, which start `service/me_koder`, `bin/agentk` or
-`bin/agent-k-local`: `bin/me_koder`, `bin/agentk` and `bin/agent-k-local` are links to
-`bin/me_kode` in every release since. `meko kode install` moves them to the new names
+update doesn't touch the units, which start `service/me_koder` or `bin/agentk`: `bin/me_koder` and
+`bin/agentk` are links to `bin/me_kode` in every release since. The program the units from before
+the rename to AgentK start isn't in releases since #515, so those need `meko kode install` after
+an update. `meko kode install` moves them to the new names
 (`dropOldNames`): the server's at once, since it restarts the server anyway, and the host's only
 while the host isn't running, since stopping it would end every session. Until the host stops, the
 server's new unit names the host by its old name. Only `install` moves them, never an update, so a

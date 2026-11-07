@@ -33,11 +33,12 @@ list and the services say it's a Meko extension's: the release's launcher (`bin/
 `meko kode` runs) and its Node (`node/bin/me_kode`), the systemd units (`me_kode.service`,
 `me_kode-host.service`) and the launchd labels (`com.yugabyte.me_kode`, `.host`). It was `me_koder`
 before, `agentk` before that, and `agent-k-local` before the rename to AgentK.
-What installs from before still have keeps working: every release also ships its tarball as
-`agent-k-local-<version>-…` (until #238), its `bin/me_koder`, `bin/agentk` and `bin/agent-k-local`
+What installs from before still have keeps working: every release's `bin/me_koder` and `bin/agentk`
 are links to `bin/me_kode` (`scripts/package-release.sh`), Meko's start removes the old
 `~/.local/bin` links (Kode never makes one: `src/server/cmdlink.ts`), and a service keeps its old
-name until `meko kode install` moves it (`dropOldNames` in `src/server/service.ts`). A Meko from
+name until `meko kode install` moves it (`dropOldNames` in `src/server/service.ts`). One from before
+the rename to AgentK is the exception: it starts a program releases since #515 don't have, so after
+an update it doesn't start until `meko kode install` moves it. A Meko from
 before Kode was called Kode knows it only as `agentk`: the launcher asks Meko which name it knows
 (`meko _launch --supported kode`), the page takes its `<base href>` from the path Meko serves it
 under (`X-Meko-Prefix`, else `/ext/agentk/`: `pageBase` in `src/server/server.ts`), and the home

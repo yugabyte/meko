@@ -5,15 +5,14 @@
 #
 # Expects `npm run build` and `npm prune --omit=dev` to have run in src/extensions/agentk, on the
 # platform the tarball is for (node-pty is compiled natively). Produces
-# <out-dir>/agentk-<version>-<linux|darwin>-<arch>.tar.gz containing:
+# <out-dir>/kode-<version>-<linux|darwin>-<arch>.tar.gz containing:
 #
-#   agentk-<version>/
+#   kode-<version>/
 #     bin/me_kode              POSIX sh wrapper (packaging/me_kode): the program `meko kode` runs
 #     bin/me_koder             a link to it: its name before, which services installed then, older
 #                              Mekos and their registries run
 #     bin/agentk               a link to it: its name before me_koder, run the same way, and the
 #                              services' launcher's fallback (every release has it)
-#     bin/agent-k-local        a link to it: its name before the rename to Kode, which older services start
 #     node/bin/me_kode         bundled Node runtime, named so its processes say they're Kode's
 #     node/bin/node            a link to it, which the MCP configs Kode writes for sessions name
 #     node/LICENSE
@@ -24,10 +23,6 @@
 #     lib/packaging/launchd/   service templates used by `meko kode install` (macOS)
 #     lib/scripts/deps.sh      the prerequisites check `meko kode install` runs first (git, curl, a coding agent; gh offered)
 #     VERSION
-#
-# and the same files as <out-dir>/agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz, in
-# agent-k-local-<version>/: the name and layout the updaters and installers from before the rename
-# look for, so those installs still update.
 set -eu
 
 if [ $# -ne 4 ]; then
@@ -66,7 +61,6 @@ cp "$repo/packaging/me_kode" "$root/bin/me_kode"
 chmod 755 "$root/bin/me_kode"
 ln -s me_kode "$root/bin/me_koder"
 ln -s me_kode "$root/bin/agentk"
-ln -s me_kode "$root/bin/agent-k-local"
 
 cp "$node_dir/bin/node" "$root/node/bin/me_kode"
 ln -s me_kode "$root/node/bin/node"
@@ -106,7 +100,4 @@ mkdir -p "$out_dir"
 tarball="$out_dir/$name-$platform-$arch.tar.gz"
 # COPYFILE_DISABLE keeps macOS tar from adding ._ metadata files.
 COPYFILE_DISABLE=1 tar -C "$stage" -czf "$tarball" "$name"
-old="agent-k-local-$version"
-mv "$root" "$stage/$old"
-COPYFILE_DISABLE=1 tar -C "$stage" -czf "$out_dir/$old-$platform-$arch.tar.gz" "$old"
 echo "$tarball"

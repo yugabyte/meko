@@ -549,8 +549,10 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   from then: its `extensions.json` entry stays, a name Meko no longer knows, which `meko start`
   still starts (and fails to) and `meko extension delete presenter` only forgets. Present's
   `docs/design.md` says how to clear it.
-- Kode's program's old names (`Catalog.OldCommands`: `me_koder`, `agentk`, `agent-k-local`)
-  stay in its releases' `bin/` as links, for the services and older Mekos that run them. A version
+- Kode's program's old names (`Catalog.OldCommands`: `me_koder`, `agentk`, `agent-k-local`).
+  Its releases' `bin/` has the first two as links, for the services and older Mekos that run them;
+  the last stays in `OldCommands` only so registry entries and `~/.local/bin` links by that name
+  are still found and moved. A version
   unpacked before a rename has only its old name: before Meko stages a version or points
   `app/current` at one (an install, an update, a rollback), and at its start for every installed
   one, it adds `bin/<program>` as a link to the old name (`update.App.Adopt`). At its start, once
