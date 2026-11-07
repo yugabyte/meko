@@ -14,12 +14,12 @@ short summary: a row per step marked ✓, ! or ✗, a `● Meko <version> is run
 link rows for people (`Web UI`, on 7777), for agents (`Agents`: MCP and the REST API, on 7778) and
 the Meko Cloud it's linked to (`Cloud`: its web app, or "not linked"), and what to run next, the
 first command as the call to action. A first install from the installer ends, before that, by
-offering the extensions to add. What to run next (`meko install`, `meko start`, `meko --help`, `meko status`, `meko cloud_link`
+offering the extensions to add. What to run next (`meko install`, `meko start`, `meko --help`, `meko status`, `meko cloud-link`
 and `meko agent connect <agent>`) offers only what isn't set up yet,
 and leaves out a step whose state it can't read. In order: `meko ui` (`meko ui start` while the web
 UI is off), using Meko in an agent (`meko agent connect claude`, or the first agent installed when
 Claude Code isn't), learning from your conversations (`meko memory-extractor use claude`, when
-Claude Code is installed), sharing through Meko Cloud (`meko cloud_link`), and AgentK (`meko
+Claude Code is installed), sharing through Meko Cloud (`meko cloud-link`), and AgentK (`meko
 extension install agentk`, or `me_koder ui` once it's there; an extension the install's picker just
 added comes first), and `install` and `start` end with `meko status` (`install`'s naming `meko
 uninstall` too). `meko agent connect <agent>` opens with starting a
@@ -43,7 +43,7 @@ the connect step.
 | `meko agent connect [claude\|codex\|kiro\|opencode\|cursor]` | Add Meko's MCP server, named `meko`, to Claude Code (at user scope), Codex, Kiro CLI, OpenCode or Cursor, for all your projects, replacing one it has: at this Meko with its token, linked to Meko Cloud or not. Alone, it prints what any MCP client needs (Streamable HTTP, this Meko's URL, `Authorization: Bearer <token>`) and the agents installed. How it adds itself to each is in [api.md](api.md#agents) |
 | `meko agent disconnect claude\|codex\|kiro\|opencode\|cursor` | Remove the agent's `meko` MCP server when it's this computer's; one pointing elsewhere (Meko Cloud included) is left as it is |
 | `meko token [--json]` | The token MCP and REST clients send; `--json` the MCP URL, the web UI's URL, the token, and whether Meko Cloud is linked (never its key), with `datapack_routing` for older extensions ([cloud.md](cloud.md#what-extensions-see)) |
-| `meko cloud_link [--url U] [--web-url W] [--api-url A] [--no-browser] [--off]` | Link Meko Cloud (or another Meko server). On a terminal it asks how, picked with ↑ and ↓ and Enter, or 1 or 2 at once (an Enter typed just after the number is dropped, so the key prompt doesn't take it; Ctrl+C cancels; a terminal whose settings can't be changed to read a key at a time is asked for a line, `1` or `2`, instead): sign in with the browser (the default; it opens the browser, or with `--no-browser` prints the address, and takes the address the browser ended on, pasted, when the browser is on another computer), or enter an API key. Piped, it reads the key from stdin. It checks the key and saves it, then says `✓ Linked to <url>` and what to run next; `--off` unlinks. While linked, Meko's `/mcp`, the extensions and `meko-cli` work on Meko Cloud's datapacks, and on the ones already on this Meko until they're moved; agents stay connected to this Meko. The web UI's Settings › Meko Cloud does the same. A change moves back the agents an older Meko connected to Meko Cloud, with a line saying which moved and which couldn't |
+| `meko cloud-link [--url U] [--web-url W] [--api-url A] [--no-browser] [--off]` | Link Meko Cloud (or another Meko server). On a terminal it asks how, picked with ↑ and ↓ and Enter, or 1 or 2 at once (an Enter typed just after the number is dropped, so the key prompt doesn't take it; Ctrl+C cancels; a terminal whose settings can't be changed to read a key at a time is asked for a line, `1` or `2`, instead): sign in with the browser (the default; it opens the browser, or with `--no-browser` prints the address, and takes the address the browser ended on, pasted, when the browser is on another computer), or enter an API key. Piped, it reads the key from stdin. It checks the key and saves it, then says `✓ Linked to <url>` and what to run next; `--off` unlinks. While linked, Meko's `/mcp`, the extensions and `meko-cli` work on Meko Cloud's datapacks, and on the ones already on this Meko until they're moved; agents stay connected to this Meko. The web UI's Settings › Meko Cloud does the same. A change moves back the agents an older Meko connected to Meko Cloud, with a line saying which moved and which couldn't |
 | `meko extension` | Alone, list its commands: `list`, `install`, `update` and `delete` (exits 2). |
 | `meko extension list [--json]` | A row for each extension Meko knows, installed or not: its state (running, not running, didn't answer in 3s, damaged, not installed), the release Meko installed, and whether Meko installs its updates on its own and a newer one waits. It needs no running server. A damaged extension is registered, but its command is missing and can't be found again; `--json` prints the rows with what the Extensions page shows of their updates |
 | `meko extension install agentk [--version V] [-- <options>]` | Install AgentK's newest release (or V) pointed at this Meko, as the command `me_koder`; `meko start` and `stop` then run it too, and the web UI's port serves it at `/ext/agentk/`. What follows `--` goes to AgentK's install: `--agent claude\|opencode\|kiro`, `--install-deps`, `--no-install-deps` |
@@ -75,7 +75,7 @@ SQLite's locking doesn't work over the network; `meko status --verbose` prints w
 `[web] port` (default 7777) and `access` in `config.toml`. `search`, `add_memory`, `upload` and
 `upload_status` take `--datapack NAME|ID`, and use
 the default datapack without it. Meko makes the default datapack only on first start, so once
-it's deleted, they need `--datapack`. While Meko Cloud is linked (`meko cloud_link`), they work on
+it's deleted, they need `--datapack`. While Meko Cloud is linked (`meko cloud-link`), they work on
 its datapacks and on the ones already on this computer, as agents do: a name is looked up among
 both, a datapack this computer has is used here, and the default is Meko Cloud's. `export` works
 only on this computer's datapacks, linked or not, and never asks Meko Cloud, so it works while

@@ -149,12 +149,12 @@ var mekoCommands = []command{
 			{"meko token", "the token MCP and REST clients send (Authorization: Bearer <token>)"},
 			{"meko token --json", "the MCP URL, the token, whether Meko runs and the Meko Cloud link"},
 		}},
-	{name: "cloud_link", group: "Connect", summary: "Link Meko Cloud, or unlink it",
-		usage: "meko cloud_link [flags]", examples: []example{
-			{"meko cloud_link", "link Meko Cloud for the extensions: sign in with your browser, or enter an API key"},
-			{"echo \"$KEY\" | meko cloud_link", "link with the API key on stdin"},
-			{"meko cloud_link --off", "unlink it: the extensions use this Meko"},
-			{"meko cloud_link --url https://meko.example.com/mcp", "link another Meko server"},
+	{name: "cloud-link", group: "Connect", summary: "Link Meko Cloud, or unlink it",
+		usage: "meko cloud-link [flags]", examples: []example{
+			{"meko cloud-link", "link Meko Cloud for the extensions: sign in with your browser, or enter an API key"},
+			{"echo \"$KEY\" | meko cloud-link", "link with the API key on stdin"},
+			{"meko cloud-link --off", "unlink it: the extensions use this Meko"},
+			{"meko cloud-link --url https://meko.example.com/mcp", "link another Meko server"},
 		}},
 	{name: groupExtension, subcommands: true, summary: "List, install, update and delete Meko's extensions",
 		usage: "meko extension list|install|update|delete [<name>] [flags]", examples: []example{
