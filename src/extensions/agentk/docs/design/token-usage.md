@@ -187,7 +187,7 @@ If that command is Meko's `meko-statusline.sh`, only the command it wraps (`--in
 `MEKO_INNER_STATUSLINE`) runs: Meko's "Meko: <datapack>" suffix would repeat what the session
 screen already shows, since sessions always use the project's datapack.
 AgentK's mod reports the same windows after each turn (`session.measure`), whatever the status line does.
-All sessions share one account, so reports are merged per window: a window that has reset is
+All sessions use one account, since Claude Code's login is the machine's, so reports are merged per window: a window that has reset is
 ignored, a later window replaces an earlier one, and a report missing a window keeps the last one.
 Within a window, what counts is whether the reading is new: the server keeps each session's last
 reading of each window (a report without a window keeps the last one of it). A reading that rose
@@ -197,7 +197,21 @@ smaller fall is taken for two status line runs that reached the server out of or
 in the background), so it changes nothing; a smaller reset shows with the session's next reading.
 A repeat changes nothing, so an idle session re-running its status line with an old reading can't
 pull the number back. A session's first reading only raises the number, since it may be old.
-The reading and each session's last one are kept in the `kv` table (`plan_limits`, `plan_limits_seen`; a session's is dropped once its windows reset), so they hold across a restart. The rail shows the plan limits as a row per agent, led by its
+A sign-in to another Claude account (`/login` in any session, or `claude auth login`) starts
+afresh: otherwise the old account's numbers would win whenever its window resets later. Neither the
+status line nor the mod says which account a reading came from, so the server reads the signed-in
+one from `oauthAccount` in Claude Code's `.claude.json` (`claudeAccount` in `trust.ts`: the account
+and organization ids, parsed again only when the file changes) when a reading arrives and when the
+rail's state is built. When it changes, the reading and each session's last one are dropped, and
+the rail shows no Claude limits until the new account reports. Nothing watches the file, so the
+old numbers go with the next state update (any session activity), not the moment of the sign-in.
+Signing out isn't a change: the next sign-in is. The first account the server learns (after an
+upgrade) starts afresh too when it has limits, since they may be from an account used before it.
+Each running Claude switches to the new login on its next request, but until its next reply its
+status line keeps showing the old account's reading. So each session's last reading from before
+the switch is kept, and a window equal to it is ignored until that window resets, even when it
+arrives after the session's first new reading (status line runs can arrive out of order).
+The reading, each session's last one, the account and the pre-switch readings are kept in the `kv` table (`plan_limits`, `plan_limits_seen`, `plan_limits_account`, `plan_limits_before`; a session's readings are dropped once their windows reset), so they hold across a restart. The rail shows the plan limits as a row per agent, led by its
 logo: Claude's row has a ring for each window side by side (the percent in the middle, blue,
 amber at 80% and red at 95%, its name marked ▲ when amber or red), with its name and reset time
 beside it. A window disappears once its reset time passes. The numbers only move when a session

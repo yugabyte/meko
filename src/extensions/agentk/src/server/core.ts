@@ -28,6 +28,7 @@ import { kiroDeletesSettled } from './kiro.js';
 import { openCodeDeletesSettled } from './opencode.js';
 import { KIRO_PLAN_EVERY_MS, KiroPlanStore } from './kiroplan.js';
 import { PlanLimitsStore } from './limits.js';
+import { claudeAccount } from './trust.js';
 import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
@@ -291,7 +292,7 @@ export class Core extends EventEmitter {
     });
     this.tools = new SessionTools(this);
     this.reviews = new CodeReviews(this);
-    this.limits = new PlanLimitsStore(this.db, () => this.changed());
+    this.limits = new PlanLimitsStore(this.db, () => this.changed(), claudeAccount);
     this.kiroPlan = new KiroPlanStore({
       db: this.db,
       available: () => this.harnesses.of('kiro').status(this.cfg).available,
