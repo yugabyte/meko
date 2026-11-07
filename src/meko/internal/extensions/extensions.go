@@ -129,7 +129,7 @@ type Catalog struct {
 	// output, such as the status headline meko status shows without the title (Present: Presenter).
 	OldTitles   []string
 	Description string // what it does, in a sentence, for the web UI's Extensions page
-	Summary     string // what it does, in a few lowercase words, for meko install's picker, which skips one without
+	Summary     string // what it does, in a few lowercase words, for meko install's picker; without one, it isn't offered
 	Command     string // the program's name: a release's bin/<Command>, or a build from source's on PATH
 	Verb        string // the meko command that runs it: meko <Verb> <its command>
 	// OldNames are the names Meko knew it by before, newest first (Kode's agentk). An entry

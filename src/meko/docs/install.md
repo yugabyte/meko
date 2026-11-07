@@ -12,9 +12,9 @@ working, its Meko features skipping or retrying.
 curl -fsSL https://mekodata.ai/install.sh | sh
 ```
 
-A first install at a terminal ends by asking which extension to add (Kode, Present, or none),
-and runs `meko extension install <name>` for the one picked; `meko extension install kode` adds
-one at any time.
+A first install at a terminal ends by asking whether to add Kode (or none), and runs `meko
+extension install kode` when it's picked; `meko extension install kode` or `meko extension
+install present` adds one at any time.
 
 `mekodata.ai/install.sh` is a 302 redirect, set on the website, to
 `https://github.com/yugabyte/meko/releases/latest/download/install.sh`. Meko's releases are the
