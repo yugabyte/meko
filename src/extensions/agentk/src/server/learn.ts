@@ -261,8 +261,6 @@ interface Job {
   similar: SimilarMemory[][];
   /** Meko's open questions on the datapack, as offered to the fork (its numbers are their places, from 1). */
   questions: { key: string; query: string }[];
-  /** The session's Meko conversation, which the questions were read for and its marks are made in (null when Meko didn't give it). */
-  conversation: string | null;
   saves: number;
   updates: number;
   skips: number;
@@ -470,7 +468,7 @@ export class Learner {
       if (job) this.fail(job, job.step, TIMED_OUT[job.step]);
     }, Math.max(0, this.timeoutMs - spentMs));
     timer.unref?.();
-    const job: Job = { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions: [], conversation: null, saves: 0, updates: 0, skips: 0, tried: 0, taught: 0, dismissed: 0, timer };
+    const job: Job = { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions: [], saves: 0, updates: 0, skips: 0, tried: 0, taught: 0, dismissed: 0, timer };
     this.jobs.set(id, job);
     this.core.log.info(`saving what ${row.id} learned to ${dp.name} through Kode's mod`);
     void (async () => {
@@ -479,7 +477,6 @@ export class Learner {
       // Closed meanwhile (timed out, the turn was interrupted, or the session went): nothing to hand the mod.
       if (this.jobs.get(id) !== job) return;
       job.questions = questions;
-      job.conversation = conversation;
       run(this.db, 'UPDATE meko_learns SET questions = ? WHERE id = ?', questions.length, id);
       this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id, dp.id), questions) });
     })().catch((e: unknown) => {
@@ -570,19 +567,19 @@ export class Learner {
               job.skips++;
               // Meko already says it: the questions it answers are duplicates of what Meko has.
               const known = (job.similar[i] ?? []).find((m) => m.id === d.id);
-              await this.markQuestions(job, questions, { state: 'dismissed', memoryId: known?.id ?? null });
+              await this.markQuestions(job, conv, questions, { state: 'dismissed', memoryId: known?.id ?? null });
             } else if (target) {
               written = d.text && !machineSpecific(d.text, local) ? d.text : written;
               await this.core.meko.updateMemory(target.id, written, job.datapack.id, target.agentId, conv);
               job.updates++;
-              await this.markQuestions(job, questions, { state: 'taught', text: written, memoryId: target.id });
+              await this.markQuestions(job, conv, questions, { state: 'taught', text: written, memoryId: target.id });
             } else {
               await this.core.meko.addMemory(written, job.datapack.id, agent, conv, {
                 source: 'agent-k-local', kind: 'learned', fact: f.kind, component: f.component || null, session: row.id, learn: job.id,
                 ...(questions.length ? { questions: questions.map((q) => q.query) } : {}),
               });
               job.saves++;
-              await this.markQuestions(job, questions, { state: 'taught', text: written });
+              await this.markQuestions(job, conv, questions, { state: 'taught', text: written });
             }
             this.cover(job, written);
           } catch (e) {
@@ -601,18 +598,19 @@ export class Learner {
 
   /**
    * Marks the questions a fact answers taught or dismissed on Meko's Context Gaps, in the session's
-   * conversation, each only while it's still open: one a person taught or dismissed while the step
-   * ran keeps their mark, and one asked again and answered since is off the list. Nothing once the
-   * step has closed (its time ran out while the write was on its way), or when Meko doesn't answer:
-   * its counts are only what Meko took.
+   * conversation (the one the write used), each only while it's still open: one a person taught or
+   * dismissed while the step ran keeps their mark, and one asked again and answered since is off the
+   * list. Nothing once the step has closed (its time ran out while the write was on its way), when
+   * Meko doesn't answer, or without a conversation: Meko takes a mark without one for a person's,
+   * and counts it as one in its usage stats. Its counts are only what Meko took.
    */
-  private async markQuestions(job: Job, questions: { key: string }[], mark: QuestionMark & { state: 'taught' | 'dismissed' }): Promise<void> {
-    if (!questions.length || !this.jobs.has(job.id)) return;
+  private async markQuestions(job: Job, conversation: string, questions: { key: string }[], mark: QuestionMark & { state: 'taught' | 'dismissed' }): Promise<void> {
+    if (!questions.length || !conversation || !this.jobs.has(job.id)) return;
     const open = new Set(((await this.core.mekoQuestions.openQuestions(job.datapack.id, null)) ?? []).map((q) => q.key));
     for (const q of questions) {
       if (!open.has(q.key) || !this.jobs.has(job.id)) continue;
       open.delete(q.key);
-      if (!(await this.core.mekoQuestions.mark(job.datapack.id, q.key, mark, job.conversation))) continue;
+      if (!(await this.core.mekoQuestions.mark(job.datapack.id, q.key, mark, conversation))) continue;
       if (mark.state === 'taught') job.taught++;
       else job.dismissed++;
     }

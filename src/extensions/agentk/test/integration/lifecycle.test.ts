@@ -583,6 +583,40 @@ describe('lifecycle: PR → Kode review → Merge & Close', () => {
     }
   });
 
+  it("marks questions in the write's conversation, even when Meko gave none as the step began", async () => {
+    const meko = await fakeMekoQuestions();
+    try {
+      fakeFiles({ mod: '' });
+      await useLocalMeko(env, meko.url);
+      const s = await inReview('No conversation yet');
+      await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+      meko.datapacks.set('dp-1', [{ key: 'poll queue order', query: 'Poll queue order', askedBy: ['conv-other'] }]);
+      fakeFiles({
+        'learn-facts': '{"facts":[{"kind":"decision","component":"lifecycle.ts","text":"Polls run one at a time.","answers":[1]}]}',
+        'learn-decisions': '{"decisions":[{"n":1,"action":"add"}]}',
+      });
+      // The first read of the conversation fails; the write's works. Its mark names that conversation,
+      // so Meko counts it as an agent's, not a person's.
+      let first = true;
+      Object.assign(env.meko, {
+        ensureConversation: async () => {
+          if (first) {
+            first = false;
+            throw new Error('Meko is busy');
+          }
+          return 'conv-1';
+        },
+      });
+      await env.core.sessions.action(s.id, 'learn');
+      await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
+      expect(meko.requests.filter((r) => r.path === '/mark').map((r) => r.body)).toEqual([
+        { key: 'poll queue order', state: 'taught', text: 'Decision (lifecycle.ts): Polls run one at a time.', conversation_id: 'conv-1' },
+      ]);
+    } finally {
+      await meko.close();
+    }
+  });
+
   it('marks no question for a write that lands after the learn step ran out of time', async () => {
     const meko = await fakeMekoQuestions();
     try {

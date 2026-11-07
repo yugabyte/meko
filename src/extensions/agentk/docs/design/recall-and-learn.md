@@ -303,5 +303,7 @@ fails.
   `Learner.seeded` has Meko forget its conversation's asks made until then (`DELETE
   …/questions/asks?conversation_id=&before=`), once, in the background. One that found something
   had already answered another session's question there.
-- **The usage report** counts the questions learn steps taught and dismissed (`learn.taught`,
-  `learn.dismissed`); Meko's own report counts the rest, never a query.
+- **The usage stats** are Meko's: its report counts the poor searches, people's marks and agents'
+  marks apart (`contextGaps.agentTaught` and `agentDismissed` are the learn step's, since its marks
+  carry its conversation), never a query. Kode's report used to send the learn step's as
+  `learn.taught` and `learn.dismissed`, and sends neither now.

@@ -154,9 +154,10 @@ func (s *Store) Questions(ctx context.Context, datapack string) ([]Question, err
 }
 
 // MarkQuestion records something done about a question, or ErrNotFound when the datapack has no
-// such question. A person's own dismissal and teach are kept apart too (person_*_at), so an
-// agent's later mark doesn't take them out of the usage stats; a restore clears a person's
-// dismissal only when theirs was the one it restores. A restore keeps what was taught.
+// such question. A person's own dismissal and teach, and an agent's, are kept apart too
+// (person_*_at, agent_*_at), so the other's later mark doesn't take them out of the usage stats; a
+// restore clears a person's or an agent's dismissal only when theirs was the one it restores. A
+// restore keeps what was taught.
 func (s *Store) MarkQuestion(ctx context.Context, datapack, key string, m QuestionMark) error {
 	at := m.At.UTC().Format(timeLayout)
 	by := sql.NullString{String: m.By, Valid: m.By != ""}
@@ -165,19 +166,22 @@ func (s *Store) MarkQuestion(ctx context.Context, datapack, key string, m Questi
 	switch m.State {
 	case "dismissed":
 		res, err = s.w.ExecContext(ctx, "UPDATE questions SET dismissed_at = ?, dismissed_by = ?, dismissed_memory = ?, "+
-			"person_dismissed_at = CASE WHEN ? IS NULL THEN ? ELSE person_dismissed_at END "+
+			"person_dismissed_at = CASE WHEN ? IS NULL THEN ? ELSE person_dismissed_at END, "+
+			"agent_dismissed_at = CASE WHEN ? IS NULL THEN agent_dismissed_at ELSE ? END "+
 			"WHERE datapack_id = ? AND query_key = ?",
-			at, by, sql.NullString{String: m.Memory, Valid: m.Memory != ""}, by, at, datapack, key)
+			at, by, sql.NullString{String: m.Memory, Valid: m.Memory != ""}, by, at, by, at, datapack, key)
 	case "taught":
 		res, err = s.w.ExecContext(ctx, "UPDATE questions SET taught_at = ?, taught_text = ?, taught_memory = ?, "+
-			"taught_by = ?, person_taught_at = CASE WHEN ? IS NULL THEN ? ELSE person_taught_at END "+
+			"taught_by = ?, person_taught_at = CASE WHEN ? IS NULL THEN ? ELSE person_taught_at END, "+
+			"agent_taught_at = CASE WHEN ? IS NULL THEN agent_taught_at ELSE ? END "+
 			"WHERE datapack_id = ? AND query_key = ?",
-			at, m.Text, sql.NullString{String: m.Memory, Valid: m.Memory != ""}, by, by, at, datapack, key)
+			at, m.Text, sql.NullString{String: m.Memory, Valid: m.Memory != ""}, by, by, at, by, at, datapack, key)
 	case "open":
 		// Values on the right are the row's before the update: the restored dismissal's.
 		res, err = s.w.ExecContext(ctx, "UPDATE questions SET dismissed_at = NULL, dismissed_by = NULL, "+
 			"dismissed_memory = NULL, opened_at = ?, "+
-			"person_dismissed_at = CASE WHEN dismissed_by IS NULL THEN NULL ELSE person_dismissed_at END "+
+			"person_dismissed_at = CASE WHEN dismissed_by IS NULL THEN NULL ELSE person_dismissed_at END, "+
+			"agent_dismissed_at = CASE WHEN dismissed_by IS NULL THEN agent_dismissed_at ELSE NULL END "+
 			"WHERE datapack_id = ? AND query_key = ?", at, datapack, key)
 	default:
 		return errors.New("unknown question state " + m.State)
@@ -256,28 +260,37 @@ func deleteUnasked(ctx context.Context, tx *sql.Tx, where, datapack string) erro
 	return err
 }
 
-// QuestionDay is one UTC day's poor searches by quality and people's marks, for the usage stats.
+// QuestionDay is one UTC day's poor searches by quality, people's marks and agents' marks, for the
+// usage stats.
 type QuestionDay struct {
-	Day       string // YYYY-MM-DD
-	Empty     int
-	Weak      int
-	Dismissed int
-	Taught    int
+	Day            string // YYYY-MM-DD
+	Empty          int
+	Weak           int
+	Dismissed      int
+	Taught         int
+	AgentDismissed int
+	AgentTaught    int
 }
 
 // QuestionDays counts the poor searches since a time and people's latest dismissals and teaches
 // made since, by UTC day, oldest first, on this Meko's own datapacks only: a linked Meko Cloud's,
-// whose questions are kept here too, aren't this Meko's usage. Never a query.
+// whose questions are kept here too, aren't this Meko's usage. Agents' latest dismissals and
+// teaches (Kode's learn step) count on every datapack whose questions are kept here, Meko Cloud's
+// too: the agent runs on this computer, and Meko Cloud never sees those questions. Never a query.
 func (s *Store) QuestionDays(ctx context.Context, since time.Time) ([]QuestionDay, error) {
 	t := since.UTC().Format(timeLayout)
 	const local = "datapack_id IN (SELECT id FROM datapacks) "
-	rows, err := s.r.QueryContext(ctx, "SELECT day, sum(empty), sum(weak), sum(dismissed), sum(taught) FROM ("+
+	rows, err := s.r.QueryContext(ctx, "SELECT day, sum(empty), sum(weak), sum(dismissed), sum(taught), "+
+		"sum(agent_dismissed), sum(agent_taught) FROM ("+
 		"SELECT substr(at, 1, 10) AS day, quality = 'empty' AS empty, quality = 'weak' AS weak, 0 AS dismissed, "+
-		"0 AS taught FROM question_asks WHERE at >= ? AND "+local+
-		"UNION ALL SELECT substr(person_dismissed_at, 1, 10), 0, 0, 1, 0 FROM questions "+
+		"0 AS taught, 0 AS agent_dismissed, 0 AS agent_taught FROM question_asks WHERE at >= ? AND "+local+
+		"UNION ALL SELECT substr(person_dismissed_at, 1, 10), 0, 0, 1, 0, 0, 0 FROM questions "+
 		"WHERE person_dismissed_at >= ? AND "+local+
-		"UNION ALL SELECT substr(person_taught_at, 1, 10), 0, 0, 0, 1 FROM questions WHERE person_taught_at >= ? AND "+
-		local+") GROUP BY day ORDER BY day", t, t, t)
+		"UNION ALL SELECT substr(person_taught_at, 1, 10), 0, 0, 0, 1, 0, 0 FROM questions WHERE person_taught_at >= ? AND "+
+		local+
+		"UNION ALL SELECT substr(agent_dismissed_at, 1, 10), 0, 0, 0, 0, 1, 0 FROM questions WHERE agent_dismissed_at >= ? "+
+		"UNION ALL SELECT substr(agent_taught_at, 1, 10), 0, 0, 0, 0, 0, 1 FROM questions WHERE agent_taught_at >= ?"+
+		") GROUP BY day ORDER BY day", t, t, t, t, t)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +298,8 @@ func (s *Store) QuestionDays(ctx context.Context, since time.Time) ([]QuestionDa
 	out := []QuestionDay{}
 	for rows.Next() {
 		var d QuestionDay
-		if err = rows.Scan(&d.Day, &d.Empty, &d.Weak, &d.Dismissed, &d.Taught); err != nil {
+		if err = rows.Scan(&d.Day, &d.Empty, &d.Weak, &d.Dismissed, &d.Taught, &d.AgentDismissed,
+			&d.AgentTaught); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

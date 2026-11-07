@@ -118,7 +118,24 @@ func TestTimestamp(t *testing.T) {
 func TestSendsCountsOnly(t *testing.T) {
 	ctx := context.Background()
 	r := newRig(t)
-	if _, err := r.st.CreateDatapack(ctx, "hush-datapack", "a hush description"); err != nil {
+	dp, err := r.st.CreateDatapack(ctx, "hush-datapack", "a hush description")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Context Gaps: two poor searches, a person's dismissal and Kode's learn step's teach (an agent's
+	// mark names its conversation).
+	for _, key := range []string{"hush one", "hush two"} {
+		if err = r.st.AddAsk(ctx, store.Ask{DatapackID: dp.ID, Key: key, At: now0.Add(-time.Hour), Query: key,
+			Quality: "empty", Tool: "context_search"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = r.st.MarkQuestion(ctx, dp.ID, "hush one", store.QuestionMark{State: "dismissed",
+		At: now0.Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.st.MarkQuestion(ctx, dp.ID, "hush two", store.QuestionMark{State: "taught", At: now0.Add(-time.Minute),
+		By: "hush-conversation", Text: "hush answer"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []store.Call{
@@ -153,7 +170,7 @@ func TestSendsCountsOnly(t *testing.T) {
 		t.Errorf("envelope: %+v", e)
 	}
 	p := e.Payload
-	if p.Schema != 3 || p.Install.FirstDay != "2026-11-09" || p.Install.Commit != "abc1234" ||
+	if p.Schema != 4 || p.Install.FirstDay != "2026-11-09" || p.Install.Commit != "abc1234" ||
 		!p.Install.Extensions["kode"] {
 		t.Errorf("install: %+v", p.Install)
 	}
@@ -178,6 +195,13 @@ func TestSendsCountsOnly(t *testing.T) {
 		if today.ByClient[k] != v {
 			t.Errorf("byClient: %v, want %v", today.ByClient, wantClients)
 		}
+	}
+	if want := (ContextGaps{Empty: 2, Dismissed: 1, AgentTaught: 1}); today.ContextGaps != want {
+		t.Errorf("contextGaps: %+v, want %+v", today.ContextGaps, want)
+	}
+	const gaps = `"contextGaps":{"empty":2,"weak":0,"dismissed":1,"taught":0,"agentDismissed":0,"agentTaught":1}`
+	if !strings.Contains(raw, gaps) {
+		t.Errorf("contextGaps' names in the body: %s", raw)
 	}
 	if yesterday.Calls != 1 || yesterday.ByClient["meko_cli"] != 1 {
 		t.Errorf("yesterday: %+v", yesterday)

@@ -3,7 +3,10 @@ package store
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -71,15 +74,16 @@ func TestQuestions(t *testing.T) {
 	}
 	days, err := s.QuestionDays(ctx, now.Add(-24*time.Hour))
 	if err != nil || len(days) != 1 || days[0].Empty != 1 || days[0].Weak != 1 || days[0].Dismissed != 1 ||
-		days[0].Taught != 0 {
-		t.Errorf("days %+v %v (an agent's teach isn't a person's)", days, err)
+		days[0].Taught != 0 || days[0].AgentTaught != 1 || days[0].AgentDismissed != 0 {
+		t.Errorf("days %+v %v (an agent's teach isn't a person's, nor a person's dismissal an agent's)", days, err)
 	}
 	err = s.MarkQuestion(ctx, d.ID, "where is x", QuestionMark{State: "open", At: now.Add(3 * time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if days, _ = s.QuestionDays(ctx, now.Add(-24*time.Hour)); len(days) != 1 || days[0].Dismissed != 0 {
-		t.Errorf("a restore takes back a person's dismissal: %+v", days)
+	if days, _ = s.QuestionDays(ctx, now.Add(-24*time.Hour)); len(days) != 1 || days[0].Dismissed != 0 ||
+		days[0].AgentTaught != 1 {
+		t.Errorf("a restore takes back a person's dismissal, and keeps what an agent taught: %+v", days)
 	}
 	qs, _ = s.Questions(ctx, d.ID)
 	for _, x := range qs {
@@ -131,5 +135,98 @@ func TestQuestions(t *testing.T) {
 	}
 	if qs, _ = s.Questions(ctx, d.ID); len(qs) != 0 {
 		t.Errorf("a deleted datapack's questions: %+v", qs)
+	}
+}
+
+// Agents' marks (with a conversation) count apart from people's, each kept from the other's later
+// mark, on Meko Cloud's datapacks too.
+func TestQuestionDaysAgentMarks(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.CreateDatapack(ctx, "project", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(24 * time.Hour).Add(12 * time.Hour)
+	for _, a := range []Ask{
+		{DatapackID: d.ID, Key: "a", At: now.Add(-time.Hour), Query: "a", Quality: "empty", Tool: "context_search"},
+		{DatapackID: d.ID, Key: "b", At: now.Add(-time.Hour), Query: "b", Quality: "empty", Tool: "context_search"},
+		{DatapackID: "cloud-dp", Key: "c", At: now.Add(-time.Hour), Query: "c", Quality: "weak", Tool: "context_search"},
+		{DatapackID: "cloud-dp", Key: "d", At: now.Add(-time.Hour), Query: "d", Quality: "weak", Tool: "context_search"},
+	} {
+		if err = s.AddAsk(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mark := func(dp, key string, m QuestionMark) {
+		t.Helper()
+		if err := s.MarkQuestion(ctx, dp, key, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	day := func(what string, want QuestionDay) {
+		t.Helper()
+		days, err := s.QuestionDays(ctx, now.Add(-24*time.Hour))
+		want.Day = now.Format("2006-01-02")
+		if err != nil || len(days) != 1 || days[0] != want {
+			t.Errorf("%s: %+v %v, want %+v", what, days, err, want)
+		}
+	}
+	// An agent dismisses a, then a person dismisses it too: both count.
+	mark(d.ID, "a", QuestionMark{State: "dismissed", At: now, By: "c1"})
+	mark(d.ID, "a", QuestionMark{State: "dismissed", At: now.Add(time.Second)})
+	day("both dismissed a", QuestionDay{Empty: 2, Dismissed: 1, AgentDismissed: 1})
+	// Restoring the person's dismissal leaves the agent's.
+	mark(d.ID, "a", QuestionMark{State: "open", At: now.Add(2 * time.Second)})
+	day("the person's restored", QuestionDay{Empty: 2, AgentDismissed: 1})
+	// An agent dismisses b and teaches it; restoring its dismissal takes that back, not the teach.
+	mark(d.ID, "b", QuestionMark{State: "dismissed", At: now, By: "c1"})
+	mark(d.ID, "b", QuestionMark{State: "taught", At: now.Add(time.Second), By: "c1", Text: "B"})
+	day("an agent marked b", QuestionDay{Empty: 2, AgentDismissed: 2, AgentTaught: 1})
+	mark(d.ID, "b", QuestionMark{State: "open", At: now.Add(2 * time.Second)})
+	day("the agent's restored", QuestionDay{Empty: 2, AgentDismissed: 1, AgentTaught: 1})
+	// On a Meko Cloud datapack only an agent's marks count: not the asks, nor a person's marks.
+	mark("cloud-dp", "c", QuestionMark{State: "taught", At: now, By: "c2", Text: "C"})
+	mark("cloud-dp", "d", QuestionMark{State: "dismissed", At: now})
+	day("Meko Cloud's", QuestionDay{Empty: 2, AgentDismissed: 1, AgentTaught: 2})
+}
+
+// An install upgraded from before agents' marks were kept apart counts the ones still standing.
+func TestAgentMarksFilledOnUpgrade(t *testing.T) {
+	ctx := context.Background()
+	old := migrationSource
+	t.Cleanup(func() { migrationSource = old })
+	before := fstest.MapFS{}
+	ms, _ := fs.ReadDir(old, ".")
+	for _, e := range ms {
+		if strings.HasPrefix(e.Name(), "0016_") {
+			break
+		}
+		b, _ := fs.ReadFile(old, e.Name())
+		before[e.Name()] = &fstest.MapFile{Data: b}
+	}
+	migrationSource = before
+	s := open(t)
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(24 * time.Hour).Add(12 * time.Hour)
+	at := now.Format(timeLayout)
+	if _, err := s.w.ExecContext(ctx, "INSERT INTO questions(datapack_id, query_key, dismissed_at, dismissed_by, "+
+		"taught_at, taught_by, person_dismissed_at, person_taught_at) VALUES "+
+		"('dp', 'agent', ?, 'c1', ?, 'c1', NULL, NULL), ('dp', 'person', ?, NULL, ?, NULL, ?, ?)",
+		at, at, at, at, at, at); err != nil {
+		t.Fatal(err)
+	}
+	migrationSource = old
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	days, err := s.QuestionDays(ctx, now.Add(-24*time.Hour))
+	if err != nil || len(days) != 1 || days[0].AgentDismissed != 1 || days[0].AgentTaught != 1 {
+		t.Errorf("days %+v %v: the agent's marks filled in, the person's not", days, err)
 	}
 }

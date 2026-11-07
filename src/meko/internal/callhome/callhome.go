@@ -120,12 +120,18 @@ type Day struct {
 }
 
 // ContextGaps is one day's searches Meko answered poorly, by how (found nothing, or nothing
-// relevant), and the questions people dismissed and taught on Context Gaps. Never a query.
+// relevant), and the questions people dismissed and taught on Context Gaps, all on this Meko's own
+// datapacks; and the questions agents dismissed and taught there (an agent's mark names its
+// conversation: Kode's learn step), on every datapack whose questions this Meko keeps, a linked
+// Meko Cloud's too. Each question counts once a day for its latest mark of each kind. Never a query.
+// Schema 4 added the agents' counts, which Kode's report had sent as learn.taught/dismissed.
 type ContextGaps struct {
-	Empty     int `json:"empty"`
-	Weak      int `json:"weak"`
-	Dismissed int `json:"dismissed"`
-	Taught    int `json:"taught"`
+	Empty          int `json:"empty"`
+	Weak           int `json:"weak"`
+	Dismissed      int `json:"dismissed"`
+	Taught         int `json:"taught"`
+	AgentDismissed int `json:"agentDismissed"`
+	AgentTaught    int `json:"agentTaught"`
 }
 
 // Report is the payload.
@@ -364,14 +370,15 @@ func (s *Sender) report(ctx context.Context, now time.Time, days int) (Report, e
 	gaps, _ := s.o.Store.QuestionDays(ctx, start)
 	for _, g := range gaps {
 		if d := index[g.Day]; d != nil {
-			d.ContextGaps = ContextGaps{Empty: g.Empty, Weak: g.Weak, Dismissed: g.Dismissed, Taught: g.Taught}
+			d.ContextGaps = ContextGaps{Empty: g.Empty, Weak: g.Weak, Dismissed: g.Dismissed, Taught: g.Taught,
+				AgentDismissed: g.AgentDismissed, AgentTaught: g.AgentTaught}
 		}
 	}
 	install := s.o.Facts(ctx)
 	if install.Extensions == nil {
 		install.Extensions = map[string]bool{}
 	}
-	return Report{Schema: 3, Install: install, Totals: Totals{Datapacks: t.Datapacks, Memories: t.Memories,
+	return Report{Schema: 4, Install: install, Totals: Totals{Datapacks: t.Datapacks, Memories: t.Memories,
 		Learnings: t.Learnings, PromotedMemories: t.PromotedMemories, Artifacts: t.Artifacts,
 		Conversations: t.Conversations, KBDocuments: t.KBDocuments, KBBytes: t.KBBytes, DBBytes: t.DBBytes},
 		Days: out}, nil
