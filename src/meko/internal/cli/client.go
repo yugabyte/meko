@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"syscall"
 	"time"
 
 	"github.com/yugabyte/meko/src/meko/internal/auth"
@@ -46,7 +48,7 @@ func (c *client) get(ctx context.Context, path string, data any) error {
 	return c.do(ctx, http.MethodGet, path, data)
 }
 
-// reloadWeb has the server read the web listener's settings again (meko ui start and stop).
+// reloadWeb has the server read the web UI's settings again (meko ui start and stop).
 func (c *client) reloadWeb(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/api/v1/web/reload", nil)
 }
@@ -58,7 +60,18 @@ func (c *client) do(ctx context.Context, method, path string, data any) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	// A refused connection is tried again for up to a second: the server takes its port again when
+	// remote access turns on or off (the handoff, meko ui start and stop), and nothing listens on it
+	// for a moment.
 	resp, err := c.http.Do(req) //nolint:gosec // G704: see above
+	for deadline := time.Now().Add(time.Second); errors.Is(err, syscall.ECONNREFUSED) && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(50 * time.Millisecond):
+		}
+		resp, err = c.http.Do(req) //nolint:gosec // G704: see above
+	}
 	if err != nil {
 		return err
 	}

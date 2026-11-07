@@ -19,12 +19,14 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/tlscert"
 )
 
-// An AgentK from before Meko served it hands over at Meko's start: its port and remote access go
-// into web.toml and its self-signed certificate comes along, and the web listener then serves it at
-// /ext/agentk/ over HTTPS with no login: its owner is ignored. A second start changes nothing.
+// An AgentK from before Meko served it hands over at Meko's start: its remote access goes into
+// web.toml (never its port: Meko's is [server] port) and its self-signed certificate comes along.
+// Meko then takes its port again on every address and serves AgentK at /ext/agentk/ over HTTPS
+// with no login (its owner is ignored), while the CLI keeps plain HTTP on 127.0.0.1. A second start
+// changes nothing.
 func TestHandoff(t *testing.T) {
 	dir, port := setup(t)
-	webPort := os.Getenv("MEKO_WEB_PORT")
+	webPort := os.Getenv("MEKO_PORT")
 
 	// AgentK's side: its socket, its own certificate, and its old login.
 	agentk := shortDir(t)
@@ -45,7 +47,7 @@ func TestHandoff(t *testing.T) {
 	}
 	const oldHash = "scrypt$16384$8$1$c2FsdA$aGFzaA" //nolint:gosec // G101: a made-up hash, which Meko ignores
 	handoff, _ := json.Marshal(extensions.Handoff{Socket: sock, Legacy: &extensions.Legacy{Bind: "0.0.0.0",
-		Port: atoi(t, webPort), TLS: &extensions.LegacyTLS{Cert: filepath.Join(agentk, "certs", tlscert.CertName),
+		Port: 7777, TLS: &extensions.LegacyTLS{Cert: filepath.Join(agentk, "certs", tlscert.CertName),
 			Key: filepath.Join(agentk, "certs", tlscert.KeyName), SelfSigned: true},
 		Owner: &extensions.LegacyOwner{Username: "ana", PWScrypt: oldHash}}})
 	cmd := filepath.Join(agentk, "agentk")
@@ -66,8 +68,11 @@ func TestHandoff(t *testing.T) {
 		return strings.Contains(status, "Certificate:    self-signed, SHA-256 "+pair.Fingerprint)
 	})
 	c, err := config.Load(paths.New(dir).Config, func(string) string { return "" }, config.Overrides{})
-	if err != nil || c.Web.Access != config.AccessRemote || c.Web.Port != atoi(t, webPort) {
+	if err != nil || c.Web.Access != config.AccessRemote {
 		t.Fatalf("config after the handoff: %+v %v", c.Web, err)
+	}
+	if raw, _ := os.ReadFile(config.WebFile(paths.New(dir).Config)); strings.Contains(string(raw), "port") {
+		t.Errorf("web.toml got AgentK's port:\n%s", raw)
 	}
 
 	//nolint:gosec // G402: the test's own self-signed certificate
@@ -111,15 +116,6 @@ func TestHandoff(t *testing.T) {
 	}
 }
 
-func atoi(t *testing.T, s string) int {
-	t.Helper()
-	var n int
-	if _, err := fmt.Sscan(s, &n); err != nil {
-		t.Fatal(err)
-	}
-	return n
-}
-
 func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
@@ -134,7 +130,7 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 // listener serves it at /ext/present/ and lists it for the sidebar.
 func TestPresenterBesideMeko(t *testing.T) {
 	dir, port := setup(t)
-	webPort := os.Getenv("MEKO_WEB_PORT")
+	webPort := os.Getenv("MEKO_PORT")
 	home := shortDir(t)
 	sock := filepath.Join(home, "web.sock")
 	ln, err := net.Listen("unix", sock)
@@ -195,4 +191,49 @@ func TestPresenterBesideMeko(t *testing.T) {
 	if !found {
 		t.Fatalf("extensions: no running Presenter in %s", b)
 	}
+}
+
+// The port is on every address only with remote access and the web UI on: meko ui stop takes it
+// off the network, and agents keep it on 127.0.0.1. Links name the one port.
+func TestBindHost(t *testing.T) {
+	for _, tc := range []struct {
+		web       config.Web
+		host, url string
+	}{
+		{config.Web{Access: config.AccessLocal, Enabled: true}, "127.0.0.1", "http://127.0.0.1:7777"},
+		{config.Web{Access: config.AccessLocal}, "127.0.0.1", "http://127.0.0.1:7777"},
+		{config.Web{Access: config.AccessRemote, Enabled: true, Name: "box.example.com"}, "", "https://box.example.com:7777"},
+		{config.Web{Access: config.AccessRemote, Name: "box.example.com"}, "127.0.0.1", "https://box.example.com:7777"},
+	} {
+		if got := bindHost(tc.web); got != tc.host {
+			t.Errorf("bindHost(%+v) = %q, want %q", tc.web, got, tc.host)
+		}
+		if got := webURL(tc.web, 7777); got != tc.url {
+			t.Errorf("webURL(%+v) = %q, want %q", tc.web, got, tc.url)
+		}
+	}
+}
+
+// A certificate that can't be read doesn't stop Meko: remote access stays off, the port stays on
+// 127.0.0.1 for agents and the CLI, and status and meko ui say why.
+func TestRemoteAccessWithoutItsCertificate(t *testing.T) {
+	dir, port := setup(t)
+	missing := filepath.Join(t.TempDir(), "gone")
+	cfg := fmt.Sprintf("[web]\naccess = \"remote\"\n\n[tls]\ncert = %q\nkey = %q\n",
+		filepath.Join(missing, "c.pem"), filepath.Join(missing, "k.pem"))
+	if err := os.WriteFile(paths.New(dir).Config, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	want(t, "start's Web UI row", code, 0, out,
+		"  ✗ Web UI          remote access is off, since the certificate can't be read")
+	_, tok, _ := run("token", "--data-dir", dir)
+	if got := httpCode(t, "http://127.0.0.1:"+port+"/api/v1/server", strings.TrimSpace(tok)); got != 200 {
+		t.Errorf("the client token: %d, want 200", got)
+	}
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status", code, 0, out, "  ✗ Web UI          remote access is off")
+	code, _, errs = run("ui", "--data-dir", dir)
+	want(t, "ui", code, exitError, errs, "can't be reached at https://")
 }

@@ -34,7 +34,7 @@ import (
 // TestMain doubles as the meko binary: start re-runs os.Executable() (this test binary)
 // as "serve ...".
 func TestMain(m *testing.M) {
-	for _, k := range []string{paths.HomeEnv, "MEKO_PORT", "MEKO_LOG_LEVEL"} {
+	for _, k := range []string{paths.HomeEnv, "MEKO_LOG_LEVEL"} {
 		_ = os.Unsetenv(k)
 	}
 	// Never the login Keychain: the tests and the servers they start keep secrets in files.
@@ -64,14 +64,14 @@ func TestMain(m *testing.M) {
 	}
 	// Only in the tests' own process: a test sets them for the serve it starts.
 	for _, k := range []string{"MEKO_AUTH", "MEKO_CALL_HOME", "MEKO_CALL_HOME_URL", "YB_DISABLE_CALLHOME",
-		"MEKO_WEB_ACCESS"} {
+		"MEKO_WEB_ACCESS", "MEKO_PORT", "MEKO_WEB_PORT"} {
 		_ = os.Unsetenv(k)
 	}
-	// Never the web listener's real port (AgentK's, 7777): setup gives each test a free one, and this
-	// covers the tests that don't call it.
+	// Never Meko's real port (7777): setup gives each test a free one, and this covers the tests that
+	// don't call it.
 	if ln, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
 		if a, ok := ln.Addr().(*net.TCPAddr); ok {
-			_ = os.Setenv("MEKO_WEB_PORT", strconv.Itoa(a.Port))
+			_ = os.Setenv("MEKO_PORT", strconv.Itoa(a.Port))
 		}
 		_ = ln.Close()
 	}
@@ -196,7 +196,8 @@ func setup(t *testing.T) (dir, port string) {
 	t.Setenv("HOME", t.TempDir())
 	dir = shortDir(t)
 	port = strconv.Itoa(freePort(t))
-	t.Setenv("MEKO_WEB_PORT", strconv.Itoa(freePort(t)))
+	// The serve a test starts gets it even with no --port: a fake service's starts none.
+	t.Setenv("MEKO_PORT", port)
 	t.Cleanup(func() { run("stop", "--data-dir", dir, "--keep-extensions") })
 	return dir, port
 }
@@ -318,12 +319,12 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, mcpOut, _ := run("agent", "connect", "--data-dir", dir)
-	want(t, "agent connect with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
+	want(t, "agent connect with no server", code, 0, mcpOut, "http://127.0.0.1:"+port+"/mcp")
 	code, js, _ := run("token", "--data-dir", dir, "--json")
 	want(t, "token --json with no server", code, 0, js,
 		`{"cloud":{"set":false,"linked":false,"web_url":"","account":"","datapack_routing":true},`+
 			`"running":false,"token":"`+strings.TrimSpace(tok)+
-			`","url":"http://127.0.0.1:7778/mcp","web_url":"http://127.0.0.1:`+os.Getenv("MEKO_WEB_PORT")+`"}`)
+			`","url":"http://127.0.0.1:`+port+`/mcp","web_url":"http://127.0.0.1:`+port+`"}`)
 	for i := 0; i < 2; i++ {
 		started, out, serrs := run("start", "--data-dir", dir, "--port", port)
 		want(t, "start", started, 0, out+serrs, "is running")
@@ -456,7 +457,7 @@ func TestStartReportsTakenPort(t *testing.T) {
 	defer ln.Close()
 	port := strconv.Itoa(tcpPort(t, ln))
 	code, _, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start on a taken port", code, 1, errs, "port "+port+" is already in use")
+	want(t, "start on a taken port", code, 1, errs, "port "+port+" is in use (an AgentK from before Meko served it")
 }
 
 func TestServeShutsDownCleanly(t *testing.T) {
@@ -1213,14 +1214,14 @@ func TestUI(t *testing.T) {
 
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	web := "http://127.0.0.1:" + os.Getenv("MEKO_WEB_PORT")
+	web := "http://127.0.0.1:" + os.Getenv("MEKO_PORT")
 
 	var opened []string
 	open := openBrowser
 	openBrowser = func(u string) error { opened = append(opened, u); return nil }
 	t.Cleanup(func() { openBrowser = open })
 
-	// With local access the link is the web listener's own address: it carries no credential.
+	// With local access the link is Meko's own address: it carries no credential.
 	code, out, _ = run("ui", "--data-dir", dir)
 	if link := strings.TrimSpace(out); code != 0 || link != web+"/" || len(opened) != 1 || opened[0] != link {
 		t.Errorf("ui: %d %q, opened %v", code, out, opened)
@@ -1243,13 +1244,23 @@ func TestUI(t *testing.T) {
 	code, _, errs = run("setup_link", "--data-dir", dir)
 	want(t, "setup_link is gone", code, exitUsage, errs, "unknown command")
 
-	// meko ui stop closes the port at once, and it stays closed across a restart until meko ui start.
+	// meko ui stop keeps browsers out at once, and they stay out across a restart until meko ui
+	// start; agents keep the port, with their token.
+	_, tok, _ := run("token", "--data-dir", dir)
+	tok = strings.TrimSpace(tok)
+	if got := httpCode(t, web+"/api/v1/server", ""); got != 200 {
+		t.Errorf("a browser before ui stop: %d", got)
+	}
 	code, out, _ = run("ui", "stop", "--data-dir", dir)
 	want(t, "ui stop", code, 0, out, "Stopped the web UI")
-	//nolint:gosec // G704: the test's own server
-	if c, err := net.DialTimeout("tcp", strings.TrimPrefix(web, "http://"), time.Second); err == nil {
-		_ = c.Close()
-		t.Error("the web port still answers after ui stop")
+	if got := httpCode(t, web+"/", ""); got != 404 {
+		t.Errorf("the web UI after ui stop: %d, want 404", got)
+	}
+	if got := httpCode(t, web+"/api/v1/server", ""); got != 401 {
+		t.Errorf("a browser after ui stop: %d, want 401", got)
+	}
+	if got := httpCode(t, web+"/api/v1/server", tok); got != 200 {
+		t.Errorf("the client token after ui stop: %d, want 200", got)
 	}
 	code, out, _ = run("ui", "stop", "--data-dir", dir)
 	want(t, "ui stop again", code, 0, out, "The web UI is already off")
@@ -1269,6 +1280,24 @@ func TestUI(t *testing.T) {
 	if code != 0 || strings.TrimSpace(out) != web+"/" {
 		t.Errorf("ui after ui start: %d %q", code, out)
 	}
+}
+
+// httpCode is the status a GET of url gets, with bearer as its token when it's set.
+func httpCode(t *testing.T, url, bearer string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil) //nolint:gosec // G704: the test's own server
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: the test's own server
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
 }
 
 // With Meko stopped, meko ui stop and start only set the switch, which the next start reads; and

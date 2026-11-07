@@ -12,8 +12,8 @@ flowchart TB
     PG["Presenter's pages at /ext/present/\ndecks, map, slides, console, audience"]
   end
   subgraph Meko["meko serve"]
-    WL["web listener :7777\nlogin, proxy to the extension's socket"]
-    AL["API listener 127.0.0.1:7778\nMCP and REST"]
+    WL["Meko's port :7777\nbrowsers: proxy to the extension's socket"]
+    AL["Meko's port, 127.0.0.1:7777\nagents: MCP and REST"]
   end
   subgraph P["me_present serve (run/web.sock)"]
     API["API and WebSockets"]

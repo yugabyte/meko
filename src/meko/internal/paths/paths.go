@@ -2,7 +2,7 @@
 //
 //	<root>/            0700
 //	  config.toml      optional
-//	  web.toml, cloud.toml  settings Meko chose itself: the web listener's, the Meko Cloud link's URLs
+//	  web.toml, cloud.toml  settings Meko chose itself: the web UI's, the Meko Cloud link's URLs
 //	  meko.db          the only database (0600)
 //	  client.token     the token MCP and REST clients send, kept across restarts (0600)
 //	  run/             pid, port, lock, admin token, unix sockets
@@ -52,7 +52,7 @@ type Layout struct {
 	KnowledgeFiles string
 	// Extensions holds each extension's own folder (extensions.Dir); it's the extensions' data, not Meko's.
 	Extensions string
-	// Certs holds the web listener's self-signed certificate (internal/tlscert).
+	// Certs holds the self-signed certificate browsers get with remote access (internal/tlscert).
 	Certs string
 }
 

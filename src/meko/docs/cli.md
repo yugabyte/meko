@@ -11,7 +11,7 @@ what to type next, after the commands, in bold on a terminal, for the state Meko
 on a computer without it, `meko start` when it's set up but stopped, and when it's running a `Next:`
 list of `meko ui` and the steps not set up yet. `install`, `start`, `stop` and `status` print a
 short summary: a row per step marked ✓, ! or ✗, a `● Meko <version> is running` headline, plain
-link rows for people (`Web UI`, on 7777), for agents (`Agents`: MCP and the REST API, on 7778) and
+link rows for people (`Web UI`) and for agents (`Agents`: MCP and the REST API), both on Meko's one port (7777), and
 the Meko Cloud it's linked to (`Cloud`: its web app, or "not linked"), and what to run next, the
 first command as the call to action. A first install from the installer ends, before that, by
 offering the extensions to add. What to run next (`meko install`, `meko start`, `meko --help`, `meko status`, `meko cloud-link`
@@ -73,9 +73,9 @@ the connect step.
 run instead. Run as `mekosh`, the binary runs nothing and names the `meko-cli` command (exit 2). Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
 network filesystem (NFS, say) moves it to `$XDG_STATE_HOME/meko` or `/var/tmp/<user>/meko`, since
 SQLite's locking doesn't work over the network; `meko status --verbose` prints where it is (`Data:`). `start`,
-`restart` and `serve` take `--port` (the agents' listener's, default 7778) and `--log-level` (`debug`, `info`,
-`warn` or `error`; default `info`); the web UI's port and access are
-`[web] port` (default 7777) and `access` in `config.toml`. `search`, `add_memory`, `upload` and
+`restart` and `serve` take `--port` (Meko's one port, for agents, the CLI and the web UI; default 7777)
+and `--log-level` (`debug`, `info`, `warn` or `error`; default `info`); how browsers reach the web
+UI is `[web] access` in `config.toml`. `search`, `add_memory`, `upload` and
 `upload_status` take `--datapack NAME|ID`, and use
 the default datapack without it. Meko makes the default datapack only on first start, so once
 it's deleted, they need `--datapack`. While Meko Cloud is linked (`meko cloud-link`), they work on

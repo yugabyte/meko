@@ -1,6 +1,6 @@
-// Package tlscert is the web listener's certificate with remote access: the one [tls] names, or a
+// Package tlscert is the certificate browsers get with remote access: the one [tls] names, or a
 // self-signed pair Meko makes in the data folder's certs/, the way AgentK made its own (an AgentK
-// pair is copied there when Meko takes over AgentK's port, so browsers that trusted it still do).
+// pair is copied there when Meko takes over from AgentK, so browsers that trusted it still do).
 package tlscert
 
 import (

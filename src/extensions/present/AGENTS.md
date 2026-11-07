@@ -6,7 +6,7 @@ branching presentations from datapacks. The repo's own rules are in the root
 commands below from `src/extensions/present`.
 
 Presenter is a server on a unix socket in its home, `<Meko's data folder>/extensions/present`.
-Meko's web listener shows its pages at `/ext/present/`, behind Meko's one login, as it shows
+Meko shows its pages at `/ext/present/` on its one port, with Meko's access check, as it shows
 AgentK at `/ext/agentk/`. The server runs Claude Code headless for each deck (one persisted session
 per deck), keeps each deck's draft, saves decks to their Meko datapacks in pieces, and holds the
 rooms of live talks.

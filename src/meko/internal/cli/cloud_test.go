@@ -370,7 +370,6 @@ func TestCloudDatapacks(t *testing.T) {
 	dir, port := setup(t)
 	startReady(t, dir, port)
 	cloudDir, cloudPort := shortDir(t), strconv.Itoa(freePort(t))
-	t.Setenv("MEKO_WEB_PORT", strconv.Itoa(freePort(t)))
 	t.Cleanup(func() { run("stop", "--data-dir", cloudDir, "--keep-extensions") })
 	startReady(t, cloudDir, cloudPort)
 

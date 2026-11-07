@@ -251,6 +251,8 @@ func printStatusShort(l paths.Layout, c *client, st server.StatusReply, exts fun
 		r.step(stepWarn, "Web UI", webOffNote)
 	case !st.Web.Listening && st.Web.Error != "":
 		r.step(stepFail, "Web UI", "not listening: "+st.Web.Error)
+	case st.Web.Error != "":
+		r.step(stepFail, "Web UI", st.Web.Error)
 	}
 	if st.Auth == config.AuthNone {
 		r.step(stepWarn, "Auth", "none: every user and program on this machine can read and write your memories")
@@ -594,7 +596,7 @@ func runToken(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 	}
 	// web_url is where browsers find Meko's web UI and its extensions' (AgentK's at /ext/agentk/):
 	// "" while it's off ([web] enabled), when web_off says so.
-	web, off := webURL(cfg.Web), !cfg.Web.Enabled
+	web, off := webURL(cfg.Web, cfg.Server.Port), !cfg.Web.Enabled
 	if a.running {
 		if c, cerr := newClient(l); cerr == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

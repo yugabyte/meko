@@ -75,15 +75,16 @@ safe.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service. Before
   it writes anything (`app/current`, the commands, the data folder, the service), it runs the
-  service manager's checks and checks that no other program holds the API port (`[server] port`,
-  7778 by default): if one does, its `Server` row is `✗` with how to find the program or move Meko,
+  service manager's checks and checks that no other program holds Meko's port (`[server] port`,
+  7777 by default; an AgentK from before Meko served it holds it): if one does, its `Server` row is
+  `✗` with how to find the program or move Meko,
   and nothing is written, so running the installer again is safe (it would otherwise find
   `app/current` at the new version and stop as up to date). A Meko server on that port doesn't
   count: this data folder's, or the one the installed service runs, which installing the service
-  moves to this folder. The web port isn't checked, since Meko takes it over from an AgentK on this
-  computer. The `Server` row shows the dots until the service's server
+  moves to this folder, by its port file or by its status's web UI port (a Meko from before one
+  port held 7777 for its web UI, beside 7778 in its port file). The `Server` row shows the dots until the service's server
   answers (`started in 0.9s`, or `restarted` over a running one or an upgrade).
-- It writes the web listener's access to `web.toml` when neither it nor `config.toml` sets one:
+- It writes how browsers reach Meko (its access) to `web.toml` when neither it nor `config.toml` sets one:
   `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no display,
   else local), unless AgentK is on this computer, whose access the handoff takes over instead
   ([web.md](web.md#settings)). Neither access has a login. `--no-ui` turns the web UI off there
@@ -128,7 +129,7 @@ meko-<version>/
   bin/meko                     the CLI and server (cgo: SQLite and sqlite-vec compiled in)
   node/bin/node, node/LICENSE  Meko's own Node (22.18.0, checked against nodejs.org's SHASUMS256)
   context_engine/package.json, dist/, node_modules/, stubs/
-  web_ui/dist/                 the built web UI, served at / on the web listener (web-ui.md)
+  web_ui/dist/                 the built web UI, served at / (web-ui.md)
   models/                      the pinned models: the embedder and the reranker
   VERSION, LICENSE
 ```
@@ -156,8 +157,9 @@ meko-<version>/
   `meko` 24 MB. The reranker adds about 23 MB.
 - `scripts/smoke-release.sh <tarball> <version>` unpacks a tarball, checks `meko version --json`,
   starts it on a fresh data folder, waits for the context engine, saves a memory, finds it, checks that
-  nothing was downloaded into `models/`, checks that the web listener (on the port after the API
-  listener's, never 7777) serves the web UI at the address `meko ui` prints (with `SSH_CONNECTION` set, so it opens no browser), and stops.
+  nothing was downloaded into `models/`, checks that Meko (on a port of its own, never 7777)
+  serves the web UI at the address `meko ui` prints (with `SSH_CONNECTION` set, so it opens no
+  browser), and stops.
 
 Linux tarballs are built in `almalinux:8` (glibc 2.28, so they run on RHEL 8 and newer) with
 gcc-toolset-13; the Mac one on `macos-15` with `MACOSX_DEPLOYMENT_TARGET=14.0`. Their downloads
@@ -543,10 +545,10 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   So when an extension's command sits in a folder that holds a `node`, Meko runs it (`start`,
   `stop`, `status`, `_handoff`, its uninstall, and its `install` from `extension install` or the
   Extensions page) with that folder first on PATH (`extensions.CommandEnv`).
-- An extension whose catalog entry has `WebUI` (AgentK, Presenter) is served to browsers by the web listener at
+- An extension whose catalog entry has `WebUI` (AgentK, Presenter) is served to browsers by Meko at
   `/ext/<name>/`, on the unix socket `<command> _handoff --json` names; at every start, that handoff
-  also brings over the web settings and certificate the extension had when it served browsers
-  itself (its old login is ignored) ([web.md](web.md#the-handoff-from-agentk)). AgentK listens only on its socket.
+  also brings over the access and certificate the extension had when it served browsers
+  itself (never its port; its old login is ignored) ([web.md](web.md#the-handoff-from-agentk)). AgentK listens only on its socket.
 - `meko start` starts the extensions after Meko; `meko stop` stops them first (`me_kode stop`
   ends AgentK's sessions too; they resume on start), unless given `--keep-extensions`. An
   extension that fails is reported, and the rest go on. `meko restart`, Meko's updates and crashes

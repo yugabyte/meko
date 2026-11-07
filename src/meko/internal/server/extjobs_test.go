@@ -26,7 +26,7 @@ func post(t *testing.T, url string, header map[string]string) (int, envelope.Res
 	for k, v := range header {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestExtensionCheckAndAutoUpdate(t *testing.T) {
 	patch := func(name, body string) (int, envelope.Response) {
 		req, _ := http.NewRequest(http.MethodPatch, base+"/api/v1/extensions/"+name, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := testClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}

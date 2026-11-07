@@ -235,7 +235,7 @@ var mekoCLICommands = []command{
 		}},
 	{name: "search", group: "Memory and knowledge", summary: "Search memories, files and past conversations",
 		usage: `meko-cli search "<question>" [flags]`, examples: []example{
-			{`meko-cli search "why is the web listener separate"`, "search the default datapack"},
+			{`meko-cli search "why does Meko use one port"`, "search the default datapack"},
 			{`meko-cli search "release steps" --source knowledge_base --limit 3`, "only the knowledge base, three results"},
 			{`meko-cli search "owner's login" --datapack research --json`, "another datapack, the tool's raw reply"},
 		}},

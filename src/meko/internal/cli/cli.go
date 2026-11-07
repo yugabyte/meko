@@ -249,7 +249,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&t.force, "force", false, "replace the file if it exists")
 	}
 	if cmd == "start" || cmd == "restart" || cmd == "serve" {
-		fs.IntVar(&o.Port, "port", 0, "the agents' listener's port (MCP and API) on 127.0.0.1 (default 7778)")
+		fs.IntVar(&o.Port, "port", 0, "Meko's port, for agents, the CLI and the web UI (default 7777)")
 		fs.StringVar(&o.LogLevel, "log-level", "", "debug, info, warn or error (default info)")
 	}
 	if cmd == "serve" {

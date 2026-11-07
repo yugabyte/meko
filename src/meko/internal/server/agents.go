@@ -10,10 +10,10 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/envelope"
 )
 
-// The agents' routes (internal/agents, docs/api.md#agents), on both listeners: GET /api/v1/agents
+// The agents' routes (internal/agents, docs/api.md#agents): GET /api/v1/agents
 // lists the agents on this computer and whether each reaches Meko's target, for any credential;
-// POST /api/v1/agents/:name/connect and /disconnect change one, for the owner (the web listener's
-// browsers, with local or remote access) or the admin token. A client token mayn't: while Meko Cloud is linked,
+// POST /api/v1/agents/:name/connect and /disconnect change one, for the owner (a
+// browser, with local or remote access) or the admin token. A client token mayn't: while Meko Cloud is linked,
 // connect writes its account-wide key into the agent's config. No reply holds a token or key.
 func (s *Server) registerAgents(v1 *echo.Group) {
 	if s.opts.Agents == nil {

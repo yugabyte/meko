@@ -50,16 +50,15 @@ func runUI(l paths.Layout, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	// The web listener binds just after the API listener answers (after the extensions' handoff), so
-	// right after meko start it may still be starting: wait for it, but not for one that says why it
-	// can't listen (another program on its port).
+	// The port may be being taken again (remote access turned on or off): wait for it, but not for
+	// one that says why it can't listen.
 	st, err := waitWebListening(ctx, c)
 	if err != nil {
 		return fail(stderr, err)
 	}
 	w := st.Web
 	if w == nil || w.URL == "" {
-		return fail(stderr, fmt.Errorf("this server has no web listener"))
+		return fail(stderr, errors.New("this server has no web UI"))
 	}
 	if !w.Enabled {
 		return fail(stderr, errWebOff)
@@ -71,6 +70,9 @@ func runUI(l paths.Layout, stdout, stderr io.Writer) int {
 			why = "it's starting"
 		}
 		return fail(stderr, fmt.Errorf("the web UI isn't listening at %s yet: %s", w.URL, why))
+	}
+	if w.Error != "" {
+		return fail(stderr, fmt.Errorf("the web UI can't be reached at %s: %s", w.URL, w.Error))
 	}
 	link := w.URL + "/"
 	if canOpenBrowser() {
@@ -85,7 +87,8 @@ func runUI(l paths.Layout, stdout, stderr io.Writer) int {
 var errWebOff = errors.New("the web UI is off. Turn it on with meko ui start")
 
 // runUISwitch is meko ui start (on) and meko ui stop: it sets [web] enabled in web.toml, and has a
-// running server start or stop the web listener now; a stopped one reads it when it starts.
+// running server let browsers in or keep them out now (agents and the CLI keep the port); a stopped
+// one reads it when it starts.
 func runUISwitch(l paths.Layout, on bool, stdout, stderr io.Writer) int {
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil {
@@ -126,36 +129,42 @@ func runUISwitch(l paths.Layout, on bool, stdout, stderr io.Writer) int {
 	switch {
 	case err != nil:
 		return fail(stderr, err)
-	case on && !st.Listening:
+	case st.Enabled != on:
+		return fail(stderr, fmt.Errorf("the web UI is %s in the settings, but Meko hasn't taken it up yet "+
+			"(meko status says when it has)", state))
+	case st.Listening && st.Error != "":
+		return fail(stderr, fmt.Errorf("the web UI is %s, but can't be reached at %s: %s", state, st.URL, st.Error))
+	case !st.Listening:
 		why := st.Error
 		if why == "" {
-			why = "it's still starting (meko status says when it's up)"
+			why = "it's taking the port again"
 		}
-		return fail(stderr, fmt.Errorf("the web UI is on, but isn't listening at %s yet: %s", st.URL, why))
+		return fail(stderr, fmt.Errorf("the web UI is %s, but Meko isn't listening at %s yet: %s", state, st.URL, why))
 	case on:
 		fmt.Fprintf(stdout, "Started the web UI at %s\n", st.URL)
-	case st.Listening:
-		return fail(stderr, errors.New("the web UI is off, but is still stopping (meko status says when it has)"))
 	default:
 		fmt.Fprintln(stdout, "Stopped the web UI")
 	}
 	return exitOK
 }
 
-// waitWebSwitched waits, until ctx ends, for the web listener to take up [web] enabled = on: to
-// listen, or say why it can't, when on; to stop listening when off.
+// waitWebSwitched waits, until ctx ends, for the server to take up [web] enabled = on and listen,
+// or say why it can't. With remote access the port is taken again (every address on, 127.0.0.1
+// off), so a status read that finds it closed for a moment is read again.
 func waitWebSwitched(ctx context.Context, c *client, on bool) (server.WebStatus, error) {
+	var w server.WebStatus
 	for {
 		st, err := c.status(ctx)
-		if err != nil {
-			return server.WebStatus{}, err
-		}
-		if st.Web == nil {
-			return server.WebStatus{}, errors.New("this server has no web listener")
-		}
-		w := *st.Web
-		if w.Enabled == on && (on && (w.Listening || w.Error != "") || !on && !w.Listening) {
+		switch {
+		case err != nil && ctx.Err() != nil:
 			return w, nil
+		case err == nil && st.Web == nil:
+			return w, errors.New("this server has no web UI")
+		case err == nil:
+			w = *st.Web
+			if w.Enabled == on && (w.Listening || w.Error != "") {
+				return w, nil
+			}
 		}
 		select {
 		case <-ctx.Done():

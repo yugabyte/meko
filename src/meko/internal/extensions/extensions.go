@@ -160,7 +160,7 @@ type Catalog struct {
 	// UninstallArgs uninstall it and delete all its data without asking: what meko destroy runs
 	// when it removes the extensions too, and meko extension delete --purge.
 	UninstallArgs []string
-	// WebUI says it serves a web UI on a unix socket, which the web listener serves at
+	// WebUI says it serves a web UI on a unix socket, which Meko serves at
 	// /ext/<name>/ (internal/extproxy). `<command> _handoff --json` names the socket (Handoff).
 	WebUI bool
 }

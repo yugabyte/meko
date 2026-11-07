@@ -40,7 +40,7 @@ meko start                        # starts Meko and its extensions
 meko ui                           # opens Meko's web UI: Presenter is in its sidebar
 ```
 
-Meko serves it at `/ext/present/` on its web listener, behind Meko's login, and its sidebar links
+Meko serves it at `/ext/present/` on its port, with Meko's access check, and its sidebar links
 to it. Decks are saved where Meko says: in Meko Cloud when Meko links it (Settings › Meko Cloud, or
 `meko cloud-link`), else in the Meko on this computer. Either way Presenter talks to the Meko on
 this computer, which passes its calls on to Meko Cloud with the link's key. While it links Meko

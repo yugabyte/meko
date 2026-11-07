@@ -227,13 +227,13 @@ func TestReport(t *testing.T) {
 	r.step(stepWarn, "Context engine", "starting")
 	r.running("Meko 1.0 is running", "pid 7, up 2h")
 	r.links([]linkRow{{"Web UI", "http://127.0.0.1:7777", "local, from this computer"},
-		{"Agents", "http://127.0.0.1:7778/mcp", "MCP and API"}, {"Cloud", "", "not linked"}})
+		{"Agents", "http://127.0.0.1:7777/mcp", "MCP and API"}, {"Cloud", "", "not linked"}})
 	r.next([][2]string{{"meko ui", "open the web UI"},
 		{"meko status", "check on Meko at any time · meko uninstall removes it"}})
 	if want := "  ! Context engine  starting\n" +
 		"\n  ● Meko 1.0 is running · pid 7, up 2h\n" +
 		"\n  Web UI  http://127.0.0.1:7777 · local, from this computer\n" +
-		"  Agents  http://127.0.0.1:7778/mcp · MCP and API\n" +
+		"  Agents  http://127.0.0.1:7777/mcp · MCP and API\n" +
 		"  Cloud   not linked\n" +
 		"\nNext:\n" +
 		"  meko ui        open the web UI\n" +
@@ -247,10 +247,10 @@ func TestReport(t *testing.T) {
 	r.color = true
 	t.Setenv(spin.BackgroundEnv, "dark") // never ask the developer's terminal
 	r.running("Meko 1.0 is running", "")
-	r.links([]linkRow{{"Agents", "http://127.0.0.1:7778/mcp", ""}})
+	r.links([]linkRow{{"Agents", "http://127.0.0.1:7777/mcp", ""}})
 	r.next([][2]string{{"meko ui", "open the web UI"}, {"meko status", "check on Meko · meko uninstall removes it"}})
 	if want := "\n  \033[32m●\033[0m \033[1mMeko 1.0 is running\033[0m\n" +
-		"\n  \033[2mAgents\033[0m  " + spin.Link("http://127.0.0.1:7778/mcp", true) + "\n" +
+		"\n  \033[2mAgents\033[0m  " + spin.Link("http://127.0.0.1:7777/mcp", true) + "\n" +
 		"\nNext:\n" +
 		" \033[1;97;44m meko ui \033[0m       open the web UI\n" +
 		"  " + spin.Blue("meko status", true) + "    check on Meko" +

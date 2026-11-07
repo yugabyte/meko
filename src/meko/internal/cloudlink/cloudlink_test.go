@@ -22,7 +22,7 @@ func TestWebURL(t *testing.T) {
 		{DefaultURL, "", DefaultWebURL},
 		{"https://mcp.mekodata.ai/other", "", DefaultWebURL},
 		{"https://meko.example.com/mcp", "", ""},
-		{"http://127.0.0.1:7778/mcp", "", ""},
+		{"http://127.0.0.1:7777/mcp", "", ""},
 		{"https://meko.example.com/mcp", " https://web.example.com/ ", "https://web.example.com"},
 		{"not a url", "", ""},
 	} {
