@@ -87,7 +87,9 @@ context-engine/                    mem0's own config folder (MEM0_DIR)
 ```
 
 `serve`, once its release is past probation, renames `logs/memory_engine.log` and `memory_engine/`
-to these names while the new name is free (`paths.Layout.MoveRenamed`).
+to these names while the new name is free (`paths.Layout.MoveRenamed`). A start on probation runs
+the context engine on the old names while they're still to move (`paths.Layout.BeforeRenames`):
+under the new ones it would take them, and the old files could never move.
 
 ## Storage
 

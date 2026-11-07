@@ -426,3 +426,96 @@ func TestSetWebEnabled(t *testing.T) {
 		t.Fatalf("with config.toml's own enabled: %v", err)
 	}
 }
+
+// Install's pick of a port goes in config.toml's [server] under its mark: added with the table, at
+// the top of a [server] the user wrote, or in place of an earlier pick, with the rest of the file
+// kept. A port the user chose isn't moved.
+func TestSetPickedPort(t *testing.T) {
+	noEnv := func(string) string { return "" }
+	cases := []struct{ name, before, after string }{
+		{"no file", "", "[server]\n" + pickedPortMark + "\nport = 7778\n"},
+		{"no [server]", "# mine\n[log]\nlevel = \"debug\"",
+			"# mine\n[log]\nlevel = \"debug\"\n\n[server]\n" + pickedPortMark + "\nport = 7778\n"},
+		{"[server] without a port", "[server]  # the port\nauth = \"token\"\n[log]\nlevel = \"info\"\n",
+			"[server]  # the port\n" + pickedPortMark + "\nport = 7778\nauth = \"token\"\n[log]\nlevel = \"info\"\n"},
+		{"an earlier pick", "[server]\n" + pickedPortMark + "\nport = 7790\nauth = \"token\"\n",
+			"[server]\n" + pickedPortMark + "\nport = 7778\nauth = \"token\"\n"},
+	}
+	for _, c := range cases {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if c.before != "" {
+			if err := os.WriteFile(path, []byte(c.before), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if chosen, err := PortChosen(path, noEnv); err != nil || chosen {
+				t.Errorf("%s: chosen before = %v, %v", c.name, chosen, err)
+			}
+		}
+		if err := SetPickedPort(path, 7778); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		b, _ := os.ReadFile(path) //nolint:gosec // G304: the test's own file
+		if string(b) != c.after {
+			t.Errorf("%s:\n%s\nwant:\n%s", c.name, b, c.after)
+		}
+		cfg, err := Load(path, noEnv, Overrides{})
+		if err != nil || cfg.Server.Port != 7778 {
+			t.Errorf("%s: loads port %d, %v", c.name, cfg.Server.Port, err)
+		}
+		if chosen, err := PortChosen(path, noEnv); err != nil || chosen {
+			t.Errorf("%s: install's pick counted as chosen: %v, %v", c.name, chosen, err)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	mine := "[server]\nport = 9001\n"
+	if err := os.WriteFile(path, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if chosen, err := PortChosen(path, noEnv); err != nil || !chosen {
+		t.Errorf("the user's port: chosen = %v, %v", chosen, err)
+	}
+	if err := SetPickedPort(path, 7778); !errors.Is(err, ErrPortChosen) {
+		t.Errorf("moved the user's port: %v", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != mine { //nolint:gosec // G304: the test's own file
+		t.Errorf("the user's config.toml changed: %s", b)
+	}
+	other := filepath.Join(t.TempDir(), "config.toml")
+	withPort := func(k string) string { return map[string]string{"MEKO_PORT": "9002"}[k] }
+	if chosen, _ := PortChosen(other, withPort); !chosen {
+		t.Error("MEKO_PORT isn't a chosen port")
+	}
+}
+
+// Install's pick goes back out of config.toml, its comment with it, once the default port is free
+// again; the rest of the file, and a port the user chose, stay.
+func TestClearPickedPort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := ClearPickedPort(path); err != nil {
+		t.Errorf("no file: %v", err)
+	}
+	before := "[server]\nauth = \"token\"\n[log]\nlevel = \"info\"\n"
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPickedPort(path, 7778); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearPickedPort(path); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != before { //nolint:gosec // G304: the test's own file
+		t.Errorf("after: %q, want %q", b, before)
+	}
+	mine := "[server]\nport = 9001\n"
+	if err := os.WriteFile(path, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearPickedPort(path); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != mine { //nolint:gosec // G304: the test's own file
+		t.Errorf("the user's port was removed: %q", b)
+	}
+}

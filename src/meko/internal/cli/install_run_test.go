@@ -98,8 +98,9 @@ func TestPathLinesComeAndGo(t *testing.T) {
 	}
 }
 
-// Another program on the API port fails the install before the service is written, saying how to
-// find it or move Meko, and that running the installer again is safe.
+// Another program on a port the user chose (MEKO_PORT, as setup sets it) fails the install before
+// the service is written, saying how to find it or move Meko, and that running the installer
+// again is safe.
 func TestInstallRefusesAPortInUse(t *testing.T) {
 	dir, port := setup(t)
 	noRealExtensions(t)
@@ -113,6 +114,9 @@ func TestInstallRefusesAPortInUse(t *testing.T) {
 	code, out, errs := run("install", "--data-dir", dir)
 	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+
 		" is in use by another program (an AgentK from before Meko served it, or another)\n")
+	want(t, "install's way to find it", code, exitError, out, "    See what holds it    ")
+	// MEKO_PORT overrides config.toml, so the way out is the variable.
+	want(t, "install's way to move it", code, exitError, out, "    Or move Meko         change or unset MEKO_PORT\n")
 	// Nothing was written before the check: no rows of the steps before it, no web.toml, no token.
 	if strings.Contains(out, "✓ Data") {
 		t.Errorf("install wrote the data folder before the port check:\n%s", out)
@@ -121,7 +125,9 @@ func TestInstallRefusesAPortInUse(t *testing.T) {
 		t.Errorf("web.toml was written: %v", err)
 	}
 	want(t, "install's way out", code, exitError, out, "Nothing was left half-done: running the installer again is safe\n")
-	want(t, "install's error", code, exitError, errs, "meko: port "+port+" is in use")
+	if errs != "" || strings.Contains(out, "Report a bug") {
+		t.Errorf("a port the user chose: stderr %q, output %q", errs, out)
+	}
 	if f.spec.DataDir != "" || len(f.calls) != 0 {
 		t.Errorf("the service was touched: %+v %v", f.spec, f.calls)
 	}

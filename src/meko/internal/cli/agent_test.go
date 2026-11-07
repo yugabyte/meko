@@ -1,18 +1,22 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/yugabyte/meko/src/meko/internal/agents"
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
+	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
+	"github.com/yugabyte/meko/src/meko/internal/store"
 )
 
 // fakeAgents puts fake agent commands first on PATH (claude, codex and kiro-cli unless named). Each
@@ -416,4 +420,35 @@ func TestAgentsMoveToOnePort(t *testing.T) {
 	}
 	_, out, _ = run("agent", "list", "--data-dir", dir)
 	want(t, "agent list", 0, 0, out, "Kiro CLI   needs reconnecting   meko agent connect kiro\n")
+}
+
+// Agents follow Meko to another port: at a start on a port other than the one they were connected
+// to (meko install moved it, or someone changed [server] port), an agent at exactly the old port's
+// URL is connected to the new one. With none recorded yet, the old port is the default: install
+// may have moved Meko off it in the run that brought this release.
+func TestAgentsFollowThePort(t *testing.T) {
+	dir, port := setup(t)
+	fakeAgents(t, false, "kiro-cli")
+	_, tok, _ := run("token", "--data-dir", dir)
+	tok = strings.TrimSpace(tok)
+	kiroAt(t, "http://127.0.0.1:"+strconv.Itoa(config.DefaultPort)+"/mcp", tok)
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	waitFor(t, "Kiro CLI moved off the default port", func() bool {
+		return strings.Contains(readFile(t, kiroFile(t)), `"http://127.0.0.1:`+port+`/mcp"`)
+	})
+	waitFor(t, "the port recorded", func() bool {
+		_, v, _ := store.Peek(context.Background(), paths.New(dir).DB, keyAgentsPort)
+		return v[keyAgentsPort] == port
+	})
+	code, out, errs = run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out+errs, "stopped")
+
+	kiroAt(t, "http://127.0.0.1:"+port+"/mcp", tok)
+	next := strconv.Itoa(freePort(t))
+	code, out, errs = run("start", "--data-dir", dir, "--port", next)
+	want(t, "start on another port", code, 0, out+errs, "is running")
+	waitFor(t, "Kiro CLI on the new port", func() bool {
+		return strings.Contains(readFile(t, kiroFile(t)), `"http://127.0.0.1:`+next+`/mcp"`)
+	})
 }

@@ -43,21 +43,29 @@ var serviceStartTimeout = time.Minute
 // pid notPID (a server being replaced). It returns its status.
 func waitAnswering(l paths.Layout, d time.Duration, notPID int) (server.StatusReply, bool) {
 	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
-		if up, err := running(l.Lock); err != nil || !up {
-			continue
-		}
-		c, err := newClient(l)
-		if err != nil {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		st, err := c.status(ctx)
-		cancel()
-		if err == nil && st.PID != notPID {
+		if st, ok := answering(l, notPID); ok {
 			return st, true
 		}
 	}
 	return server.StatusReply{}, false
+}
+
+// answering is the status of the server that holds the lock, when it answers and isn't notPID's.
+func answering(l paths.Layout, notPID int) (server.StatusReply, bool) {
+	if up, err := running(l.Lock); err != nil || !up {
+		return server.StatusReply{}, false
+	}
+	c, err := newClient(l)
+	if err != nil {
+		return server.StatusReply{}, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	st, err := c.status(ctx)
+	if err != nil || st.PID == notPID {
+		return server.StatusReply{}, false
+	}
+	return st, true
 }
 
 // currentPID is the running server's pid, or 0.

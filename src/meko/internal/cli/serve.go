@@ -156,6 +156,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		}
 		if pending, _ := app.ReadPending(); pending != nil && pending.To == release {
 			onProbation = true
+			// The context engine keeps the old names of its files until MoveRenamed may move them.
+			l = l.BeforeRenames()
 		} else {
 			makeMekoCLI(app, log)
 			renameExtensions(l, log)
@@ -327,11 +329,19 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	registerREST := func(g *echo.Group) { rest.Register(g, restOpts) }
 	// Updates: a release install checks for them, and the Status page checks and installs them.
 	restart := make(chan struct{})
+	// Closed once this release is past probation: at once, unless it's on probation, then when
+	// finishUpdate finishes the update. What a rolled-back release couldn't undo waits for it.
+	pastProbation := make(chan struct{})
+	var pastOnce sync.Once
+	healthy := func() { pastOnce.Do(func() { close(pastProbation) }) }
+	if !onProbation {
+		healthy()
+	}
 	updCtx, stopUpdates := context.WithCancel(context.Background())
 	defer stopUpdates()
 	var updates server.Updates
 	if isRelease {
-		if u, off := startUpdates(updCtx, app, release, l, cfg, log, onProbation, restart, web); u != nil {
+		if u, off := startUpdates(updCtx, app, release, l, cfg, log, onProbation, healthy, restart, web); u != nil {
 			updates = u
 		} else {
 			updates = update.Off{Version: release, Reason: off}
@@ -393,7 +403,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	go func() {
 		defer close(followDone)
 		moveBackOnce(followCtx, st, cloud, log)
-		moveToOnePortOnce(followCtx, st, agentsMgr, local, log)
+		followPort(followCtx, st, agentsMgr, local, cfg.Server.Port, log)
+		// Not on probation: a release rolled back to from before one port serves agents only on
+		// 7778, and nothing would move them back.
+		select {
+		case <-pastProbation:
+			moveToOnePortOnce(followCtx, st, agentsMgr, local, log)
+		case <-followCtx.Done():
+		}
 	}()
 	go cloud.CloudTools(followCtx)
 	// The extensions still running from before this start read Meko again: an update or a rollback may
@@ -602,10 +619,11 @@ func refreshLaunchAgent(l paths.Layout, log *slog.Logger) {
 }
 
 // finishUpdate finishes the update to release once it has run for after (update.HealthyAfter),
-// unless ctx ends first, and then makes the meko-cli command and moves the extensions onto their
-// commands' new names (renameExtensions).
+// unless ctx ends first, and then makes the meko-cli command, moves the extensions onto their
+// commands' new names (renameExtensions) and calls healthy (when set): what serve held back while
+// the release was on probation, such as the agents' move to one port, goes ahead.
 func finishUpdate(ctx context.Context, app update.App, release string, after time.Duration, l paths.Layout,
-	log *slog.Logger) {
+	log *slog.Logger, healthy func()) {
 	select {
 	case <-ctx.Done():
 	case <-time.After(after):
@@ -617,6 +635,9 @@ func finishUpdate(ctx context.Context, app update.App, release string, after tim
 		log.Info("the update is done", "version", release, "pruned", pruned)
 		makeMekoCLI(app, log)
 		renameExtensions(l, log)
+		if healthy != nil {
+			healthy()
+		}
 	}
 }
 
@@ -628,9 +649,10 @@ func finishUpdate(ctx context.Context, app update.App, release string, after tim
 // page's too, even with [update] channel = "off" (which stops only the scheduled checks). When the
 // schema can't be read it returns nil and why.
 func startUpdates(ctx context.Context, app update.App, release string, l paths.Layout, cfg config.Config,
-	log *slog.Logger, onProbation bool, restart chan struct{}, web *webListener) (*update.Updater, string) {
+	log *slog.Logger, onProbation bool, healthy func(), restart chan struct{}, web *webListener) (*update.Updater,
+	string) {
 	if onProbation {
-		go finishUpdate(ctx, app, release, update.HealthyAfter, l, log)
+		go finishUpdate(ctx, app, release, update.HealthyAfter, l, log, healthy)
 	}
 	schema, err := store.LatestSchema()
 	if err != nil {
@@ -766,6 +788,42 @@ func moveToOnePortOnce(ctx context.Context, st *store.Store, m *agents.Manager, 
 	}
 	if err := st.SetSetting(ctx, keyAgentsOnOnePort, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		log.Warn("can't record that the agents moved to Meko's one port", "error", err)
+	}
+}
+
+// keyAgentsPort is the port Meko's agents were last connected to (followPort).
+const keyAgentsPort = "agents_port"
+
+// followPort moves the agents to this start's port when it isn't the one they were connected to:
+// meko install moves Meko to a free port when another program holds its own (pickPort), and
+// someone may change [server] port by hand. Only agents whose meko server is at exactly the old
+// port's URL move (an Exact move), so one pointed at another Meko on this computer stays. The new
+// port is recorded once no agent failed, so a failed one is tried again at the next start. With
+// none recorded yet (the first start of a release with followPort), the agents' port is taken to be
+// the default: install may have moved Meko off it in the same run that brought followPort.
+func followPort(ctx context.Context, st *store.Store, m *agents.Manager, to agents.Target, port int,
+	log *slog.Logger) {
+	last, ok, err := st.Setting(ctx, keyAgentsPort)
+	if err != nil {
+		return
+	}
+	if !ok {
+		last = strconv.Itoa(config.DefaultPort)
+	}
+	now := strconv.Itoa(port)
+	if last != now {
+		from := agents.Target{Kind: agents.KindLocal, URL: "http://127.0.0.1:" + last + "/mcp", Token: to.Token,
+			Exact: true}
+		moves := m.Move(ctx, from, to)
+		logMoves(log, moves)
+		if ctx.Err() != nil || len(moves.Failed) > 0 {
+			return
+		}
+	} else if ok {
+		return
+	}
+	if err := st.SetSetting(ctx, keyAgentsPort, now); err != nil {
+		log.Warn("can't record the port Meko's agents use", "error", err)
 	}
 }
 
