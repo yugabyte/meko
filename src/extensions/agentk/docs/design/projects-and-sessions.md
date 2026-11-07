@@ -57,7 +57,7 @@ idle_stop_hours = 24      # a session's agent idle this long is stopped, and res
 
 [meko]
 # AgentK uses the Meko on this computer; its Meko Cloud link is Meko's (its web UI's Settings › Meko
-# Cloud, or meko cloud_link). url, api_key, web_url and api_url from before are kept, unread, for a rollback.
+# Cloud, or meko cloud-link). url, api_key, web_url and api_url from before are kept, unread, for a rollback.
 # home = "…"                 # Meko's data folder, which AgentK's home is in; set by the installer and from Meko's MEKO_HOME
 # capture_transcripts = true   # send session transcripts to Meko conversations; off by default (MEKO-710)
 

@@ -42,7 +42,7 @@ meko ui                           # opens Meko's web UI: Presenter is in its sid
 
 Meko serves it at `/ext/present/` on its web listener, behind Meko's login, and its sidebar links
 to it. Decks are saved where Meko says: in Meko Cloud when Meko links it (Settings › Meko Cloud, or
-`meko cloud_link`), else in the Meko on this computer. Either way Presenter talks to the Meko on
+`meko cloud-link`), else in the Meko on this computer. Either way Presenter talks to the Meko on
 this computer, which passes its calls on to Meko Cloud with the link's key. While it links Meko
 Cloud, the decks in its own datapacks (made before the link) keep working beside Meko Cloud's.
 Presenter follows a change of the link at once; a draft made under the other Meko stays listed, and

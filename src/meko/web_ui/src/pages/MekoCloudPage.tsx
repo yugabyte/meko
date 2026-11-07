@@ -95,7 +95,7 @@ export function MekoCloudPage() {
         <Loading />
       )}
       <p className="text-xs text-muted-foreground">
-        On a computer without a browser, <Code>meko cloud_link</Code> does the same. A datapack's Connect page connects
+        On a computer without a browser, <Code>meko cloud-link</Code> does the same. A datapack's Connect page connects
         agents.
       </p>
     </div>

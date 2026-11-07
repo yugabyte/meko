@@ -82,6 +82,12 @@ func TestUsage(t *testing.T) {
 	want(t, "unknown command", code, exitUsage, errs, `meko: unknown command "frobnicate"`+"\nRun meko --help")
 	code, _, errs = run("statsu")
 	want(t, "a typo", code, exitUsage, errs, "Did you mean meko status?\n")
+	// cloud_link was renamed cloud-link: the old name runs nothing and points to the new one.
+	code, _, errs = run("cloud_link", "--off")
+	want(t, "cloud_link", code, exitUsage, errs, `meko: unknown command "cloud_link"`+"\nDid you mean meko cloud-link?\n")
+	code, out, _ = run("cloud-link", "-h")
+	want(t, "cloud-link -h", code, 0, out, "Usage: meko cloud-link [flags]")
+	want(t, "cloud-link -h", code, 0, out, "More: "+docsURL+"#cloud-link\n")
 	code, _, errs = run("start", "--nope")
 	want(t, "a bad flag", code, exitUsage, errs, "Run meko start --help for its flags\n")
 	code, _, errs = run("help", "frobnicate")

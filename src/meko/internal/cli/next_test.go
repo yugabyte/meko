@@ -18,7 +18,7 @@ func TestNextSteps(t *testing.T) {
 	ui := [2]string{"meko ui", "open the web UI"}
 	connect := [2]string{"meko agent connect claude", "use Meko in Claude Code (or codex, kiro, opencode, cursor)"}
 	learn := [2]string{"meko memory-extractor use claude", "learn memories from your conversations, through Claude Code"}
-	share := [2]string{"meko cloud_link", "share with your team through Meko Cloud"}
+	share := [2]string{"meko cloud-link", "share with your team through Meko Cloud"}
 	addAgentK := [2]string{"meko extension install agentk", "add AgentK, which runs coding agents from task to merged PR"}
 	openAgentK := [2]string{"meko kode ui", "open AgentK"}
 	openPresent := [2]string{"meko ui", "open the web UI, then Presenter in its sidebar"}
@@ -68,7 +68,7 @@ func TestNextSteps(t *testing.T) {
 		{"connect, the rest set up", done, nextConnect, [][2]string{
 			{"claude", "start a new Claude Code session, with Meko's tools (ones already running need a restart)"},
 			openAgentK}},
-		{"cloud_link with Meko stopped: start it first", nextState{agent: claude, connected: true, claude: true,
+		{"cloud-link with Meko stopped: start it first", nextState{agent: claude, connected: true, claude: true,
 			extracting: true, linked: true, agentK: true, agentKRead: true}, nextUse, [][2]string{
 			{"meko start", "start Meko"}, openAgentK}},
 		{"another data folder than meko kode's", nextState{running: true, agent: claude, connected: true, claude: true,

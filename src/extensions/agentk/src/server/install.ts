@@ -182,7 +182,7 @@ function hostOf(url: string): string {
 /**
  * The installer's Meko step. AgentK uses the Meko running on this computer (`meko token --json`)
  * and stores nothing of it: that Meko serves its own datapacks and passes the rest on to Meko Cloud
- * once Meko Cloud is linked in Meko (Settings › Meko Cloud, or `meko cloud_link`). `--no-meko` skips
+ * once Meko Cloud is linked in Meko (Settings › Meko Cloud, or `meko cloud-link`). `--no-meko` skips
  * Meko's setup for the agents. Declining Meko's setup for Claude Code or Kiro (each offered only
  * where it's installed) is a warning, not a stop. Returns whether there's a Meko to use.
  */
