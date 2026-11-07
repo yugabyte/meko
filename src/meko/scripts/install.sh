@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install or upgrade Meko for the current user; no root needed. It installs Meko alone: a first
-# install ends by offering the extensions (AgentK, Presenter), which meko extension install adds.
+# install ends by offering the extensions (AgentK, Present), which meko extension install adds.
 #
 #   curl -fsSL https://mekodata.ai/install.sh | sh
 #

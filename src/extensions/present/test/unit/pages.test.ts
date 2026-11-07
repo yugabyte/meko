@@ -5,7 +5,7 @@ import { parseRoute, routePath, type Route } from '../../src/web/router.js';
 
 describe('the page under /ext/present/', () => {
   it('names where Meko serves it, and the server\'s version', () => {
-    const page = stampPage('<html><head><title>Presenter</title></head></html>', '1.2.3"x');
+    const page = stampPage('<html><head><title>Present</title></head></html>', '1.2.3"x');
     expect(page).toContain('<head>\n    <base href="/ext/present/" />');
     expect(page).toContain('<meta name="present-version" content="1.2.3&#34;x" />');
   });

@@ -1,4 +1,4 @@
-// Presenter's own datapacks have names; content comes from any other datapack, with no naming rule.
+// Present's own datapacks have names; content comes from any other datapack, with no naming rule.
 
 export const TEMPLATE_PREFIX = 'present/template/';
 export const ANIM_PREFIX = 'present/anim/';
@@ -27,7 +27,7 @@ export function sameMeko(a: MekoAt, b: MekoAt): boolean {
   return a.kind === b.kind && (a.kind === 'local' || a.host === b.host);
 }
 
-/** The Meko on this computer: the only one a Presenter from before Meko's link used (its host doesn't matter). */
+/** The Meko on this computer: the only one a Present from before Meko's link used (its host doesn't matter). */
 export const LOCAL_MEKO: MekoAt = { kind: 'local', host: '' };
 
 /** A Meko as the pages name it: "Meko Cloud (host)", or "the Meko on this computer". */
@@ -36,7 +36,7 @@ export function mekoLabel(at: MekoAt): string {
   return at.host ? `Meko Cloud (${at.host})` : 'Meko Cloud';
 }
 
-/** What gets a deck saved in `at` back, while Presenter uses another Meko. */
+/** What gets a deck saved in `at` back, while Present uses another Meko. */
 export function reopenHint(at: MekoAt): string {
   return at.kind === 'cloud'
     ? `Link Meko to ${mekoLabel(at)} again in Meko's Settings › Meko Cloud to open it.`

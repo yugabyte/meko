@@ -6,7 +6,7 @@
 #           the newest v… release, which reads both, stays: prune-releases.sh never deletes it)
 #   meko    Meko (src/meko): tags meko-v<version>
 #   present
-#           Presenter (src/extensions/present): tags present-v<version>, whose tarballs Meko
+#           Present (src/extensions/present): tags present-v<version>, whose tarballs Meko
 #           installs and updates (meko extension install, meko extension update)
 #
 # Takes `--product agentk|meko|present` (default agentk) out of the script's arguments and sets:
@@ -18,8 +18,8 @@
 #                 release the product, and
 #   exclude       one for those that don't, even though scope matches them. Meko takes the
 #                 subjects that name meko, alone or in a list (feat(agentk,meko): ...), and
-#                 Presenter those that name present. AgentK takes every subject but those that
-#                 name only meko or present (or presenter, Presenter's component before it was
+#                 Present those that name present. AgentK takes every subject but those that
+#                 name only meko or present (or presenter, Present's component before it was
 #                 present): agentk, repo, lists naming agentk or repo, and old subjects with no
 #                 component or with the free-form one subjects had before 2026-10-20. So a
 #                 subject naming agentk and meko releases both

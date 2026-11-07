@@ -1,6 +1,6 @@
-# Presenter: design
+# Present: design
 
-Presenter turns Meko datapacks into presentations that change during the talk. This is the design
+Present turns Meko datapacks into presentations that change during the talk. This is the design
 as built; the decisions behind it, with the alternatives weighed, are in the "Decisions" table.
 
 ## Shape
@@ -9,7 +9,7 @@ as built; the decisions behind it, with the alternatives weighed, are in the "De
 flowchart TB
   subgraph Browser
     MUI["Meko's web UI at /"]
-    PG["Presenter's pages at /ext/present/\ndecks, map, slides, console, audience"]
+    PG["Present's pages at /ext/present/\ndecks, map, slides, console, audience"]
   end
   subgraph Meko["meko serve"]
     WL["Meko's port :7777\nbrowsers: proxy to the extension's socket"]
@@ -32,33 +32,33 @@ flowchart TB
 
 ## Which Meko
 
-Presenter keeps no Meko URL or key. It asks `meko token --json` (`src/server/meko.ts`), which
+Present keeps no Meko URL or key. It asks `meko token --json` (`src/server/meko.ts`), which
 answers whether or not Meko's server runs:
 
-| Meko says | Presenter uses |
+| Meko says | Present uses |
 |---|---|
-| `cloud.linked` | Meko Cloud and the Meko on this computer's own datapacks, through that Meko: its `url` and `token` for MCP and REST at the same origin's `/api/v1`, which serve a datapack that Meko has (one made there before the link) and pass any other id on to Meko Cloud. Presenter never sees the link's key. Meko Cloud is named by `cloud.web_url`'s host. With Meko's server stopped, no Meko |
+| `cloud.linked` | Meko Cloud and the Meko on this computer's own datapacks, through that Meko: its `url` and `token` for MCP and REST at the same origin's `/api/v1`, which serve a datapack that Meko has (one made there before the link) and pass any other id on to Meko Cloud. Present never sees the link's key. Meko Cloud is named by `cloud.web_url`'s host. With Meko's server stopped, no Meko |
 | `cloud` unlinked or never set, or no `cloud` (a Meko from before the link) | The Meko on this computer: its `url` and `token`, REST at the same origin's `/api/v1` |
 | `cloud` with `url` and `api_key` (an older Meko, which handed out the link's key) | Meko Cloud itself: MCP at `cloud.url`, REST at `cloud.api_url` (another host than the MCP one), the link's key. With no `api_url`, no Meko: the error says to link again |
 | `cloud.error`, or `meko` failed or is gone, after a link was read | The link last read, kept in memory only, so a slow `meko` or a locked Keychain never moves decks |
 | The same before any link was read (a start, or right after Meko's notice) | No Meko, rather than the one on this computer, for the same reason |
 
 When the link changes, and at each start of Meko's server (an update or a rollback may change its
-port, token or link), Meko posts `{"what":"cloud"}` to `/_meko/changed` on Presenter's socket;
+port, token or link), Meko posts `{"what":"cloud"}` to `/_meko/changed` on Present's socket;
 the client drops its connection, its conversation and the link it last read, and the next call finds
 Meko again. One connection is made at a time, so the client and the credentials it reports are
 always one Meko's. Each Claude run asks `meko token --json` again and reconnects when the URL or key
 changed (the local Meko on a new port, a new client token), then gets that Meko's URL and key (the
 key through `PRESENT_MEKO_KEY`). A deck's id is its datapack's, which exists in one Meko only, so
 each draft records the Meko it belongs to, read before Meko is asked to make or load it. A draft from
-before Presenter kept it is the current Meko's when that Meko lists its datapack, else the Meko on
-this computer's. A Meko Cloud draft named by another host (its MCP host, from when Presenter held the
+before Present kept it is the current Meko's when that Meko lists its datapack, else the Meko on
+this computer's. A Meko Cloud draft named by another host (its MCP host, from when Present held the
 link's key) becomes the current Meko Cloud's when that one lists its datapack. While the Meko on this
 computer links Meko Cloud, it lists its own datapacks with Meko Cloud's, so "the Meko
 that lists it" no longer tells them apart: `localIds` reads its `GET /api/v1/datapacks`, where a row
 whose `web_url` is a path (`/datapacks/<id>`) is its own, kept 30 s since every edit asks. A deck in
 one of those is the Meko on this computer's: tagged so when made from an untagged draft or loaded,
-served beside Meko Cloud's decks, and retagged when an earlier Presenter tagged it as Meko Cloud's
+served beside Meko Cloud's decks, and retagged when an earlier Present tagged it as Meko Cloud's
 (which it did under an earlier Meko), so it still opens once
 Meko Cloud is unlinked; unlinked, the Meko on this computer listing it retags it too. While its list
 can't be read, its own drafts aren't greyed out, and editing one says why it can't be checked. New decks are made in Meko Cloud and tagged as its own. The decks list shows another Meko's drafts greyed out, with what brings them back
@@ -66,7 +66,7 @@ can't be read, its own drafts aren't greyed out, and editing one says why it can
 checked again as each job and each Claude run starts, so a job queued before the link changed
 doesn't run on the other Meko. A run of one plays on, so a talk under way outlives a change of the
 link. The decks page says where decks are saved. An older
-Presenter's `config.json` key is removed at install.
+Present's `config.json` key is removed at install.
 
 ## The deck
 
@@ -95,9 +95,9 @@ what the map step read; with no deck session yet, or one Claude Code no longer h
 a session of its own. A scene's retry resumes its own session, and never replaces the deck's. Claude runs headless with the
 user's own setup (all its tools, the user's MCP servers) plus Meko under the name `present_meko`,
 `--permission-mode bypassPermissions`, hooks off, and answers in a JSON schema: a summary, a list of
-operations, and files it made under `./assets`. Presenter checks the operations against the deck as
+operations, and files it made under `./assets`. Present checks the operations against the deck as
 it is now; a bad answer is sent back once with what was wrong. Claude doesn't add assets itself
-(`addAsset`): Presenter adds the files it lists, since only those have their bytes here.
+(`addAsset`): Present adds the files it lists, since only those have their bytes here.
 
 - **Map** drafts or redraws the story map. **Build** fills scenes' slides. **Ask** changes a block,
   a slide, a scene or the deck from an instruction.
@@ -105,7 +105,7 @@ it is now; a bad answer is sent back once with what was wrong. Claude doesn't ad
   anything that would rewrite a hand-edited slide (a new file under the name of an asset one shows
   included), comes back as a **change set**: each operation with a tick, hand-edited ones unticked,
   applied in full or in part.
-- Cancel stops a job whether or not Claude has started; stopping Presenter cancels its jobs.
+- Cancel stops a job whether or not Claude has started; stopping Present cancels its jobs.
 - Every slide names its sources; the editor and console flag a slide without any.
 - Timeouts: map and build 10 minutes a scene; an ask about a block or slide 3 minutes, larger 10.
 
@@ -121,7 +121,7 @@ A deck lives in its own datapack, `present/deck/<slug>`, as pieces (`src/shared/
 | `assets/<name>` | A file of 4 MiB or less. |
 | `parts/<sha256>.<n>` | 4 MiB parts of anything bigger, listed in order in the manifest. |
 
-A save uploads only pieces whose hash the datapack doesn't have (Presenter keeps the hashes the last
+A save uploads only pieces whose hash the datapack doesn't have (Present keeps the hashes the last
 loaded or saved version stands on, and every piece uploaded since, even by a save that failed), four
 at a time, and `deck.json` last, so a save that stops partway leaves the previous version the
 newest. Each manifest carries its save time, so its bytes always differ and the newest artifact is
@@ -145,7 +145,7 @@ options, and a small mark on a detour); keys work in both windows.
 
 ## Releases
 
-Presenter releases on its own train (`.github/workflows/present-release.yml`, tags
+Present releases on its own train (`.github/workflows/present-release.yml`, tags
 `present-v<version>`, `scripts/release/*.sh --product present`). It has no native modules, so
 one job builds it once and packages `present-<version>-<os>-<arch>.tar.gz` for linux-x64,
 linux-arm64 and darwin-arm64 (`scripts/package-release.sh`), each with its own Node; a release
@@ -158,7 +158,11 @@ present`, the Extensions page): it checks the signature and the checksum, unpack
 `bin/me_present version --json` names it, and points `app/current` at it. The program is
 `me_present`, so a process list says it's a Meko extension's, and the extension `present` (its
 folder, tags, tarballs and pages). It has no command of its own on PATH: people run `meko present
-<command>`, which runs `app/current/bin/me_present` with `MEKO_HOME` set. Presenter was the
+<command>`, which runs `app/current/bin/me_present` with `MEKO_HOME` set. An older release
+still prints "Presenter" in its own output; Meko's status row drops that old title from its headline
+too (`Catalog.OldTitles`). A deck's datapack is described as `Deck "…" (Present)`, and one made by
+an older release as `Presenter deck "…"`.
+Present was the
 extension `presenter`, with the program `me_presenter` (`meko_presenter` before), and nothing moves
 an install from then. Meko no longer knows it: it stays in `extensions.json`, so `meko start` and
 `meko stop` still run its `me_presenter start` and `stop`, its start fails (its launcher runs `meko
@@ -171,7 +175,7 @@ runs the bundled Node (`node/bin/me_present`, so the process is named `me_presen
 `lib/dist/server/cli.js`, with `PRESENT_APP_DIR` naming the release's folder and
 `PRESENT_LAUNCHER` itself, and `meko present start` runs `serve` through it. Run by `meko start`
 and `meko stop`, which set `MEKO_SUMMARY=1`, `start` and `stop` print one row of Meko's summary
-(`  ✓ Presenter       started`, `src/server/summary.ts`; the format is in Meko's
+(`  ✓ Present         started`, `src/server/summary.ts`; the format is in Meko's
 `src/meko/docs/install.md`) instead of their usual line.
 
 An update is on probation until it has served for 5 minutes, and Meko runs it. The launcher hands
@@ -186,7 +190,7 @@ once in Meko. With no `meko` that has `_launch` (one too old, or none on PATH, i
 in Meko's `app/current/bin`), the launcher runs Node itself and says a failed update won't roll
 back. A build from source has no launcher and no record, and Meko never updates it.
 
-Meko updates Presenter on its own (its **Update automatically** switch, on unless turned off),
+Meko updates Present on its own (its **Update automatically** switch, on unless turned off),
 but not during a talk. Before an automatic update it runs `me_present _busy`, which asks the
 server on its socket (`GET /_meko/busy`) and exits 0 while a talk is live: a run has a window open
 (the console or the audience's), or moved in the last 5 minutes (`Runs.live`; its windows may be
@@ -200,15 +204,15 @@ answer, isn't busy. An update someone asks for doesn't wait.
 | A Meko extension with its own pages at `/ext/present/`, on a unix socket, as AgentK | One port and one login for everything Meko runs; one package, one release train | Pages in Meko's web UI (two apps on two trains); its own port (a second login) |
 | A graph of scenes, linear inside | One model for linear, tree and graph decks, readable on a map | A graph of single slides; linked decks |
 | Structured blocks, never model-written HTML | On-brand, editable by hand, safe to render | Free HTML per slide |
-| Content from any datapack; names only for Presenter's own | Teams keep content where they already do | `present/story/...` datapacks |
+| Content from any datapack; names only for Present's own | Teams keep content where they already do | `present/story/...` datapacks |
 | Two stages (map, then slides) with any tool Claude wants | Fix the shape before paying for slides; Claude reads, browses and draws | Meko's read tools only; one pass |
 | One persisted session per deck, driven headless | Claude keeps what it read and the editing conversation; answers stay checked JSON | A fresh `claude -p` per call; a live terminal session |
 | Typed operations for every edit, change sets for asks | One undo history, one set of rules, nothing unreviewed over hand edits | Rewriting the deck each time |
 | Pieces under Meko's artifact limit | Decks of any size; only changes go up; never half-saved | One `deck.json`; knowledge files (indexed for search) |
-| Meko installs and updates the releases; no installer or updater of Presenter's | Meko already stages, checks, switches and rolls back its own releases (`internal/update`); one place does it | An `install.sh` per release and a `present update` |
+| Meko installs and updates the releases; no installer or updater of Present's | Meko already stages, checks, switches and rolls back its own releases (`internal/update`); one place does it | An `install.sh` per release and a `present update` |
 | The launcher hands `serve` to Meko's `meko _launch`, which counts starts, rolls back and finishes the update | A release that can't start goes back to the one before by itself, and the rules live in Meko once, for itself and every extension | Each extension's launcher counting and rolling back on its own; Meko watching the start from outside |
 | `_busy` makes Meko's automatic update wait during a talk | A restart would drop the console and the audience's window mid-talk | Updating whenever a check finds one; turning automatic updates off before each talk |
-| Meko's Meko Cloud link, read from `meko token --json` and followed on Meko's notice; Meko Cloud reached through the Meko on this computer | One place links Meko Cloud for every extension, and its key stays in Meko | A key in Presenter's own `config.json`; Meko handing extensions the link's key |
+| Meko's Meko Cloud link, read from `meko token --json` and followed on Meko's notice; Meko Cloud reached through the Meko on this computer | One place links Meko Cloud for every extension, and its key stays in Meko | A key in Present's own `config.json`; Meko handing extensions the link's key |
 | Drafts name their Meko; another Meko's can be played, not edited | A deck's datapack exists in one Meko only; a talk under way outlives a change of the link | Hiding such drafts; letting their save fail with Meko's "not found" |
 | One build job packages every platform | No native modules: only the bundled Node differs | AgentK's per-platform builds (needed for node-pty) |
 

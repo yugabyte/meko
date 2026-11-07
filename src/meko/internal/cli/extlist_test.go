@@ -18,7 +18,7 @@ func TestExtensionListShowsEachExtension(t *testing.T) {
 	noRealExtensions(t)
 	code, out, errs := run("extension", "list", "--data-dir", dir)
 	want(t, "nothing installed", code, 0, out+errs, "EXTENSION   STATE           VERSION   UPDATES\n"+
-		"AgentK      not installed\nPresenter   not installed\n")
+		"AgentK      not installed\nPresent     not installed\n")
 
 	const version = "0.20261030.0"
 	installedAgentK(t, dir, version)
@@ -33,7 +33,7 @@ func TestExtensionListShowsEachExtension(t *testing.T) {
 	want(t, "AgentK running", code, 0, out,
 		"AgentK      running         "+version+"   by hand (meko extension update agentk)")
 
-	// Presenter from source: no version, and why Meko doesn't update it.
+	// Present from source: no version, and why Meko doesn't update it.
 	src := filepath.Join(t.TempDir(), "me_present")
 	fakeExtension(t, src)
 	reg, _ := extensions.Load(dir)
@@ -52,7 +52,7 @@ func TestExtensionListShowsEachExtension(t *testing.T) {
 	}
 	if r := rows[1]; r.Name != "present" || r.State != extRunning || r.Command != src || r.Updatable ||
 		r.NotUpdatable == "" || r.RolledBack == nil {
-		t.Errorf("Presenter's row %+v", r)
+		t.Errorf("Present's row %+v", r)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestExtensionListDamagedAndSlow(t *testing.T) {
 	}
 	before, _ := os.ReadFile(extensions.File(dir))
 	code, out, _ := run("extension", "list", "--data-dir", dir)
-	want(t, "damaged", code, 0, out, "Presenter   damaged ("+missing+" is missing)")
+	want(t, "damaged", code, 0, out, "Present     damaged ("+missing+" is missing)")
 	want(t, "damaged", code, 0, out, "meko extension delete present forgets it")
 	want(t, "found again", code, 0, out, "AgentK      running")
 	if after, _ := os.ReadFile(extensions.File(dir)); string(after) != string(before) {
@@ -93,7 +93,7 @@ func TestExtensionListDamagedAndSlow(t *testing.T) {
 	}
 	start := time.Now()
 	code, out, _ = run("extension", "list", "--data-dir", dir)
-	want(t, "slow", code, 0, out, "Presenter   didn't answer in 200ms")
+	want(t, "slow", code, 0, out, "Present     didn't answer in 200ms")
 	if d := time.Since(start); d > 3*time.Second {
 		t.Errorf("list waited %s for a status that doesn't answer", d)
 	}

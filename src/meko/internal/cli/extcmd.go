@@ -15,7 +15,7 @@ import (
 )
 
 // extensionOfVerb is the extension whose commands meko <verb> runs (Catalog.Verb): kode, AgentK's;
-// present, Presenter's.
+// present, Present's.
 func extensionOfVerb(verb string) (string, bool) {
 	for name, cat := range extensions.Known {
 		if cat.Verb != "" && cat.Verb == verb {
@@ -71,7 +71,7 @@ func leadingDataDir(args []string) (string, []string) {
 // returns its exit code: 128 plus the signal's number when a signal ended it. Ctrl+C and Ctrl+\
 // reach it from the terminal, which signals the whole foreground group, so meko only waits for it to
 // end: passing SIGINT or SIGQUIT on too would deliver them twice, and a program that handles the
-// first (Presenter's serve, with process.once) dies of the second before its cleanup. A SIGTERM or
+// first (Present's serve, with process.once) dies of the second before its cleanup. A SIGTERM or
 // SIGHUP sent to meko alone (a supervisor's, a closed terminal's) is passed on.
 func runProgram(program string, args, env []string, stdout, stderr io.Writer) int {
 	cmd := exec.Command(program, args...) //nolint:gosec // G204: an installed extension's own program

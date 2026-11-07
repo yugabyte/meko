@@ -39,9 +39,9 @@ the diff itself: check the staged files for secrets and personal data before com
 
 The release workflows read commit subjects. The repo releases three products, each on its own train:
 Meko (`meko-release.yml`, tags `meko-v0.YYYYMMDD.N`), AgentK (`agentk-release.yml`, tags
-`agentk-v0.YYYYMMDD.N`) and Presenter (`present-release.yml`, tags `present-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
+`agentk-v0.YYYYMMDD.N`) and Present (`present-release.yml`, tags `present-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
 product's last release cuts its next version, and those subjects become its release notes (and
-AgentK's **What's new**). Subjects naming `meko` release Meko; `present` releases Presenter;
+AgentK's **What's new**). Subjects naming `meko` release Meko; `present` releases Present;
 subjects naming any other component (`agentk`, `repo`) release AgentK
 (`scripts/release/release-notes.sh --product`), so `feat(agentk,meko): …` releases both. Every other type
 lands without a release. Use exactly one of these nine types:
@@ -75,7 +75,7 @@ The rest of the subject:
   |---|---|
   | `agentk` | AgentK, `src/extensions/agentk` |
   | `meko` | Meko, `src/meko` |
-  | `present` | Presenter, `src/extensions/present` (its own train, `present-release.yml`) |
+  | `present` | Present, `src/extensions/present` (its own train, `present-release.yml`) |
   | `repo` | The shared root: `.github/`, `scripts/`, `assets/`, root docs, `.claude/` |
 
   A root file that belongs to one component (`agentk-release.yml` builds AgentK) takes that
@@ -86,7 +86,7 @@ The rest of the subject:
   `fix(agentk/meko,meko/cli): …`. It releases every product it names, so name a component only
   when the change alters what it ships; one that only touches another (AgentK's tests reading a
   root script) takes the one it ships in. Meko's release workflow runs only on pushes that change
-  `src/meko/**`, `scripts/release/**` or `.github/workflows/meko-release.yml` (Presenter's:
+  `src/meko/**`, `scripts/release/**` or `.github/workflows/meko-release.yml` (Present's:
   `src/extensions/present/**`, `scripts/release/**` or its workflow), so a `meko` in a title whose
   PR changes none of them waits for the next push that does.
 - `/<area>` is optional: one lowercase name (letters, digits, dashes) for the part of the

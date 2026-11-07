@@ -1,4 +1,4 @@
-// Presenter's server: its pages, its API and its WebSockets, on a unix socket only. Meko's web
+// Present's server: its pages, its API and its WebSockets, on a unix socket only. Meko's web
 // listener serves it to browsers at /ext/present/ after its own sign-in, passing the browser's Host
 // and Origin as they are, so there's no login here; writes and WebSocket upgrades still refuse
 // another site's Origin, and the pages refuse to be framed.
@@ -21,7 +21,7 @@ import type { Jobs } from './jobs.js';
 import { MekoError, type MekoPort } from './meko.js';
 import type { Runs } from './runs.js';
 
-/** Where Meko serves Presenter: the page's `<base href>`, under which it builds every URL. */
+/** Where Meko serves Present: the page's `<base href>`, under which it builds every URL. */
 export const BASE_PATH = '/ext/present/';
 
 export interface Core {
@@ -153,7 +153,7 @@ export async function buildServer(core: Core, opts: { webDir: string | null }): 
     const e = err as { statusCode?: number; message?: string };
     if (e.statusCode === 413) {
       // Only an asset upload (the one PUT) carries a file; other bodies are JSON, up to bodyLimit.
-      return reply.code(413).send({ error: req.method === 'PUT' ? 'The file is bigger than 100 MiB, the most one asset can be. Trim or compress it first.' : 'The request is bigger than 8 MiB, the most Presenter takes. Send less at once.' });
+      return reply.code(413).send({ error: req.method === 'PUT' ? 'The file is bigger than 100 MiB, the most one asset can be. Trim or compress it first.' : 'The request is bigger than 8 MiB, the most Present takes. Send less at once.' });
     }
     if (e.statusCode && e.statusCode < 500) return reply.code(e.statusCode).send({ error: e.message ?? 'Bad request.' });
     return reply.code(500).send({ error: (err as Error)?.message ?? 'Something went wrong.' });
@@ -240,7 +240,7 @@ export async function buildServer(core: Core, opts: { webDir: string | null }): 
   app.post<{ Params: P; Body: StartRunRequest }>('/api/decks/:id/runs', async (req) => core.runs.start(req.params.id, str(req.body?.variant, 50) || undefined));
   app.get<{ Params: P }>('/api/runs/:id', async (req) => core.runs.get(req.params.id));
 
-  // Meko, on Presenter's socket: something Presenter reads from Meko changed (`cloud`: the Meko Cloud
+  // Meko, on Present's socket: something Present reads from Meko changed (`cloud`: the Meko Cloud
   // link). Outside /api, so the same-origin rule is checked here; all it does is find Meko again.
   app.post<{ Body: { what?: unknown } }>('/_meko/changed', async (req, reply) => {
     if (!sameOrigin(req)) return reply.code(403).send({ error: 'Cross-origin request refused.' });
@@ -248,7 +248,7 @@ export async function buildServer(core: Core, opts: { webDir: string | null }): 
     return reply.code(204).send();
   });
 
-  // Meko, on Presenter's socket, before it updates Presenter on its own: a live talk makes it wait.
+  // Meko, on Present's socket, before it updates Present on its own: a live talk makes it wait.
   app.get('/_meko/busy', async () => ({ busy: core.runs.live() }));
 
   app.get('/ws/events', { websocket: true }, (socket: WebSocket) => {

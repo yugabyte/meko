@@ -1,9 +1,9 @@
-// Presenter's door to Meko: datapacks and artifacts, through Meko's MCP tools, and the artifact list
+// Present's door to Meko: datapacks and artifacts, through Meko's MCP tools, and the artifact list
 // through its REST route (artifact_get only takes a hash, so finding the newest deck.json needs the
 // list). It always talks to the Meko on this computer, from `meko token --json` (Meko's
 // docs/cloud.md): while Meko links Meko Cloud, that Meko passes the calls on to Meko Cloud with the
-// link's key, which Presenter never sees. A Meko from before that handed out the link's key, and
-// Presenter then talks to Meko Cloud itself.
+// link's key, which Present never sees. A Meko from before that handed out the link's key, and
+// Present then talks to Meko Cloud itself.
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -16,7 +16,7 @@ import { mekoDirOf, withLocalBin, type Paths } from './paths.js';
 
 export const AGENT_ID = 'present';
 
-/** The conversation Presenter's calls name when Meko refuses conversation_create (no default datapack). */
+/** The conversation Present's calls name when Meko refuses conversation_create (no default datapack). */
 const SERVICE_CONVERSATION = createHash('sha256').update('present-service').digest('hex').slice(0, 32);
 
 /** Tools that make something new on every call: never sent again once a call may have reached Meko. */
@@ -47,11 +47,11 @@ export interface ArtifactRow {
   createdAt: string;
 }
 
-/** What Presenter asks of Meko. The server takes it as a dependency, so tests give it a fake. */
+/** What Present asks of Meko. The server takes it as a dependency, so tests give it a fake. */
 export interface MekoPort {
   /** Whether Meko can be reached now. */
   status(): Promise<'ready' | 'none' | 'failed'>;
-  /** Which Meko Presenter uses (found even when it can't be reached), or null when there's none. */
+  /** Which Meko Present uses (found even when it can't be reached), or null when there's none. */
   at(): Promise<MekoAt | null>;
   listDatapacks(): Promise<DatapackRow[]>;
   createDatapack(name: string, description: string): Promise<DatapackRow>;
@@ -63,7 +63,7 @@ export interface MekoPort {
   listArtifacts(datapackId: string, filename: string): Promise<ArtifactRow[]>;
   /**
    * The datapacks the Meko on this computer serves itself while it links Meko Cloud, so their decks
-   * are that Meko's, not Meko Cloud's; null when Presenter doesn't reach Meko Cloud through it.
+   * are that Meko's, not Meko Cloud's; null when Present doesn't reach Meko Cloud through it.
    */
   localIds(): Promise<Set<string> | null>;
 }
@@ -157,7 +157,7 @@ function hostOf(url: string): string {
 /**
  * Asks `meko token --json` (`meko` on PATH or in ~/.local/bin) about the data folder this home is in.
  * Meko answers it while its server is stopped too, and keeps its token in the Keychain on macOS, so
- * Presenter asks rather than read its files.
+ * Present asks rather than read its files.
  */
 export function probeMeko(paths: Paths, env: NodeJS.ProcessEnv = process.env): Promise<MekoProbe> {
   const mekoDir = mekoDirOf(paths.home);
@@ -187,7 +187,7 @@ const RELINK = "link it again in Meko's Settings › Meko Cloud";
 /**
  * Finds Meko's URL and key each time it's called: always the Meko on this computer, whose datapacks
  * are Meko Cloud's while it links Meko Cloud, and its own too (REST on its /api/v1). Only an older
- * Meko that hands out the link's key sends Presenter to Meko Cloud itself. A read that couldn't ask
+ * Meko that hands out the link's key sends Present to Meko Cloud itself. A read that couldn't ask
  * `meko`, or whose link Meko couldn't read, keeps the link last read (in memory only), so a slow
  * `meko` or a locked Keychain doesn't move decks to another Meko. Before any link is read (a start,
  * or after `forget()`), such a read finds no Meko rather than the one on this computer, for the same
@@ -238,7 +238,7 @@ export function atOf(creds: MekoCreds): MekoAt {
 
 /**
  * A refusal of Meko Cloud's key, which only linking again fixes: Meko Cloud's own 401 or 403 when
- * Presenter holds the key (an older Meko), or the code Meko answers with when it does.
+ * Present holds the key (an older Meko), or the code Meko answers with when it does.
  */
 function refusedKey(status: number | undefined, creds: MekoCreds, code = ''): MekoError | null {
   const direct = creds.kind === 'cloud' && creds.cloudHost === undefined;
@@ -277,9 +277,9 @@ export class MekoClient implements MekoPort {
   }
 
   /**
-   * The credentials of the Meko Presenter uses now, for Claude's runs; null when it can't be reached.
+   * The credentials of the Meko Present uses now, for Claude's runs; null when it can't be reached.
    * Read afresh: a connection still open can hold a URL or key Meko has since changed (a new port, a
-   * new client token), which Presenter's own calls get past by reconnecting and Claude's can't.
+   * new client token), which Present's own calls get past by reconnecting and Claude's can't.
    */
   async current(): Promise<MekoCreds | null> {
     try {
@@ -403,14 +403,14 @@ export class MekoClient implements MekoPort {
   }
 
   /**
-   * The conversation Presenter's calls belong to. conversation_create needs a datapack, or Meko's
+   * The conversation Present's calls belong to. conversation_create needs a datapack, or Meko's
    * default one, which the user may have deleted; then a fixed id stands in, since the other tools
    * only use it to group their calls.
    */
   private async conv(): Promise<string> {
     if (this.conversation) return this.conversation;
     try {
-      const r = await this.call('conversation_create', { agent_id: AGENT_ID, session_id: 'present-service', title: 'Presenter' });
+      const r = await this.call('conversation_create', { agent_id: AGENT_ID, session_id: 'present-service', title: 'Present' });
       this.conversation = String(r.id ?? r.conversation_id ?? SERVICE_CONVERSATION);
     } catch (e) {
       if (!(e instanceof MekoError)) throw e;
@@ -500,7 +500,7 @@ export class MekoClient implements MekoPort {
   /**
    * REST: GET <apiUrl>/datapacks, whose rows of the Meko on this computer's own datapacks open on its
    * web UI (a `web_url` that's a path, /datapacks/<id>) and Meko Cloud's in its web app. Only while
-   * Presenter reaches Meko Cloud through that Meko, read again once `LOCAL_IDS_MS` old. The listing fails while Meko Cloud
+   * Present reaches Meko Cloud through that Meko, read again once `LOCAL_IDS_MS` old. The listing fails while Meko Cloud
    * does, and so does this.
    */
   async localIds(): Promise<Set<string> | null> {

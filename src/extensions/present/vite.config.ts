@@ -5,7 +5,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
-// In dev, the server listens on its unix socket in the dev home (`npm run dev:server`), as Presenter
+// In dev, the server listens on its unix socket in the dev home (`npm run dev:server`), as Present
 // always does: <home>/run/web.sock, or a short one under /tmp when that path is over 100 bytes
 // (sockPath() in src/server/paths.ts). PRESENT_DEV_SOCK names another socket.
 const home = process.env.PRESENT_DEV_HOME ?? join(fileURLToPath(new URL('.', import.meta.url)), '.dev-home');
@@ -23,7 +23,7 @@ const api = { target: { socketPath: devSocket(), host: 'localhost', port: 80 } }
 export default defineConfig({
   root: 'src/web',
   // Relative, so the built page loads its files from wherever it's served: under /ext/present/
-  // behind Meko (the <base> Presenter's server stamps into index.html).
+  // behind Meko (the <base> Present's server stamps into index.html).
   base: './',
   plugins: [react(), tailwindcss()],
   // Mermaid and React Flow are big; they load only where a page needs them.

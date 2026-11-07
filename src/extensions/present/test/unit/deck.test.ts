@@ -62,7 +62,7 @@ describe('deck rules', () => {
 });
 
 describe('datapacks', () => {
-  it('groups Presenter\'s own by prefix, and every other one is content', () => {
+  it('groups Present\'s own by prefix, and every other one is content', () => {
     const g = groupDatapacks([
       { id: '1', name: 'present/template/yb-dark', description: '' },
       { id: '2', name: 'ybdb/xcluster', description: '' },

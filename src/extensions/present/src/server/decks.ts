@@ -1,4 +1,4 @@
-// The decks Presenter works on: each one's working draft (kept in its folder after every change, so a
+// The decks Present works on: each one's working draft (kept in its folder after every change, so a
 // crash loses nothing), one undo history for hand edits and Claude's, and saving to and loading from
 // the deck's datapack through the piece store.
 
@@ -34,7 +34,7 @@ interface Stored {
   known: string[];
   assetPieces: Record<string, Piece>;
   /**
-   * The Meko its datapack is in. A draft from before Presenter kept it is the current Meko's when that
+   * The Meko its datapack is in. A draft from before Present kept it is the current Meko's when that
    * Meko has its datapack, else the Meko on this computer's (`untagged`). While the Meko on this
    * computer links Meko Cloud, it serves both, and a deck in one of its own datapacks
    * is its own (`localIds`).
@@ -55,7 +55,7 @@ function writeJson(file: string, v: unknown): void {
 }
 
 /**
- * Whether Presenter, using `at`, serves a deck saved in `m`: the same Meko, or the Meko on this
+ * Whether Present, using `at`, serves a deck saved in `m`: the same Meko, or the Meko on this
  * computer while it links Meko Cloud and serves its own datapacks (`here`, from `localIds`), this
  * deck's among them.
  */
@@ -164,7 +164,7 @@ export class DeckStore {
   async create(req: CreateDeckRequest): Promise<DeckState> {
     const title = req.title.trim();
     if (!title) throw new HttpError(400, 'Give the deck a title.');
-    // Read before Meko is asked anything: the datapack is made in the Meko Presenter uses now.
+    // Read before Meko is asked anything: the datapack is made in the Meko Present uses now.
     const meko = (await this.meko.at()) ?? undefined;
     const deck = checkDeck(newDeck(title, req.brief, req.sources));
     const base = deckDatapackName(title);
@@ -172,7 +172,7 @@ export class DeckStore {
     for (let n = 1; n <= 20 && !row; n++) {
       const name = n === 1 ? base : `${base.slice(0, 60 - String(n).length - 1)}-${n}`;
       try {
-        row = await this.meko.createDatapack(name, `Presenter deck "${title.slice(0, 200)}"`);
+        row = await this.meko.createDatapack(name, `Deck "${title.slice(0, 200)}" (Present)`);
       } catch (e) {
         if (!(e instanceof MekoError && /conflict|taken|exists/i.test(e.message))) throw e;
       }
@@ -186,7 +186,7 @@ export class DeckStore {
 
   /**
    * A deck to edit, save or hand to Claude: refused when its draft belongs to another Meko than the
-   * one Presenter uses now (Meko's link changed), whose datapack this Meko doesn't have. Playing it
+   * one Present uses now (Meko's link changed), whose datapack this Meko doesn't have. Playing it
    * (`deck()`) still works, so a talk under way outlives a change of the link. With no Meko found,
    * the draft can still be edited here.
    */
@@ -201,7 +201,7 @@ export class DeckStore {
       this.persist(e);
     }
     // While the Meko on this computer links Meko Cloud, it serves its own datapacks too. A deck in one
-    // is that Meko's, even one tagged as Meko Cloud's, which an earlier Meko led Presenter to do, so it
+    // is that Meko's, even one tagged as Meko Cloud's, which an earlier Meko led Present to do, so it
     // still opens once Meko Cloud is unlinked.
     // Unlinked, that Meko's own listing tells such a deck too.
     let here: Set<string> | null = null;
@@ -217,21 +217,21 @@ export class DeckStore {
       e.meko = LOCAL_MEKO;
       this.persist(e);
     }
-    // The same Meko Cloud may be named by another host: its MCP one when Presenter held the link's key,
+    // The same Meko Cloud may be named by another host: its MCP one when Present held the link's key,
     // its web app's now. The datapack is in one Meko only, so the Meko that lists it is the draft's.
     if (!sameMeko(e.meko, at) && e.meko.kind === 'cloud' && at.kind === 'cloud' && (await this.untagged(e.id, at)) === at) {
       e.meko = at;
       this.persist(e);
     }
     if (!serves(at, e.meko, e.id, here)) {
-      throw new HttpError(409, `This deck is saved in ${mekoLabel(e.meko)}, and Presenter now uses ${mekoLabel(at)}. ${reopenHint(e.meko)}`);
+      throw new HttpError(409, `This deck is saved in ${mekoLabel(e.meko)}, and Present now uses ${mekoLabel(at)}. ${reopenHint(e.meko)}`);
     }
     return e;
   }
 
   /**
-   * The Meko a draft from before Presenter kept it belongs to: the one Presenter uses now when it has
-   * the deck's datapack, else the Meko on this computer (the only one an older Presenter used, short of
+   * The Meko a draft from before Present kept it belongs to: the one Present uses now when it has
+   * the deck's datapack, else the Meko on this computer (the only one an older Present used, short of
    * a hand-written config.json). A datapack the Meko on this computer serves itself while it links
    * Meko Cloud is its own, though it lists it with Meko Cloud's. Null while Meko can't be asked.
    */
@@ -274,7 +274,7 @@ export class DeckStore {
 
   /** A deck with no draft here, from its newest save in its datapack. */
   private async load(id: string): Promise<Entry> {
-    // Read before Meko is asked anything: the deck comes from the Meko Presenter uses now, or the Meko
+    // Read before Meko is asked anything: the deck comes from the Meko Present uses now, or the Meko
     // on this computer's own datapacks while it serves them beside Meko Cloud's.
     const at = (await this.meko.at()) ?? undefined;
     const meko = at?.kind === 'cloud' && (await this.meko.localIds())?.has(id) ? LOCAL_MEKO : at;
@@ -304,7 +304,7 @@ export class DeckStore {
   /** Applies edits, checked; the deck before them goes on the undo history. */
   async apply(id: string, ops: Op[]): Promise<DeckState> {
     const e = await this.mine(id);
-    // An asset whose bytes Presenter doesn't hold would make every save fail: files come in through addAsset().
+    // An asset whose bytes Present doesn't hold would make every save fail: files come in through addAsset().
     for (const o of ops) {
       if (o?.op === 'addAsset' && !(this.pieces.has(String(o.asset?.hash)) || Object.hasOwn(e.assetPieces, String(o.asset?.hash)))) {
         throw new HttpError(400, `The file for asset "${o.name}" isn't on this computer or in the deck's datapack. Add the file itself.`);

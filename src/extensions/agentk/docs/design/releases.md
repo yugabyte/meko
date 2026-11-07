@@ -25,7 +25,7 @@ Part of the [AgentK design](../design.md).
   release runs the tests and cuts the next version, and those subjects become the release notes;
   `ci`, `test`, `docs`, `nit` and `chore` don't release. Releases are scoped by component: Meko
   (`src/meko`) releases on its own, from its own tags (`meko-v…`), and subjects naming only `meko`
-  never release AgentK. Presenter (`src/extensions/present`) releases on its own too
+  never release AgentK. Present (`src/extensions/present`) releases on its own too
   (`present-release.yml`, tags `present-v…`): subjects naming only `present` (or `meko` and
   `present`) release nothing for AgentK. Every other subject
   (`agentk`, `repo`, lists such as `agentk,meko`, and older ones with no component or a free-form
@@ -134,7 +134,7 @@ meko extension install agentk -- --agent kiro      # options after -- go to `mek
 
 **Tags.** The repo releases three products. AgentK's releases are tagged `agentk-v<version>`
 (`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`, and
-Presenter's `present-v<version>` (`present-release.yml`; Meko installs and updates them). Versions stay
+Present's `present-v<version>` (`present-release.yml`; Meko installs and updates them). Versions stay
 bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and Meko's `bad-versions` use them, and on the day of
 the switch `next-version.sh` counted both prefixes so no version was used twice. AgentKs installed
 before the switch read only `v…` tags; the last `v…` release (the bridge) reads both, so they reach

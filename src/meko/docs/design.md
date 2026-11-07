@@ -144,7 +144,7 @@ XDG spec says), else `/var/tmp/<user>/meko`, named by the user lookup; a failed 
 `/var/tmp/<user>` must be a real folder (not a symlink) owned by the user and not writable by
 others, or by a group other than the user's own. An
 explicit `--data-dir` on a network filesystem is refused with a message saying why. Meko, AgentK
-and Presenter check their rule against the cases in `internal/paths/testdata/resolve-cases.json`.
+and Present check their rule against the cases in `internal/paths/testdata/resolve-cases.json`.
 
 Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown key in
 `config.toml` is an error naming it.
