@@ -269,7 +269,8 @@ func TestInstallBracesVariablesBeforeSymbols(t *testing.T) {
 	bare := regexp.MustCompile(`\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]`)
 	for i, line := range strings.Split(string(b), "\n") {
 		if m := bare.FindString(line); m != "" {
-			t.Errorf("install.sh:%d: %q needs braces: ${%s}", i+1, m, strings.TrimRightFunc(m[1:], func(r rune) bool { return r > 0x7f }))
+			name := strings.TrimRightFunc(m[1:], func(r rune) bool { return r > 0x7f })
+			t.Errorf("install.sh:%d: %q needs braces: ${%s}", i+1, m, name)
 		}
 	}
 }
