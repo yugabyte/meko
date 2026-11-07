@@ -314,8 +314,10 @@ async function status(): Promise<void> {
   // that's only slow to answer must still be told from a stopped one (the lease, below).
   const probing = probeLocal(paths, STATUS_PROBE_MS);
   if (forMekoSummary()) {
-    // meko status runs it so (MEKO_SUMMARY=1) for its AgentK row: the headline alone, which needs
-    // only the server's answer and the lease, so the rest isn't read inside its 3 s.
+    // Meko runs it so (MEKO_SUMMARY=1) for meko status's AgentK row, and an update deciding whether
+    // to restart AgentK: the headline alone, which needs only the server's answer and the lease, so
+    // the rest isn't read inside meko status's 3 s. Meko reads the exit code: 3 when no server runs
+    // this home, as Presenter's. One holding the lease that was only slow to answer runs.
     const probe = await probing;
     const leasePid = heldLease(paths.lock)?.pid ?? null;
     console.log(headline({ version: version(), probe, leasePid, now: Date.now() }));
@@ -364,13 +366,13 @@ async function status(): Promise<void> {
     logs: join(paths.logs, 'server.log'),
     now: Date.now(),
   };
-  const marks = { ok: style.green, warn: style.yellow, fail: style.red };
+  const marks = { ok: style.green, warn: style.warn, fail: style.red };
   const paint: Paint = stdoutColor()
     ? { color: true, mark: (k, m) => marks[k](m), bold: style.bold, dim: style.dim, link: style.link, cta: style.cta, blue: style.blue }
     : PLAIN;
-  for (const line of formatStatus(facts, paint)) console.log(line);
-  // Meko reads the exit code (meko status, and an update deciding whether to restart AgentK): 3 when
-  // no server runs this home, as Presenter's. One holding the lease that was only slow to answer runs.
+  for (const line of formatStatus(facts, paint, process.stdout.isTTY === true)) console.log(line);
+  // 3 when no server runs this home, as Presenter's, and as above. One holding the lease that was
+  // only slow to answer runs. (A Meko from before MEKO_SUMMARY reads this exit code.)
   if (!serverRuns(facts)) process.exitCode = 3;
 }
 

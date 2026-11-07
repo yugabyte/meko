@@ -23,7 +23,10 @@ export function stopRowText(stopped: boolean, sessions: number, services: boolea
   return `stopped; ${sessions} session(s) resume at ${services ? 'meko start' : 'meko kode serve'}`;
 }
 
-/** Whether Meko runs this start or stop for its summary (MEKO_SUMMARY=1): it then prints one row. */
+/**
+ * Whether Meko runs this command for its summary (MEKO_SUMMARY=1): `start` and `stop` then print
+ * one row, and `status` only its headline, which `meko status` shows in AgentK's row.
+ */
 export function forMekoSummary(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.MEKO_SUMMARY === '1';
 }

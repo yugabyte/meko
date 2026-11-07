@@ -4,7 +4,9 @@
  * a headline (`● AgentK <version> is running · pid, up`), the links as plain aligned rows, then the
  * commands to run next. `meko status` runs it with MEKO_SUMMARY=1 and shows the one line `headline`
  * gives in its AgentK row, without the mark and "AgentK" (src/meko/docs/install.md), so that line's
- * marks are always ✓, ! and ✗, whatever the locale, and never colored.
+ * marks are always ✓, ! and ✗, whatever the locale, and never colored. Off a terminal the output
+ * starts with that line too: a Meko from before MEKO_SUMMARY reads the first line, and would take a
+ * row's mark (`✓ Session host …`) for AgentK's.
  */
 import type { Probe } from './health.js';
 
@@ -87,9 +89,14 @@ export function headline(f: Pick<StatusFacts, 'version' | 'probe' | 'leasePid' |
   return `${MARKS.fail} AgentK ${f.version} isn't running`;
 }
 
-/** The status's lines, colored by `p` (plain by default). */
-export function formatStatus(f: StatusFacts, p: Paint = PLAIN): string[] {
+/**
+ * The status's lines, colored by `p` (plain by default). Off a `terminal` they start with the
+ * `headline` and a blank line, for a Meko from before MEKO_SUMMARY, which reads the first line.
+ */
+export function formatStatus(f: StatusFacts, p: Paint = PLAIN, terminal = true): string[] {
   const lines: string[] = [];
+  if (!terminal) lines.push(headline(f), '');
+  const top = lines.length;
   const row = (k: Kind, label: string, text: string) => lines.push(`  ${p.mark(k, MARKS[k])} ${label.padEnd(15)} ${text}`);
   const runs = serverRuns(f);
 
@@ -114,7 +121,7 @@ export function formatStatus(f: StatusFacts, p: Paint = PLAIN): string[] {
 
   // The headline, after a blank line (none before it when there are no rows), its text bold and
   // its note dim, as Meko's "● Meko 1.2 is running · pid 7, up 2h".
-  if (lines.length) lines.push('');
+  if (lines.length > top) lines.push('');
   const a = about(f);
   const note = (text: string, n: string) => (n ? `${text}${p.dim(` · ${n}`)}` : text);
   if (f.probe.ok) lines.push(`  ${p.mark('ok', '●')} ${note(p.bold(`AgentK ${f.version} is running`), a)}`);

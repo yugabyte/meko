@@ -38,7 +38,6 @@ describe("meko kode status, laid out as meko status", () => {
       'Next:',
       '  meko kode ui    open AgentK',
     ]);
-    expect(formatStatus(facts()).some((l) => /[│┌└]/.test(l))).toBe(false);
   });
 
   it('says when it is stopped, with the sessions the host keeps, and how to start it', () => {
@@ -59,6 +58,18 @@ describe("meko kode status, laid out as meko status", () => {
     ]);
     expect(lines.some((l) => l.includes('Server'))).toBe(false);
     expect(lines.slice(-2)).toEqual(['Next:', '  meko kode start    start AgentK']);
+  });
+
+  it('starts with the headline Meko reads off a terminal, for a Meko from before MEKO_SUMMARY', () => {
+    // A row first would give an older Meko its mark: a stopped server with its host up read as ✓.
+    const stopped = facts({ probe: { ok: false, error: 'connect ENOENT' }, leasePid: null });
+    expect(formatStatus(stopped, undefined, false).slice(0, 4)).toEqual([
+      "✗ AgentK 0.20261103.13 isn't running",
+      '',
+      '  ✓ Session host    running (pid 39531), 0 sessions',
+      '  ✓ Service         launchd',
+    ]);
+    expect(formatStatus(facts(), undefined, false).slice(2)).toEqual(formatStatus(facts()));
   });
 
   it('opens with the headline when there are no rows', () => {

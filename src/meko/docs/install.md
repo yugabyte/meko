@@ -395,9 +395,11 @@ each one. The contract is the extension's own CLI: `<command> start`, `stop` and
 its uninstall (`Catalog.UninstallArgs`; AgentK's is `uninstall --purge --delete-worktrees
 --non-interactive`) for `meko destroy --with-extensions`. `status` exits 0 only while the
 extension runs (AgentK and Presenter exit 3 when stopped), and its first line is shown in `meko
-status`'s row. Meko runs it with `MEKO_SUMMARY=1`, which asks for that line alone (run by hand, the
-extension prints its rows first, its headline below them, as `meko status` does). A first line that
-starts with a mark (`✓`, `!` or `✗`), the extensions' own headline
+status`'s row. Meko runs it with `MEKO_SUMMARY=1`, which asks for that line alone. Without it, on
+a terminal, the extension prints its rows first and its headline below them, as `meko status`
+does; off a terminal (piped, or captured by a Meko from before `MEKO_SUMMARY` on status) it prints
+the headline line first, then the same, so a row's mark is never read as the extension's. A first
+line that starts with a mark (`✓`, `!` or `✗`), the extensions' own headline
 (`✓ AgentK 0.20261103.13 is running (pid 39527, up 2h4m0s)`), is shown without the mark and the
 extension's title (`✓ AgentK   0.20261103.13 is running (pid 39527, up 2h4m0s)`), and its mark is the
 row's: a server that runs but doesn't answer exits 0 and is a `!`. Any other line is shown after
@@ -416,8 +418,7 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
 ### The summary rows
 
 `meko start` and `meko stop` run each extension's `start` and `stop` with `MEKO_SUMMARY=1` too
-(`Entry.RunSummary`), and pass its output through (`meko status` runs `status` with it as well,
-for the extension's headline alone: above). With it set, the extension prints exactly one
+(`Entry.RunSummary`), and pass its output through. With it set, `start` and `stop` print exactly one
 line, a row of Meko's summary (`internal/cli/report.go`): two spaces, a mark (`✓` done, `!` a
 warning, `✗` failed), its title padded to 15 characters, a space, then what happened, such as
 `  ✓ AgentK          started; sessions resume in a few seconds`. The mark is colored (green,
@@ -427,8 +428,9 @@ keeps what only it knows: AgentK's stop row says where its sessions resume, `mek
 `meko kode serve` when it runs without services. On a failure it prints its error
 to stderr as usual and exits non-zero, and Meko adds its own `✗` row after it. Run without
 `MEKO_SUMMARY` (by hand, by an older Meko, or by `meko extension update` and the Extensions page,
-which keep its output for their logs) it prints what it always has. AgentK and Presenter format the
-row in `src/server/summary.ts`.
+which keep its output for their logs) they print what they always have. AgentK and Presenter format the
+row in `src/server/summary.ts`. (`status` with `MEKO_SUMMARY=1` prints its headline instead, not a
+row: above.)
 
 `meko update`, `meko extension update` and `meko extension install` print the rows of the steps that
 otherwise print nothing (`internal/spin`): `Release`, for the release they download, check and unpack

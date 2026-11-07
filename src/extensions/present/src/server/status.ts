@@ -3,9 +3,11 @@
  * row per check, a headline (`● Presenter <version> is running · pid, up`), the links as plain
  * aligned rows, then the commands to run next. `meko status` runs it with MEKO_SUMMARY=1 and shows
  * the one line `headline` gives in its Presenter row, without the mark and "Presenter"
- * (src/meko/docs/install.md), so that line's mark is never colored.
+ * (src/meko/docs/install.md), so that line's mark is never colored. Off a terminal the output starts
+ * with that line too: a Meko from before MEKO_SUMMARY reads the first line, and would take a row's
+ * mark (`✓ Claude Code …` of a stopped Presenter) for Presenter's.
  */
-import { summaryRow } from './summary.js';
+import { blueCode, summaryRow } from './summary.js';
 
 export interface StatusFacts {
   version: string;
@@ -46,8 +48,13 @@ export function headline(f: Pick<StatusFacts, 'version' | 'pid' | 'startedAt' | 
 
 const paint = (code: string, s: string, color: boolean) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
 
-export function statusLines(f: StatusFacts, color = process.stdout.isTTY === true && !process.env.NO_COLOR && process.env.TERM !== 'dumb'): string[] {
-  const lines: string[] = [];
+/**
+ * The status's lines, in color when `color`. Off a `terminal` they start with the `headline` and a
+ * blank line, for a Meko from before MEKO_SUMMARY, which reads the first line.
+ */
+export function statusLines(f: StatusFacts, color = process.stdout.isTTY === true && !process.env.NO_COLOR && process.env.TERM !== 'dumb',
+  terminal = process.stdout.isTTY === true): string[] {
+  const lines: string[] = terminal ? [] : [headline(f), ''];
   if (runs(f)) lines.push(summaryRow('✓', 'Server', 'healthy', color));
   else if (f.pid !== null) lines.push(summaryRow('✗', 'Server', 'not answering on its socket', color));
   lines.push(f.claude ? summaryRow('✓', 'Claude Code', 'installed', color) : summaryRow('!', 'Claude Code', 'not found: install it to build decks', color));
@@ -75,7 +82,8 @@ export function statusLines(f: StatusFacts, color = process.stdout.isTTY === tru
   cmds.forEach(([c, what], i) => {
     const pad = ' '.repeat(w - c.length + 4);
     // The call to action's color starts a column early, so its text lines up with the commands below it.
-    lines.push(i === 0 && color ? ` ${paint('1;97;44', ` ${c} `, true)}${pad.slice(1)}${what}` : `  ${c}${pad}${what}`);
+    if (i === 0 && color) lines.push(` ${paint('1;97;44', ` ${c} `, true)}${pad.slice(1)}${what}`);
+    else lines.push(`  ${i === 0 ? c : paint(blueCode(), c, color)}${pad}${what}`);
   });
   return lines;
 }

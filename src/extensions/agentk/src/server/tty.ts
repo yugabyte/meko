@@ -35,6 +35,8 @@ export const style = {
   dim: (s: string) => paint('2', s),
   green: (s: string) => paint('32', s),
   yellow: (s: string) => paint('33', s),
+  /** Meko's Warning: bold yellow, since some themes draw yellow pale on white. */
+  warn: (s: string) => paint('1;33', s),
   red: (s: string) => paint('31', s),
   blue: (s: string) => paint(blueCode(), s),
   /** A URL blue and underlined, and an OSC 8 link, which terminals that know it make clickable: Meko's `spin.Link`. */

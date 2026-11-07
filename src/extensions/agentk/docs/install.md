@@ -94,7 +94,7 @@ your phone can connect.
 | Command | What it does |
 |---|---|
 | `meko kode ui` | Open AgentK in your browser through Meko (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
-| `meko kode status` | Laid out as `meko status`: a row each for the server (`healthy`), the session host and its sessions, and the services, then a `● AgentK <version> is running · pid, up` headline, the web UI's URL, the home and the log as plain rows, and what to run next (`meko kode ui`, or `meko kode start` when stopped); exits 3 when no server runs this home. Run by `meko status` (`MEKO_SUMMARY=1`), it prints only `✓ AgentK <version> is running (pid, up)`, which `meko status` shows in its AgentK row |
+| `meko kode status` | Laid out as `meko status`: a row each for the server (`healthy`), the session host and its sessions, and the services, then a `● AgentK <version> is running · pid, up` headline, the web UI's URL, the home and the log as plain rows, and what to run next (`meko kode ui`, or `meko kode start` when stopped); exits 3 when no server runs this home. Run by `meko status` (`MEKO_SUMMARY=1`), it prints only `✓ AgentK <version> is running (pid, up)`, which `meko status` shows in its AgentK row; off a terminal the full output starts with that line too, for a Meko from before that |
 | `meko kode stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
 | `meko kode restart` | Restart the web server only (sessions keep running), and wait until it answers; Meko runs it after installing an update |
 | `meko kode logs -f` | Follow the server log (`logs/server.log` in AgentK's home) |
