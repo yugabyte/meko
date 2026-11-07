@@ -135,6 +135,18 @@ func TestContextGaps(t *testing.T) {
 		t.Errorf("an agent's dismissal %v", dq)
 	}
 
+	// The usage stats count the person's teach as a person's and the agent's marks as an agent's (the
+	// person's dismissal was restored). Summed over days, in case the marks straddle UTC midnight.
+	days, err := e.Store.QuestionDays(context.Background(), time.Now().Add(-24*time.Hour))
+	var sum store.QuestionDay
+	for _, d := range days {
+		sum.Dismissed, sum.Taught = sum.Dismissed+d.Dismissed, sum.Taught+d.Taught
+		sum.AgentDismissed, sum.AgentTaught = sum.AgentDismissed+d.AgentDismissed, sum.AgentTaught+d.AgentTaught
+	}
+	if err != nil || sum != (store.QuestionDay{Taught: 1, AgentDismissed: 1, AgentTaught: 1}) {
+		t.Errorf("usage stats' marks %+v %v", sum, err)
+	}
+
 	// Asked again after a mark, a question is open again.
 	search("Who owns the deploy key?", "claude_code:a", "c3")
 	if n := num(obj(list("")["counts"])["open"]); n != 1 {

@@ -404,7 +404,8 @@ describe('the usage stats report', () => {
       run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         s, id, agent, model, at(iso), ...u);
     // Through the mod at Merge & Close: the fork and the duplicate check, recorded by learn.ts. It was
-    // offered 3 questions Meko couldn't answer, taught 2 and dismissed 1.
+    // offered 3 questions Meko couldn't answer, taught 2 and dismissed 1, which Meko's report counts,
+    // not this one.
     learn('L1', 's1', 'merge', 'mod', '2026-09-27T17:00:00Z', '2026-09-27T17:01:00Z', 'done', [4, 2, 1, 1, 3, 2, 1, 4, 0, 400]);
     usage('s1', 'learn:L1:extract', 'agentk:learn', 'claude-opus-5-5', '2026-09-27T17:00:30Z', [12, 300, 150000, 0]);
     usage('s1', 'learn:L1:dedup', 'agentk:learn', 'claude-haiku-4-5-20251001', '2026-09-27T17:00:50Z', [800, 100, 0, 0]);
@@ -428,7 +429,7 @@ describe('the usage stats report', () => {
     expect(r.totals.meko.learn).toEqual({
       runs: 3, byTrigger: { merge: 1, manual: 1, discard: 1 }, byPath: { mod: 1, turn: 1, none: 1 },
       byOutcome: { done: 2, failed: 0, interrupted: 0, skipped: 1 },
-      candidates: 5, saves: 3, updates: 1, skips: 1, empty: 0, taught: 2, dismissed: 1, lookups: 5, errors: 0, sentTokens: 120,
+      candidates: 5, saves: 3, updates: 1, skips: 1, empty: 0, lookups: 5, errors: 0, sentTokens: 120,
       tokens: { extract: tokens(12, 300, 150000), dedup: tokens(800, 100, 0), turn: tokens(5, 50, 2000) },
       // Opus 5.5 for the fork and the turn, Haiku 4.5 for the check: $0.0388.
       usdCents: 4,
@@ -555,6 +556,11 @@ describe('the usage stats report', () => {
       candidates: 0, saves: 0, updates: 0, skips: 0, empty: 0, lookups: 0, errors: 0, sentTokens: 0,
       tokens: Object.fromEntries(['extract', 'dedup', 'turn'].map((p) => [p, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 }])), usdCents: 0 };
     expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, learn } } }, SCHEMA)).toEqual([]);
+    // A report from before Meko counted the learn step's Context Gaps marks has them, and still checks;
+    // one from before Meko kept its Context Gaps, with weak and gaps, doesn't any more.
+    expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, learn: { ...learn, taught: 2, dismissed: 1 } } } }, SCHEMA)).toEqual([]);
+    expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, weak: 1 } } }, SCHEMA)).toEqual(['$.totals.meko: unexpected weak']);
+    expect(validate({ ...r, totals: { ...r.totals, meko: { ...r.totals.meko, gaps: { dismissed: 0, taught: 0 } } } }, SCHEMA)).toEqual(['$.totals.meko: unexpected gaps']);
     // The schema names exactly the tools the report does.
     const tools = (SCHEMA.$defs as Record<string, Schema>).toolCounts.propertyNames as { enum: string[] };
     expect([...tools.enum].sort()).toEqual([...REPORTED_TOOLS, 'other'].sort());
@@ -573,7 +579,7 @@ describe('the usage stats report', () => {
       learn: {
         runs: big, byTrigger: { merge: big, manual: big, discard: big }, byPath: { mod: big, turn: big, none: big },
         byOutcome: { done: big, failed: big, interrupted: big, skipped: big },
-        candidates: big, saves: big, updates: big, skips: big, empty: big, taught: big, dismissed: big, lookups: big, errors: big, sentTokens: big,
+        candidates: big, saves: big, updates: big, skips: big, empty: big, lookups: big, errors: big, sentTokens: big,
         tokens: Object.fromEntries(['extract', 'dedup', 'turn'].map((p) => [p, { input: big, output: big, cacheRead: big, cacheWrite: big, messages: big }])) as never,
         usdCents: big,
       },

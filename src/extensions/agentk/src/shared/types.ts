@@ -546,15 +546,13 @@ export interface CallHomeLearn {
   saves: number;
   updates: number;
   skips: number;
-  /** Steps that ended done with nothing saved or corrected. */
-  empty: number;
   /**
-   * Questions on Meko's Context Gaps the steps marked taught (a fact answering them was saved)
-   * or dismissed (Meko already had the answer). Optional in the schema: reports from before lack
-   * them. How many were offered isn't sent: the report has no room left for it in 64 KB.
+   * Steps that ended done with nothing saved or corrected. The questions on Meko's Context Gaps the
+   * steps marked taught or dismissed (`taught`, `dismissed`) aren't sent any more: Meko's own report
+   * counts them (`contextGaps.agentTaught`, `agentDismissed`). The schema keeps them, optional, for
+   * the versions from before that still send them.
    */
-  taught: number;
-  dismissed: number;
+  empty: number;
   /** The step's Meko searches, its failed Meko calls, and about how many tokens it sent to Meko. */
   lookups: number;
   errors: number;

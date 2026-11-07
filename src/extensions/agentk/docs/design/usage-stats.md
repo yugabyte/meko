@@ -9,7 +9,9 @@ much work goes through them. Releases from before also sent it to a collector th
 nothing here sends there now. What goes out is `CallHomeReport` in `src/shared/types.ts`, and
 [`docs/call-home-report.schema.json`](../call-home-report.schema.json) is the same contract as a
 JSON Schema. A unit test here checks the reports the server builds against the schema. `schema` in
-the report goes up when a field changes meaning or is removed; adding a field doesn't change it.
+the report goes up when a field changes meaning or is removed; adding a field doesn't change it, and
+neither does a field that moved to Meko's report (Context Gaps' counts, then the learn step's marks
+on them), which Meko's own schema number marks.
 
 **What's in it** (`src/server/callhome.ts`, `buildReport`):
 
@@ -71,19 +73,24 @@ the report goes up when a field changes meaning or is removed; adding a field do
   the day they were made, seeds and searches at start on the day the search ran. Added since
   (optional, so older installs' reports still check): about how many tokens Claude's calls sent to
   Meko (their input, characters ÷ 4), also by tool; [learn steps](recall-and-learn.md#the-learn-step) by trigger
-  (`discard` optional, added later), path and outcome, the facts they proposed, added, corrected and skipped, the questions
-  on Meko's Context Gaps they marked taught and dismissed (`taught`, `dismissed`, optional, added later; how many they
-  were offered isn't sent, since the 7-day report with every count at its largest has no room left in 64 KB), their Meko searches,
+  (`discard` optional, added later), path and outcome, the facts they proposed, added, corrected and skipped, their Meko searches,
   failed calls and tokens sent, and their model calls' tokens (the fork, the duplicate check, and
   typed turns) with their price in whole cents; Kode's own Meko calls (`meko_agentk_calls`,
   recorded in `MekoClient.call`: searches at start, designs, the learn step's) with
   failures, tokens sent, time taken and the 9 most used tools (the rest as `other`); and the Meko
   plugin's transcript captures Kode ran (`meko_capture_runs`: runs, failures, time). What a
   capture sends isn't counted: Kode can't see it. Each goes on the day it began, and is left out
-  when there was none. Versions from before Meko kept its [Context Gaps](recall-and-learn.md#mekos-context-gaps)
-  also sent searches that found nothing relevant (`weak`) and the questions people dismissed and
-  taught (`gaps`); the schema keeps both so their reports still check, and Meko's own report counts
-  them now.
+  when there was none. Versions from before Meko's own report counted them also sent the questions
+  on Meko's [Context Gaps](recall-and-learn.md#mekos-context-gaps) the learn steps marked taught and
+  dismissed (`learn.taught`, `learn.dismissed`; the schema keeps them, optional, so those reports
+  still check); Meko's report counts them now, as `contextGaps.agentTaught` and `agentDismissed`,
+  though not alike: Kode's counted every mark a step made, on the day the step began; Meko's count
+  each question's latest agent mark still standing, on the day it was made ([recall-and-learn.md](recall-and-learn.md#mekos-context-gaps)).
+  Versions from before Meko kept its Context Gaps sent searches that found nothing relevant
+  (`meko.weak`) and the questions people dismissed and taught (`meko.gaps {dismissed, taught}`),
+  and those that haven't updated still do. The schema was chosen not to describe them any more, so
+  their reports no longer match it (unlike `learn.taught`, `install.tmux` or `access` `local` and
+  `remote`, which it keeps for the versions that send them); Meko's report counts those too.
 
 Never sent: project, session, repo, branch, datapack or file names, paths, prompts (and what's asked of Ask Kode), designs,
 transcripts or code, PR titles, URLs or numbers, user names, emails, GitHub logins, host names and

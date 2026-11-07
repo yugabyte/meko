@@ -203,9 +203,11 @@ Nothing checks it against what Meko has: the person wrote it on purpose. An agen
 dismissed (with the memory that already said the answer, whose text the list shows while the
 datapack has it) or taught with its `conversation_id` (Kode's learn step, which saves its memory itself
 first); the list then says an agent did it, in that conversation. A person's own latest dismissal and
-teach are kept apart (`person_*_at`) for the usage stats, which count them and the poor searches by
-quality a day, never a query; an agent's later mark doesn't overwrite them, and a restore clears a
-person's dismissal only when it restores theirs. An agent that searches before saving into a datapack
+teach, and an agent's, are kept apart (`person_*_at`, `agent_*_at`) for the usage stats, which count
+them and the poor searches by quality a day, never a query: the other's later mark doesn't overwrite
+them, and a restore clears a dismissal only when it restores that one. Agents' marks count on a
+linked Meko Cloud's datapacks too, since the agent runs on this computer; the rest count only this
+Meko's own. An agent that searches before saving into a datapack
 it's filling (Kode's learn session) forgets its conversation's asks afterwards, since finding
 nothing there is expected.
 
