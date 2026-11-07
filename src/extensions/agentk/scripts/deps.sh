@@ -77,6 +77,13 @@ esac
 # ---- prerequisites ----
 # Questions go to the terminal.
 { [ -t 2 ] && (: </dev/tty) 2>/dev/null; } || interactive=false
+# The sign-ins read the keyboard from the terminal's own device (/dev/ttys003, /dev/pts/1), named
+# from stderr, rather than from /dev/tty: Claude Code and OpenCode run on Bun, which on macOS stops
+# with "EINVAL: invalid argument, kqueue" when its input is /dev/tty, since kqueue can't watch it.
+term=/dev/tty
+if $interactive; then
+  dev=$(tty <&2 2>/dev/null) && [ -r "$dev" ] && term=$dev
+fi
 ask() {
   printf '%s %s[Y/n]%s ' "$1" "$d" "$n" >&2
   read -r answer </dev/tty || answer=n
@@ -325,7 +332,7 @@ if command -v claude >/dev/null 2>&1; then
   agents="Claude Code"
   if ! claude auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
     if $interactive && ask "  Claude Code isn't signed in. Sign in now (claude auth login)?"; then
-      claude auth login </dev/tty || warn "Claude Code" "sign-in didn't finish; run 'claude auth login' later"
+      claude auth login <"$term" || warn "Claude Code" "sign-in didn't finish; run 'claude auth login' later"
     else
       warn "Claude Code" "not signed in: run 'claude auth login' before starting sessions"
     fi
@@ -342,7 +349,7 @@ if has_opencode; then
   case $oc_auth in
     *"No authenticated integrations"*)
       if $interactive && ask "  OpenCode has no model provider signed in. Sign in now (opencode auth login)?"; then
-        "$oc" auth login --standalone </dev/tty || warn "OpenCode" "sign-in didn't finish; run 'opencode auth login' later"
+        "$oc" auth login --standalone <"$term" || warn "OpenCode" "sign-in didn't finish; run 'opencode auth login' later"
       else
         warn "OpenCode" "no model provider signed in: run 'opencode auth login' before starting sessions"
       fi
@@ -353,7 +360,7 @@ if command -v kiro-cli >/dev/null 2>&1; then
   agents="${agents:+$agents, }Kiro"
   if ! kiro-cli whoami >/dev/null 2>&1; then
     if $interactive && ask "  Kiro isn't signed in. Sign in now (kiro-cli login)?"; then
-      kiro-cli login </dev/tty || warn "Kiro" "sign-in didn't finish; run 'kiro-cli login' later"
+      kiro-cli login <"$term" || warn "Kiro" "sign-in didn't finish; run 'kiro-cli login' later"
     else
       warn "Kiro" "not signed in: run 'kiro-cli login' before starting sessions"
     fi
@@ -365,7 +372,7 @@ if $gh_skipped; then
   warn "GitHub" "gh isn't installed: install gh for PRs and reviews"
 elif ! gh auth status >/dev/null 2>&1; then
   if $interactive && ask "  gh isn't signed in to GitHub. AgentK needs it for PRs and reviews, and Meko for AgentK's updates. Sign in now (gh auth login)?"; then
-    gh auth login </dev/tty || warn "GitHub" "sign-in didn't finish; run 'gh auth login' later"
+    gh auth login <"$term" || warn "GitHub" "sign-in didn't finish; run 'gh auth login' later"
   else
     warn "GitHub" "gh isn't signed in: run 'gh auth login' (needed for PRs, reviews and updates)"
   fi
