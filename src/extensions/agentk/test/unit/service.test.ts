@@ -496,17 +496,13 @@ describe('the LaunchAgents launcher', () => {
     expect(existsSync(join(home, 'service'))).toBe(false);
   });
 
-  it('runs bin/agentk in a release from before the program was me_kode (one rolled back to)', () => {
-    const home = releaseHome('home', 'agentk');
+  // A release from before the program was me_kode (one rolled back to, which Meko hasn't given the
+  // new name) has bin/agentk: its program, or a link to me_koder.
+  it.each(['agentk', 'me_koder'])('runs bin/agentk in a release whose program was %s', (program) => {
+    const home = releaseHome('home', program);
+    if (program !== 'agentk') symlinkSync(program, join(home, 'app', '1.0', 'bin', 'agentk'));
     writeServiceLauncher(home);
-    expect(execFileSync(serviceLauncher(home), ['host'], { encoding: 'utf8' })).toBe('agentk|host|');
-  });
-
-  it('runs bin/agentk in a release whose program was me_koder, which Meko has not given the new name', () => {
-    const home = releaseHome('home', 'me_koder');
-    symlinkSync('me_koder', join(home, 'app', '1.0', 'bin', 'agentk'));
-    writeServiceLauncher(home);
-    expect(execFileSync(serviceLauncher(home), ['serve'], { encoding: 'utf8' })).toBe('me_koder|serve|');
+    expect(execFileSync(serviceLauncher(home), ['serve'], { encoding: 'utf8' })).toBe(`${program}|serve|`);
   });
 
   it("deletes the launcher by every name it had, which the units and jobs installed then run, at uninstall", () => {

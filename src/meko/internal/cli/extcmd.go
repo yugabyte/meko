@@ -68,9 +68,11 @@ func leadingDataDir(args []string) (string, []string) {
 }
 
 // runProgram runs program with args and env on this terminal (stdin, and stdout and stderr), and
-// returns its exit code: 128 plus the signal's number when a signal ended it. Ctrl+C and the like
-// reach it from the terminal, so meko only waits for it to end; a SIGTERM or SIGHUP sent to meko
-// alone is passed on.
+// returns its exit code: 128 plus the signal's number when a signal ended it. Ctrl+C and Ctrl+\
+// reach it from the terminal, which signals the whole foreground group, so meko only waits for it to
+// end: passing SIGINT or SIGQUIT on too would deliver them twice, and a program that handles the
+// first (Presenter's serve, with process.once) dies of the second before its cleanup. A SIGTERM or
+// SIGHUP sent to meko alone (a supervisor's, a closed terminal's) is passed on.
 func runProgram(program string, args, env []string, stdout, stderr io.Writer) int {
 	cmd := exec.Command(program, args...) //nolint:gosec // G204: an installed extension's own program
 	cmd.Stdin, cmd.Stdout, cmd.Stderr, cmd.Env = stdin, stdout, stderr, env

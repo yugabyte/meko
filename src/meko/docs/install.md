@@ -435,6 +435,10 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   program with what follows, `MEKO_HOME` set, on the terminal, and exits as it does. One command
   works for every extension and data folder (a leading `--data-dir` picks another), and nothing in
   `~/.local/bin` can run another data folder's release by mistake.
+- Presenter was the extension `presenter` (program `me_presenter`), and nothing moves an install
+  from then: its `extensions.json` entry stays, a name Meko no longer knows, which `meko start`
+  still starts (and fails to) and `meko extension delete presenter` only forgets. Presenter's
+  `docs/design.md` says how to clear it.
 - AgentK's program's old names (`Catalog.OldCommands`: `me_koder`, `agentk`, `agent-k-local`)
   stay in its releases' `bin/` as links, for the services and older Mekos that run them. A version
   unpacked before a rename has only its old name: before Meko stages a version or points

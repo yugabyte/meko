@@ -506,7 +506,7 @@ func installExtension(ctx context.Context, l paths.Layout, name string, o extIns
 	fmt.Fprintf(stdout, "  %s %s is installed\n", spin.Mark(spin.OK, spin.Color(stdout)), cat.Title)
 	env := extensions.CommandEnv(l.Root, cmd)
 	if err = runAttached(ctx, cmd, append([]string{"install"}, args...), env, stdin, stdout, stderr); err != nil {
-		return fmt.Errorf("%s install failed: %w", cat.Command, err)
+		return fmt.Errorf("%s failed: %w", cat.UserCommand("install"), err)
 	}
 	cmd = cat.Find(name, home, l.Root)
 	if cmd == "" {

@@ -104,6 +104,15 @@ func KnownNames() []string {
 	return names
 }
 
+// UserCommand is how people run the extension's command args: meko <Verb> args (meko kode status),
+// or its program's name for one Meko has no verb for.
+func (c Catalog) UserCommand(args string) string {
+	if c.Verb != "" {
+		return "meko " + c.Verb + " " + args
+	}
+	return c.Command + " " + args
+}
+
 // Catalog says how to find and install a known extension.
 type Catalog struct {
 	Title       string

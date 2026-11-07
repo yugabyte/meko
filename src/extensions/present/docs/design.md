@@ -159,8 +159,14 @@ present`, the Extensions page): it checks the signature and the checksum, unpack
 `me_present`, so a process list says it's a Meko extension's, and the extension `present` (its
 folder, tags, tarballs and pages). It has no command of its own on PATH: people run `meko present
 <command>`, which runs `app/current/bin/me_present` with `MEKO_HOME` set. Presenter was the
-extension `presenter`, with the program `me_presenter` (`meko_presenter` before); nothing moves an
-install from then, which has to be installed again. `bin/me_present` is the launcher (`packaging/me_present`): it
+extension `presenter`, with the program `me_presenter` (`meko_presenter` before), and nothing moves
+an install from then. Meko no longer knows it: it stays in `extensions.json`, so `meko start` and
+`meko stop` still run its `me_presenter start` and `stop`, its start fails (its launcher runs `meko
+_launch presenter`, which Meko refuses), `meko status` and `meko extension list` show it, and Meko
+serves no page for it. Decks saved under the old `presenter/` datapack prefix aren't listed. To clear
+it, run `me_presenter uninstall --purge --non-interactive` (it stops it and deletes its folder in
+the data folder, releases included), then `meko extension delete presenter --force` (which only
+forgets it) and `rm ~/.local/bin/me_presenter`; then `meko extension install present`. `bin/me_present` is the launcher (`packaging/me_present`): it
 runs the bundled Node (`node/bin/me_present`, so the process is named `me_present`) on
 `lib/dist/server/cli.js`, with `PRESENT_APP_DIR` naming the release's folder and
 `PRESENT_LAUNCHER` itself, and `meko present start` runs `serve` through it. Run by `meko start`
