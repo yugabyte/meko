@@ -7,7 +7,7 @@
 #
 # Not through a pipe: without pipefail a failed diff would read as no changes.
 # Reads changed paths, one per line, and prints `agentk=true|false`,
-# `meko=true|false` and `presenter=true|false`, ready for $GITHUB_OUTPUT. --all
+# `meko=true|false` and `present=true|false`, ready for $GITHUB_OUTPUT. --all
 # prints all true (pushes to main check everything). A path no rule claims runs
 # them all, so a new root file can't skip a component; root Markdown, .claude/ and
 # assets/ run none. Nor does Markdown only people read: a component's README, CONTRIBUTING,
@@ -34,34 +34,34 @@ doc() {
 
 agentk=false
 meko=false
-presenter=false
+present=false
 
 if [ "${1:-}" = "--all" ] && [ $# -eq 1 ]; then
   agentk=true
   meko=true
-  presenter=true
+  present=true
 elif [ $# -eq 0 ]; then
   while IFS= read -r path || [ -n "$path" ]; do
     case $path in
       '') ;;
       # The CI workflow and this script decide what runs: check every component.
-      .github/workflows/ci.yml | scripts/ci-scope.sh) agentk=true meko=true presenter=true ;;
+      .github/workflows/ci.yml | scripts/ci-scope.sh) agentk=true meko=true present=true ;;
       # Where Meko's data folder is: Meko's paths.Resolve, and AgentK's and Presenter's mekoHome, are tested against it.
-      src/meko/internal/paths/testdata/resolve-cases.json) agentk=true meko=true presenter=true ;;
+      src/meko/internal/paths/testdata/resolve-cases.json) agentk=true meko=true present=true ;;
       # Markdown a test reads: Meko's docs and test fixtures. These match before a component's docs.
       src/meko/docs/* | src/meko/*/test/* | src/meko/*/testdata/*) meko=true ;;
       src/extensions/agentk/test/* | src/extensions/agentk/src/workshops/*) agentk=true ;;
-      src/extensions/presenter/test/*) presenter=true ;;
+      src/extensions/present/test/*) present=true ;;
       # A component's docs check nothing; its other Markdown (such as a skill a release ships) runs it.
-      src/extensions/presenter/*) doc "$path" || presenter=true ;;
+      src/extensions/present/*) doc "$path" || present=true ;;
       src/extensions/agentk/*) doc "$path" || agentk=true ;;
       scripts/* | .github/*) agentk=true ;;
       src/meko/*) doc "$path" || meko=true ;;
       # Agents' skills, and the README badges in assets/ that others embed: no component tests or ships them.
       .claude/* | assets/*) ;;
-      */*) agentk=true meko=true presenter=true ;;
+      */*) agentk=true meko=true present=true ;;
       *.md) ;;
-      *) agentk=true meko=true presenter=true ;;
+      *) agentk=true meko=true present=true ;;
     esac
   done
 else
@@ -69,4 +69,4 @@ else
   exit 2
 fi
 
-printf 'agentk=%s\nmeko=%s\npresenter=%s\n' "$agentk" "$meko" "$presenter"
+printf 'agentk=%s\nmeko=%s\npresent=%s\n' "$agentk" "$meko" "$present"

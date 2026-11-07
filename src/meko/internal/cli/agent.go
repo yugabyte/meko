@@ -219,7 +219,7 @@ func printConnectHelp(t agents.Target, running bool, w io.Writer) {
 	}
 }
 
-// moveLines are meko cloud_link's lines on what a link change did to the agents: who moved, and
+// moveLines are meko cloud-link's lines on what a link change did to the agents: who moved, and
 // who couldn't be.
 func moveLines(m *agents.Moves) []string {
 	if m == nil {

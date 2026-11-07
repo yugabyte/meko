@@ -7,7 +7,7 @@ import pty from 'node-pty';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 
-// Runs the real scripts/deps.sh (the prerequisites `me_koder install` checks first) against stand-in
+// Runs the real scripts/deps.sh (the prerequisites `meko kode install` checks first) against stand-in
 // tools: a PATH with only the basic utilities it needs, plus stubs for uname, package managers, sudo,
 // curl, gh and friends.
 const SCRIPT = fileURLToPath(new URL('../../scripts/deps.sh', import.meta.url));

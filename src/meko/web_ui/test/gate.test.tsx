@@ -64,8 +64,8 @@ test("an old sign-in link goes on to where it was headed", async () => {
 test("an old sign-in link to an extension's page loads that page, not the app", async () => {
   serve(remote);
   const replace = vi.spyOn(window.location, "replace").mockImplementation(() => {});
-  await open("/signin?next=%2Fext%2Fpresenter%2Fdeck%2F1");
-  expect(replace).toHaveBeenCalledWith("/ext/presenter/deck/1");
+  await open("/signin?next=%2Fext%2Fpresent%2Fdeck%2F1");
+  expect(replace).toHaveBeenCalledWith("/ext/present/deck/1");
 });
 
 test("an old sign-in link can't lead to another site", async () => {

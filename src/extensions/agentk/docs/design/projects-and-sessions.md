@@ -57,7 +57,7 @@ idle_stop_hours = 24      # a session's agent idle this long is stopped, and res
 
 [meko]
 # AgentK uses the Meko on this computer; its Meko Cloud link is Meko's (its web UI's Settings › Meko
-# Cloud, or meko cloud_link). url, api_key, web_url and api_url from before are kept, unread, for a rollback.
+# Cloud, or meko cloud-link). url, api_key, web_url and api_url from before are kept, unread, for a rollback.
 # home = "…"                 # Meko's data folder, which AgentK's home is in; set by the installer and from Meko's MEKO_HOME
 # capture_transcripts = true   # send session transcripts to Meko conversations; off by default (MEKO-710)
 
@@ -260,7 +260,7 @@ CREATE TABLE code_review_steps (review_id TEXT, step TEXT, report_json TEXT, at 
   after 30 days, except `merged` events, which the Usage page counts.
 - **Not on NFS.** SQLite locking is unreliable on network filesystems. A home in Meko's data
   folder is on a local disk (below), so `state.db` is in it. Only a home from before the move can
-  be on NFS: for one, `me_koder install` puts the database on local disk (`[state] db_path` in
+  be on NFS: for one, `meko kode install` puts the database on local disk (`[state] db_path` in
   `config.toml`, `$XDG_STATE_HOME/agent-k-local` or `/var/tmp/$USER/agent-k-local`), and the move
   brings it into the new home and clears the setting. A folder in `/var/tmp` must be a real directory owned by you that others can't write
   to, or AgentK stops rather than put its data (hook tokens, an older install's login) somewhere
@@ -278,7 +278,7 @@ above). Meko sets `MEKO_HOME` on every AgentK command it runs, and AgentK keeps 
 home`, since its own services don't have it. For `meko start` and `meko stop` it also sets
 `MEKO_SUMMARY=1`, and AgentK's `start` and `stop` then print one row of Meko's summary
 (`src/server/summary.ts`, the format in Meko's `src/meko/docs/install.md`) in place of their usual
-line and its `me_koder status` hint. A home already in a Meko data folder refuses
+line and its `meko kode status` hint. A home already in a Meko data folder refuses
 `uninstall`, `start`, `stop`, `restart`, `status` and `_handoff` when `MEKO_HOME` names another
 folder (`refuseOtherMeko` in `src/server/movehome.ts`; `samePath` compares the folders, not their
 paths, so a second spelling of the same folder that links don't explain, such as a bind mount,
@@ -288,14 +288,14 @@ own tests) would otherwise stop or uninstall it, ending every session, and repoi
 home`. A home that hasn't moved into a Meko data folder yet isn't protected: it takes Meko's
 folder from `MEKO_HOME`, so another Meko's commands still act on it and its `[meko] home` (where
 it moves next) follows the last one. `install` isn't refused either: Meko's `extension install`
-sets the existing home up again in place, and `me_koder install` keeps the Meko data folder its home is in as `[meko]
+sets the existing home up again in place, and `meko kode install` keeps the Meko data folder its home is in as `[meko]
 home`, over `MEKO_HOME`. The server takes `MEKO_HOME` and `XDG_STATE_HOME` from the login shell
-(as it does `PATH`), so it finds the same folder `me_koder install` did. A relative `XDG_STATE_HOME`
+(as it does `PATH`), so it finds the same folder `meko kode install` did. A relative `XDG_STATE_HOME`
 is ignored, as the XDG spec says.
 
 - **A release's home is its own folder** (`<home>/app/<version>`, `AK_APP_DIR`), whatever
-  `AK_HOME` says; the CLI run through `~/.local/bin/me_koder` finds it that way, and so does the
-  launcher. `AK_HOME` names a home only without a release (`npm run dev`, tests).
+  `AK_HOME` says; `meko kode`, which runs the release's `bin/me_kode`, finds it that way, and so
+  does the launcher. `AK_HOME` names a home only without a release (`npm run dev`, tests).
 - **Otherwise** (`akHome()`): `<Meko's data folder>/extensions/agentk` when it's there, else
   `~/.agent-k-local` when that's there (an install the move hasn't reached), else the new one.
 - **In `/var/tmp`**, which many Linux systems clean by age (systemd-tmpfiles' default is 30 days on

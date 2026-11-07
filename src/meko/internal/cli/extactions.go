@@ -254,8 +254,8 @@ func (w *webListener) awaitListening(ctx context.Context, name string) error {
 		}
 		if time.Now().After(deadline) {
 			w.reconnect(name)
-			return fmt.Errorf("%s started, but isn't answering after %s: see %s status", cat.Title,
-				extensions.ListenTimeout, cat.Command)
+			return fmt.Errorf("%s started, but isn't answering after %s: see %s", cat.Title,
+				extensions.ListenTimeout, cat.UserCommand("status"))
 		}
 		select {
 		case <-ctx.Done():

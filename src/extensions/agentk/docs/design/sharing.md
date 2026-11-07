@@ -16,7 +16,7 @@ Meko's share routes (`POST /datapacks/:id/share`, `GET …/member-list`, `GET �
 this computer's `/api/v1` (`resolveMekoApiUrl()`) with its client token, whether or not that Meko
 is linked to Meko Cloud: AgentK doesn't know or ask. Linked, Meko sends each share call on to Meko
 Cloud with the link's key, which it keeps. Unlinked, it answers 409 `CLOUD_NOT_LINKED` ("This Meko
-isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link."), and a
+isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud-link."), and a
 datapack still on that Meko is a 409 `DATAPACK_LOCAL` (it can be shared once it's in Meko Cloud).
 So Share opens the Share dialog whenever there's a Meko, and Meko's refusal is its error. Meko's own
 refusals of a share call (a bad email, an invite already pending, no permission, not linked) come

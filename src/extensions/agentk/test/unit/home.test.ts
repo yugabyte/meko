@@ -166,7 +166,7 @@ describe('the move trigger', () => {
     t.probation.on = false;
     t.move.check();
     t.move.check();
-    expect(t.starts).toEqual([{ bin: expect.stringMatching(/bin\/me_koder$/), from: join(root, 'h'), to: join(root, 'new') }]);
+    expect(t.starts).toEqual([{ bin: expect.stringMatching(/bin\/me_kode$/), from: join(root, 'h'), to: join(root, 'new') }]);
   });
 
   it("says once why a home can't move, and leaves a home without services to serve", () => {
@@ -182,12 +182,13 @@ describe('the move trigger', () => {
 
 describe("telling the home's server by its command line (stopAll)", () => {
   it.each([
-    ['a release', '/h/app/1.0/node/bin/me_koder --disable-warning=ExperimentalWarning /h/app/1.0/lib/dist/server/cli.js serve', true],
-    ['a build from source through its npm bin', 'node /usr/local/bin/me_koder serve', true],
-    ['one through its name before', 'node /usr/local/bin/agentk serve', true],
+    ['a release', '/h/app/1.0/node/bin/me_kode --disable-warning=ExperimentalWarning /h/app/1.0/lib/dist/server/cli.js serve', true],
+    ['a build from source through its npm bin', 'node /usr/local/bin/me_kode serve', true],
+    ['one through its name before', 'node /usr/local/bin/me_koder serve', true],
+    ['one through its name before that', 'node /usr/local/bin/agentk serve', true],
     ['one through its name before the rename to AgentK', 'node /usr/local/bin/agent-k-local serve', true],
     ['a dev server', 'node --import tsx src/server/cli.ts serve', true],
-    ['the session host', 'node /usr/local/bin/me_koder host', false],
+    ['the session host', 'node /usr/local/bin/me_kode host', false],
     ['another program', 'python3 -m http.server serve', false],
   ])('%s', (_, args, server) => {
     expect(isServerArgs(args)).toBe(server);
@@ -195,7 +196,7 @@ describe("telling the home's server by its command line (stopAll)", () => {
 });
 
 describe('the move job', () => {
-  const job = () => ({ bin: '/h/app/0.2.0/bin/me_koder', from: '/h', to: '/meko/extensions/agentk' });
+  const job = () => ({ bin: '/h/app/0.2.0/bin/me_kode', from: '/h', to: '/meko/extensions/agentk' });
 
   it('runs as a transient systemd unit that restarts after a failure, unless it runs already', () => {
     const calls: string[][] = [];
@@ -206,7 +207,7 @@ describe('the move job', () => {
     };
     startMoveJob('systemd', job(), run);
     const started = calls.find((c) => c[0] === 'systemd-run')!;
-    expect(started).toEqual(expect.arrayContaining(['--unit', MOVE_JOB.systemd, 'Restart=on-failure', 'AK_HOME=/h', '/h/app/0.2.0/bin/me_koder', '_move-home', '--to', '/meko/extensions/agentk']));
+    expect(started).toEqual(expect.arrayContaining(['--unit', MOVE_JOB.systemd, 'Restart=on-failure', 'AK_HOME=/h', '/h/app/0.2.0/bin/me_kode', '_move-home', '--to', '/meko/extensions/agentk']));
     active = true;
     calls.length = 0;
     startMoveJob('systemd', job(), run);

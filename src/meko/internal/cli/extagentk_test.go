@@ -24,7 +24,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/update"
 )
 
-// fakeAgentK is an AgentK release's bin/me_koder, keeping its state in its folder in the data folder
+// fakeAgentK is an AgentK release's bin/me_kode, keeping its state in its folder in the data folder
 // (MEKO_HOME, which Meko sets): install, start, stop and restart log to its log with its version,
 // status succeeds while it runs, and selftest passes. With rollback-to there, restart does what
 // meko _launch does after three failed starts: points app/current back at that version. uninstall
@@ -149,10 +149,10 @@ func serveReleases(t *testing.T, rels ...fakeRelease) {
 }
 
 func agentkRelease(t *testing.T, tag, version string) fakeRelease {
-	return agentkReleaseAs(t, tag, version, "me_koder")
+	return agentkReleaseAs(t, tag, version, "me_kode")
 }
 
-// agentkReleaseAs is a release of AgentK whose program is named command: agentk before me_koder.
+// agentkReleaseAs is a release of AgentK whose program is named command: agentk before me_kode.
 func agentkReleaseAs(t *testing.T, tag, version, command string) fakeRelease {
 	return fakeRelease{tag: tag, pkg: "agentk", version: version,
 		tgz: packageTarball(t, "agentk", command, version, fakeAgentK(version))}
@@ -225,15 +225,19 @@ func agentkFromBeforeTheRename(t *testing.T, dir string) string {
 	return old
 }
 
-// wantRenamed checks that AgentK installed by agentkFromBeforeTheRename runs as me_koder: its link,
-// the registry, and the old link gone.
+// wantRenamed checks that AgentK installed by agentkFromBeforeTheRename runs as me_kode, with no
+// command on PATH: the registry runs app/current/bin/me_kode, no ~/.local/bin/me_kode is made, and
+// the old link is gone.
 func wantRenamed(t *testing.T, dir, old string) {
 	t.Helper()
-	link := filepath.Join(filepath.Dir(old), "me_koder")
-	if _, err := os.Stat(link); err != nil {
-		t.Errorf("~/.local/bin/me_koder: %v", err)
+	exe := extensions.Known["agentk"].App(dir, "agentk").CurrentExe()
+	if _, err := os.Stat(exe); err != nil {
+		t.Errorf("app/current/bin/me_kode: %v", err)
 	}
-	if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Command != link {
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(old), "me_kode")); !os.IsNotExist(err) {
+		t.Errorf("~/.local/bin/me_kode was made: %v", err)
+	}
+	if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Command != exe {
 		t.Errorf("registry %+v", reg.Entries["agentk"])
 	}
 	if _, err := os.Lstat(old); !os.IsNotExist(err) {
@@ -241,8 +245,8 @@ func wantRenamed(t *testing.T, dir, old string) {
 	}
 }
 
-// Meko's start moves an AgentK installed while its command was agentk onto me_koder: an update never
-// runs its install, so this is where ~/.local/bin/me_koder comes from, and ~/.local/bin/agentk goes.
+// Meko's start moves an AgentK installed while its command was agentk onto me_kode: an update never
+// runs its install, so this is where ~/.local/bin/me_kode comes from, and ~/.local/bin/agentk goes.
 func TestStartMovesAgentKOntoItsNewCommand(t *testing.T) {
 	dir, port := setup(t)
 	noRealExtensions(t)
@@ -254,7 +258,7 @@ func TestStartMovesAgentKOntoItsNewCommand(t *testing.T) {
 
 // extension install agentk installs AgentK's newest release as it does Presenter's (no installer of
 // AgentK's), then runs its install with this Meko's URL and key and what followed --. --version
-// installs another release, under either tag prefix: one from before the program was me_koder gets
+// installs another release, under either tag prefix: one from before the program was me_kode gets
 // that name too. The links of its old names into this data folder go.
 func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 	const newest, older = "0.20261030.0", "0.20261029.0"
@@ -281,12 +285,11 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 	if app.Current() != newest {
 		t.Errorf("current %q", app.Current())
 	}
-	link := filepath.Join(bin, "me_koder")
 	reg, _ := extensions.Load(dir)
-	if reg.Entries["agentk"].Command != link {
+	if reg.Entries["agentk"].Command != app.CurrentExe() {
 		t.Errorf("registry %+v", reg.Entries)
 	}
-	for _, n := range []string{"agentk", "agent-k-local"} {
+	for _, n := range []string{"me_kode", "agentk", "agent-k-local"} {
 		if _, err := os.Lstat(filepath.Join(bin, n)); !os.IsNotExist(err) {
 			t.Errorf("~/.local/bin/%s is left: %v", n, err)
 		}
@@ -304,8 +307,8 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 	if app.Current() != older {
 		t.Errorf("current %q after --version", app.Current())
 	}
-	if _, err := os.Stat(link); err != nil {
-		t.Errorf("~/.local/bin/me_koder doesn't run the release from before the rename: %v", err)
+	if _, err := os.Stat(app.CurrentExe()); err != nil {
+		t.Errorf("app/current/bin/me_kode doesn't run the release from before the rename: %v", err)
 	}
 	code, _, errs = run("extension", "install", "agentk", "--version", "0.20261001.0", "--data-dir", dir)
 	want(t, "a version with no release", code, 1, errs, "no release 0.20261001.0 of AgentK")
@@ -347,7 +350,7 @@ func TestInstallExtensionRequiresASignature(t *testing.T) {
 	}
 }
 
-// An update of a running AgentK switches while it runs and restarts it with me_koder restart, never
+// An update of a running AgentK switches while it runs and restarts it with me_kode restart, never
 // stop and start (which would end its sessions), after checking the release with its selftest.
 func TestUpdateExtensionRestartsAgentK(t *testing.T) {
 	const old, next = "0.20261024.0", "0.20261025.0"
@@ -389,7 +392,7 @@ func TestUpdateExtensionLeavesAStoppedAgentKStopped(t *testing.T) {
 	}
 }
 
-// When meko _launch rolls the new version back while me_koder restart waits, the update says so.
+// When meko _launch rolls the new version back while me_kode restart waits, the update says so.
 func TestUpdateExtensionReportsAgentKsRollBack(t *testing.T) {
 	const old, next = "0.20261023.0", "0.20261025.0"
 	t.Setenv("HOME", t.TempDir())
@@ -465,8 +468,8 @@ func TestUpdateExtensionAllAndAuto(t *testing.T) {
 	installedAgentK(t, dir, installedVersion)
 	installedPresenter(t, dir)
 	serveReleases(t, agentkRelease(t, "agentk-v"+next, next),
-		fakeRelease{tag: "presenter-v" + next, pkg: "presenter", version: next,
-			tgz: presenterTarball(t, next, "")})
+		fakeRelease{tag: "present-v" + next, pkg: "present", version: next,
+			tgz: presentTarball(t, next, "")})
 	code, out, errs := run("extension", "update", "--all", "--check", "--data-dir", dir)
 	want(t, "--all --check", code, 0, out+errs, "AgentK "+next+" is available")
 	want(t, "--all --check", code, 0, out, "Presenter "+next+" is available")
@@ -474,13 +477,13 @@ func TestUpdateExtensionAllAndAuto(t *testing.T) {
 	want(t, "--all", code, 0, out+errs, "Installed Presenter "+next)
 	want(t, "--all", code, 0, out, "Installed AgentK "+next)
 
-	code, out, errs = run("extension", "update", "presenter", "--auto=off", "--data-dir", dir)
+	code, out, errs = run("extension", "update", "present", "--auto=off", "--data-dir", dir)
 	want(t, "--auto=off", code, 0, out+errs, "only reports Presenter's updates")
 	reg, _ := extensions.Load(dir)
-	if reg.Entries["presenter"].Auto() || !reg.Entries["agentk"].Auto() {
+	if reg.Entries["present"].Auto() || !reg.Entries["agentk"].Auto() {
 		t.Errorf("auto %+v", reg.Entries)
 	}
-	code, _, errs = run("extension", "update", "presenter", "--auto=maybe", "--data-dir", dir)
+	code, _, errs = run("extension", "update", "present", "--auto=maybe", "--data-dir", dir)
 	want(t, "--auto=maybe", code, 1, errs, "--auto takes on or off")
 }
 
@@ -492,43 +495,43 @@ func TestAutoUpdate(t *testing.T) {
 	noRealExtensions(t)
 	dir := shortDir(t)
 	app := installedPresenter(t, dir)
-	serveReleases(t, fakeRelease{tag: "presenter-v" + next, pkg: "presenter", version: next,
-		tgz: presenterTarball(t, next, "")})
+	serveReleases(t, fakeRelease{tag: "present-v" + next, pkg: "present", version: next,
+		tgz: presentTarball(t, next, "")})
 	w := testListener(t, dir)
 	u := &update.Updater{ExtensionsOnly: true, Client: newReleaseClient("o/r"), DataDir: dir}
 	w.watchUpdates(u)
 	if _, err := u.CheckNow(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := w.ExtensionUpdates("presenter"); got.Latest != next || !got.UpdateAvailable || !got.AutoUpdate {
+	if got := w.ExtensionUpdates("present"); got.Latest != next || !got.UpdateAvailable || !got.AutoUpdate {
 		t.Fatalf("after the check: %+v", got)
 	}
-	state := extensions.Dir(dir, "presenter")
+	state := extensions.Dir(dir, "present")
 	if err := os.WriteFile(filepath.Join(state, "busy"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	w.autoUpdate(context.Background())
-	if got := w.ExtensionUpdates("presenter"); app.Current() != installedVersion || got.Waiting != "in use" {
+	if got := w.ExtensionUpdates("present"); app.Current() != installedVersion || got.Waiting != "in use" {
 		t.Errorf("busy: current %s, %+v", app.Current(), got)
 	}
 
-	if err := setAutoUpdate(paths.New(dir), "presenter", false); err != nil {
+	if err := setAutoUpdate(paths.New(dir), "present", false); err != nil {
 		t.Fatal(err)
 	}
 	_ = os.Remove(filepath.Join(state, "busy"))
 	w.autoUpdate(context.Background())
-	if got := w.ExtensionUpdates("presenter"); app.Current() != installedVersion || got.Waiting != "" {
+	if got := w.ExtensionUpdates("present"); app.Current() != installedVersion || got.Waiting != "" {
 		t.Errorf("off: current %s, %+v", app.Current(), got)
 	}
 
-	if err := setAutoUpdate(paths.New(dir), "presenter", true); err != nil {
+	if err := setAutoUpdate(paths.New(dir), "present", true); err != nil {
 		t.Fatal(err)
 	}
 	w.autoUpdate(context.Background())
 	if app.Current() != next {
 		t.Errorf("on: current %s", app.Current())
 	}
-	if j := w.jobs.Get("presenter"); j == nil || !j.Auto || j.Action != "update" || j.State != "done" {
+	if j := w.jobs.Get("present"); j == nil || !j.Auto || j.Action != "update" || j.State != "done" {
 		t.Errorf("job %+v", j)
 	}
 }

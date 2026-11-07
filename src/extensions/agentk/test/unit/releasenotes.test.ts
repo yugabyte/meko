@@ -40,14 +40,16 @@ describe('releaseNotes', () => {
     // Meko's subjects release Meko, not AgentK, and Presenter's release nothing yet.
     'feat(meko/cli): add a command',
     'fix(meko)!: change the store\n\nBREAKING CHANGE: a new format',
-    'feat(presenter/web): a Presenter page',
-    'fix(presenter)!: change the deck format\n\nBREAKING CHANGE: decks move',
-    'feat(meko,presenter/web): ship Presenter and its Meko side',
+    'feat(present/web): a Presenter page',
+    'fix(present)!: change the deck format\n\nBREAKING CHANGE: decks move',
+    'feat(meko,present/web): ship Presenter and its Meko side',
+    // `presenter` was Presenter's component before it was `present`.
+    'fix(presenter/web): a Presenter fix',
   ])('leaves out %j', (message) => {
     expect(releaseNotes([commit(message)], 'o/r')).toEqual([]);
   });
 
-  it.each(['feat(agentk,meko): ship both (#20)', 'feat(meko/cli,agentk/web): ship both (#20)', 'feat(meko,repo): ship both (#20)', 'feat(agentk,presenter): ship both (#20)'])(
+  it.each(['feat(agentk,meko): ship both (#20)', 'feat(meko/cli,agentk/web): ship both (#20)', 'feat(meko,repo): ship both (#20)', 'feat(agentk,present): ship both (#20)'])(
     'keeps %j: a subject that names Meko or Presenter and another component counts for AgentK',
     (message) => {
       const component = /\(([^)]*)\)/.exec(message)![1];

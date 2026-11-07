@@ -34,10 +34,10 @@ func TestExtensionListShowsEachExtension(t *testing.T) {
 		"AgentK      running         "+version+"   by hand (meko extension update agentk)")
 
 	// Presenter from source: no version, and why Meko doesn't update it.
-	src := filepath.Join(t.TempDir(), "me_presenter")
+	src := filepath.Join(t.TempDir(), "me_present")
 	fakeExtension(t, src)
 	reg, _ := extensions.Load(dir)
-	reg.Entries["presenter"] = extensions.Entry{Command: src}
+	reg.Entries["present"] = extensions.Entry{Command: src}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestExtensionListShowsEachExtension(t *testing.T) {
 		r.AutoUpdate || !r.Updatable {
 		t.Errorf("AgentK's row %+v", r)
 	}
-	if r := rows[1]; r.Name != "presenter" || r.State != extRunning || r.Command != src || r.Updatable ||
+	if r := rows[1]; r.Name != "present" || r.State != extRunning || r.Command != src || r.Updatable ||
 		r.NotUpdatable == "" || r.RolledBack == nil {
 		t.Errorf("Presenter's row %+v", r)
 	}
@@ -64,12 +64,12 @@ func TestExtensionListDamagedAndSlow(t *testing.T) {
 	old := extensions.StatusTimeout
 	extensions.StatusTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { extensions.StatusTimeout = old })
-	missing := filepath.Join(t.TempDir(), "gone", "me_presenter")
+	missing := filepath.Join(t.TempDir(), "gone", "me_present")
 	// AgentK's command moved into its release install in the data folder, where Find looks.
 	moved := filepath.Join(extensions.Dir(dir, "agentk"), "app", "current", "bin", "agentk")
 	fakeExtension(t, moved)
 	reg, _ := extensions.Load(dir)
-	reg.Entries["presenter"] = extensions.Entry{Command: missing}
+	reg.Entries["present"] = extensions.Entry{Command: missing}
 	reg.Entries["agentk"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "agentk")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
@@ -77,17 +77,17 @@ func TestExtensionListDamagedAndSlow(t *testing.T) {
 	before, _ := os.ReadFile(extensions.File(dir))
 	code, out, _ := run("extension", "list", "--data-dir", dir)
 	want(t, "damaged", code, 0, out, "Presenter   damaged ("+missing+" is missing)")
-	want(t, "damaged", code, 0, out, "meko extension delete presenter forgets it")
+	want(t, "damaged", code, 0, out, "meko extension delete present forgets it")
 	want(t, "found again", code, 0, out, "AgentK      running")
 	if after, _ := os.ReadFile(extensions.File(dir)); string(after) != string(before) {
 		t.Errorf("list changed the registry:\n%s", after)
 	}
 
-	slow := filepath.Join(t.TempDir(), "me_presenter")
+	slow := filepath.Join(t.TempDir(), "me_present")
 	if err := os.WriteFile(slow, []byte("#!/bin/sh\nsleep 5\n"), 0o700); err != nil { //nolint:gosec // G306: test script
 		t.Fatal(err)
 	}
-	reg.Entries["presenter"] = extensions.Entry{Command: slow}
+	reg.Entries["present"] = extensions.Entry{Command: slow}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}

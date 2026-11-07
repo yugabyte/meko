@@ -8,9 +8,10 @@
 // `<command> install` (pointing it at this Meko), `<command> version --json`, and the catalog's
 // RestartArgs, CheckArgs, BusyArgs, RemoveArgs and UninstallArgs; and its launcher, which hands the commands in
 // Probation to meko _launch. Every command Meko runs of an extension gets MEKO_HOME set to Meko's
-// data folder, so the extension knows where its own folder in it is (Dir). AgentK's me_koder is the
-// first; Presenter's me_presenter the second. Their commands start with me_, so a process list,
-// ~/.local/bin and the services say they're Meko's.
+// data folder, so the extension knows where its own folder in it is (Dir). AgentK's program is
+// me_kode; Presenter's me_present. Their names start with me_, so a process list and the services
+// say they're Meko's. Neither is a command on PATH: people run them through Meko, as meko kode and
+// meko present (Catalog.Verb), which runs the registered program.
 package extensions
 
 import (
@@ -44,10 +45,12 @@ var Known = map[string]Catalog{
 		Description: "Runs Claude Code, OpenCode and Kiro sessions across your projects, from task to merged PR, " +
 			"with Meko as their shared memory.",
 		Summary: "runs coding agents across your projects, from task to merged PR",
-		Command: "me_koder",
-		// Its names before: agentk, and agent-k-local before the rename to AgentK. Its releases still
-		// carry both, as links to me_koder; Rename moves an install onto the new name.
-		OldCommands: []string{"agentk", "agent-k-local"},
+		Command: "me_kode",
+		Verb:    "kode",
+		// Its names before, newest first: me_koder, agentk, and agent-k-local before the rename to
+		// AgentK. Its releases still carry all three, as links to me_kode, for the services and older
+		// Mekos that run them; Rename moves an install onto the new name.
+		OldCommands: []string{"me_koder", "agentk", "agent-k-local"},
 		// Its releases are tagged agentk-v<version>, and v<version> before releases were tagged by product.
 		TagPrefixes: []string{"agentk-v", "v"},
 		Managed:     true,
@@ -69,19 +72,18 @@ var Known = map[string]Catalog{
 		// Its own [update] channel = "off" keeps Update automatically off until it's turned on.
 		LegacyUpdatesOff: "config.toml",
 	},
-	// Presenter (extensions/presenter): interactive, branching presentations built from datapacks.
-	// Its command is me_presenter (meko_presenter before, which its releases still carry as a link).
-	// Its releases (presenter-v<version>) carry
-	// presenter-<version>-<os>-<arch>.tar.gz and SHA256SUMS. A build from source on PATH is used as
+	// Presenter (extensions/present): interactive, branching presentations built from datapacks.
+	// Its program is me_present. Its releases (present-v<version>) carry
+	// present-<version>-<os>-<arch>.tar.gz and SHA256SUMS. A build from source on PATH is used as
 	// it is, and never updated.
-	"presenter": {
+	"present": {
 		Title: "Presenter",
 		Description: "Builds presentations that branch with the room from your datapacks: Claude drafts the story " +
 			"map and the slides, and you pick each path live.",
 		Summary:       "presentations that branch with the room, built from your datapacks",
-		Command:       "me_presenter",
-		OldCommands:   []string{"meko_presenter"},
-		TagPrefixes:   []string{"presenter-v"},
+		Command:       "me_present",
+		Verb:          "present",
+		TagPrefixes:   []string{"present-v"},
 		Managed:       true,
 		RemoveArgs:    []string{"uninstall", "--non-interactive"},
 		UninstallArgs: []string{"uninstall", "--purge", "--non-interactive"},
@@ -102,12 +104,22 @@ func KnownNames() []string {
 	return names
 }
 
+// UserCommand is how people run the extension's command args: meko <Verb> args (meko kode status),
+// or its program's name for one Meko has no verb for.
+func (c Catalog) UserCommand(args string) string {
+	if c.Verb != "" {
+		return "meko " + c.Verb + " " + args
+	}
+	return c.Command + " " + args
+}
+
 // Catalog says how to find and install a known extension.
 type Catalog struct {
 	Title       string
 	Description string   // what it does, in a sentence, for the web UI's Extensions page
 	Summary     string   // what it does, in a few lowercase words, for meko install's picker
-	Command     string   // the program's name, looked for on PATH and in ~/.local/bin
+	Command     string   // the program's name: a release's bin/<Command>, or a build from source's on PATH
+	Verb        string   // the meko command that runs it: meko <Verb> <its command>
 	OldCommands []string // names it had before, looked for after Command
 	TagPrefixes []string // its release tags, newest naming first
 	// Managed says Meko installs it from its releases' tarballs into App and updates it: the
@@ -295,17 +307,18 @@ func (r *Registry) FindAgain(name, home, root string) string {
 	return cmd
 }
 
-// Rename moves release installs of this data folder's extensions made under an older name of their
-// command (Catalog.OldCommands, e.g. agentk before me_koder) onto the current one: the installed
-// versions get the new name (update.App.AdoptAll), ~/.local/bin/<command> links to app/current, the
-// registry entry runs that link instead of an old name, and the ~/.local/bin links of old names into
-// this app folder go. Another data folder's links, and a build from source, are left alone. Meko's
-// server runs it at start, since updates never run an extension's install.
+// Rename moves release installs of this data folder's extensions onto running app/current's
+// program by its current name, with no command on PATH: the installed versions get the new name
+// (update.App.AdoptAll), the registry entry runs app/current/bin/<command> instead of a
+// ~/.local/bin link into this app folder (any of its names, from before extensions were run through
+// meko <verb>) or an old name, and those links go. Another data folder's links, and a build from
+// source, are left alone. Meko's server runs it at start, since updates never run an extension's
+// install.
 func (r *Registry) Rename(root, home string) error {
 	var errs []error
 	for _, name := range r.Names() {
 		cat, ok := Known[name]
-		if !ok || !cat.Managed || len(cat.OldCommands) == 0 {
+		if !ok || !cat.Managed {
 			continue
 		}
 		app := cat.App(root, name)
@@ -316,26 +329,17 @@ func (r *Registry) Rename(root, home string) error {
 			errs = append(errs, fmt.Errorf("%s: %w", cat.Title, err))
 			continue
 		}
-		if !app.MayLink(home) {
-			continue // ~/.local/bin/<command> is another data folder's: its old names stay too
-		}
-		link, err := app.LinkCommand(home)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", cat.Title, err))
-			continue
-		}
 		e := r.Entries[name]
-		if cat.isOldName(e.Command) {
-			if _, ours := cat.releaseOf(root, name, e.Command); ours || !executable(e.Command) {
-				e.Command = link
-				r.Entries[name] = e
-				if err := r.Save(); err != nil {
-					errs = append(errs, err)
-					continue
-				}
+		_, ours := cat.releaseOf(root, name, e.Command)
+		if e.Command != app.CurrentExe() && (ours || (cat.isOldName(e.Command) && !executable(e.Command))) {
+			e.Command = app.CurrentExe()
+			r.Entries[name] = e
+			if err := r.Save(); err != nil {
+				errs = append(errs, err)
+				continue
 			}
 		}
-		errs = append(errs, cat.UnlinkOldCommands(app, home))
+		errs = append(errs, cat.UnlinkCommands(app, home))
 	}
 	return errors.Join(errs...)
 }
@@ -350,13 +354,13 @@ func (c Catalog) isOldName(command string) bool {
 	return false
 }
 
-// UnlinkOldCommands removes the ~/.local/bin links of the extension's old command names that point
-// into app (update.App.UnlinkCommandAs): once ~/.local/bin/<command> is there, it's the one way to
-// run it.
-func (c Catalog) UnlinkOldCommands(app update.App, home string) error {
-	errs := make([]error, 0, len(c.OldCommands))
-	for _, o := range c.OldCommands {
-		errs = append(errs, app.UnlinkCommandAs(home, o))
+// UnlinkCommands removes the ~/.local/bin links, by any of the extension's names, that point into
+// app (update.App.UnlinkCommandAs): Meko once made them, and people run it as meko <verb> now.
+func (c Catalog) UnlinkCommands(app update.App, home string) error {
+	names := append([]string{c.Command}, c.OldCommands...)
+	errs := make([]error, 0, len(names))
+	for _, n := range names {
+		errs = append(errs, app.UnlinkCommandAs(home, n))
 	}
 	return errors.Join(errs...)
 }
@@ -540,16 +544,16 @@ func (r *Registry) Statuses(ctx context.Context, root string, d time.Duration) f
 	}
 }
 
-// Find looks for the extension's program by its name, then by its old ones (FindCommand), then
-// in the app/current/bin of its release install: its folder in Meko's data folder at root (Dir),
-// then its old homes. It returns the absolute path, or "". A Managed extension's command on PATH
-// or in ~/.local/bin that runs a release of another data folder (one link serves all of a user's
-// Meko data folders) isn't this one's.
+// Find looks for the extension's program: a build from source on PATH or in ~/.local/bin, by its
+// name, then by its old ones (FindCommand), else app/current/bin/<name> of its release install, in
+// its folder in Meko's data folder at root (Dir), then in its old homes. It returns the absolute
+// path, or "". A command there that runs a release install (a link Meko once made, which may be
+// another data folder's) is passed over for the release's own path.
 func (c Catalog) Find(name, home, root string) string {
 	names := append([]string{c.Command}, c.OldCommands...)
 	for _, n := range names {
 		if p := FindCommand(n, home); p != "" {
-			if v, ours := c.releaseOf(root, name, p); c.Managed && v != "" && !ours {
+			if v, _ := c.releaseOf(root, name, p); c.Managed && v != "" {
 				continue
 			}
 			return p

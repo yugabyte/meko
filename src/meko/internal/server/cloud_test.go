@@ -44,7 +44,7 @@ func send(t *testing.T, method, url, payload string, header map[string]string) (
 	return code, b
 }
 
-// On the API listener the link's routes take only the admin token (meko cloud_link): an agent's
+// On the API listener the link's routes take only the admin token (meko cloud-link): an agent's
 // client token can't read it or point it elsewhere.
 func TestCloudRoutesOnTheAPIListener(t *testing.T) {
 	ln, err := Listen(0)

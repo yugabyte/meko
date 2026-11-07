@@ -424,7 +424,7 @@ func storageStep(s *memory.StorageStatus, linked bool) (stepKind, string, bool) 
 	case s.UsedBytes >= s.LimitBytes && linked:
 		return stepFail, "full, " + used + ": delete what you don't need, or keep larger datasets in Meko Cloud", true
 	case s.UsedBytes >= s.LimitBytes:
-		return stepFail, "full, " + used + ": delete what you don't need, or run meko cloud_link for larger datasets",
+		return stepFail, "full, " + used + ": delete what you don't need, or run meko cloud-link for larger datasets",
 			true
 	case float64(s.UsedBytes) >= storageWarnAt*float64(s.LimitBytes):
 		return stepWarn, used + " used", true
@@ -522,13 +522,13 @@ func extensionStatuses(root string) (wait func() extensionResults, stop func()) 
 }
 
 // timedOut is an extension's state when its status didn't answer in time, naming the command to
-// run by hand.
+// run by hand: meko kode status, or the registered program's for an extension Meko doesn't know.
 func (r extensionResults) timedOut(name string) string {
-	cmd := extensions.Known[name].Command
-	if cmd == "" {
-		cmd = filepath.Base(r.reg.Entries[name].Command)
+	cat, ok := extensions.Known[name]
+	if !ok {
+		cat.Command = filepath.Base(r.reg.Entries[name].Command)
 	}
-	return fmt.Sprintf("didn't answer in %s (%s status)", extensions.StatusTimeout, cmd)
+	return fmt.Sprintf("didn't answer in %s (%s)", extensions.StatusTimeout, cat.UserCommand("status"))
 }
 
 // mcpAccess is how an MCP client reaches this Meko: the MCP URL, on the running server's port or the
