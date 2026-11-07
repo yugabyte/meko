@@ -669,7 +669,10 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const one = (line: number, severity: string, comment: string) => ({ file: 'src/a.ts', line, severity, comment, gotchas: [] });
     // On a timeout, what the review's session was asked last and what it answered say where it stopped.
     const waiting = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.codeReview?.state === 'triage', 30000, 'the findings to wait on you')
-      .catch((e: Error) => {
+      .catch(async (e: Error) => {
+        const pane = all<{ tmux_name: string }>(env.core.db, 'SELECT tmux_name FROM sessions WHERE parent_id = ?', id).at(-1)?.tmux_name;
+        const screen = pane ? await env.core.host.capture(pane).catch((x: Error) => `no capture: ${x.message}`) : '';
+        e.message += `\nthe review session's screen: ${JSON.stringify(screen.slice(-3000))}`;
         const child = all<{ id: string; claude_session_id: string }>(env.core.db, 'SELECT id, claude_session_id FROM sessions WHERE parent_id = ?', id).at(-1);
         const asked = child ? prompts(child.claude_session_id).slice(-2) : [];
         const session = child ? env.core.sessions.get(child.id) : null;
