@@ -124,7 +124,8 @@ func TestPickKeyNeedsATerminal(t *testing.T) {
 // A first install's picker asks on the terminal which experience to add, by the meko command that
 // runs it, with no numbers: the mark skips the coming-soon rows, skip for now and Ctrl+C add none,
 // and one whose install fails is a ✗ row, with Meko left as it is. On an 80-column terminal a long
-// detail is cut to fit its line. Kode, already added, isn't offered again.
+// detail is cut to fit its line. Present, which has no Summary, isn't offered; nor is Kode once
+// added, which leaves nothing to pick, so the picker isn't shown.
 func TestPickExtensionOnATerminal(t *testing.T) {
 	dir, _ := setup(t)
 	noRealExtensions(t)
@@ -134,7 +135,6 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 	}
 	all := []string{"  ? Choose your agentic experience\n",
 		"  ❯ kode           agentic development — reviews, PRs, refactors\033[K\n",
-		"    present        presentations that branch with the room, built from your datapacks\033[K\n",
 		"    migrate        database migrations with a safety net · coming soon\033[K\n",
 		"    scribe         briefs, decks, docs and posts from your context · coming soon\033[K\n",
 		"    skip for now   explore the base platform — add an experience anytime\033[K\n"}
@@ -169,8 +169,9 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 		typed []string
 		shows []string
 	}{
-		{"down twice skips the soon rows to skip for now", 120, []string{"j", "\x1b[B", "\r"},
+		{"down skips the soon rows to skip for now", 120, []string{"\x1b[B", "\r"},
 			append(all, "  ❯ skip for now   explore the base platform")},
+		{"j moves down too", 120, []string{"j", "\r"}, []string{"  ❯ skip for now"}},
 		{"up wraps to skip for now", 120, []string{"k", "\r"}, []string{"  ❯ skip for now"}},
 		{"a number does nothing", 120, []string{"2", "\x03"}, nil},
 		{"Ctrl+C adds none", 120, []string{"\x03"}, nil},
@@ -178,7 +179,7 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 			"\n  → meko extension install kode   · adds an extension at any time\n",
 			"  ✗ kode            not added: "}},
 		{"80 columns cut a long detail", 80, []string{"\x03"}, []string{
-			"    present        presentations that branch with the room, built from your da…\033[K\n"}},
+			"    scribe         briefs, decks, docs and posts from your conte… · coming soon\033[K\n"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			name, out := pick(t, c.cols, c.typed...)
@@ -193,6 +194,9 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 			if strings.Contains(out, "1)") || strings.Contains(out, "Enter") {
 				t.Errorf("numbers or a hint in:\n%s", out)
 			}
+			if strings.Contains(out, "present") {
+				t.Errorf("Present offered in:\n%s", out)
+			}
 		})
 	}
 
@@ -204,8 +208,8 @@ func TestPickExtensionOnATerminal(t *testing.T) {
 	if err = reg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if _, out := pick(t, 120, "\x03"); strings.Contains(out, "kode") || !strings.Contains(out, "  ❯ present ") {
-		t.Errorf("with Kode added:\n%s", out)
+	if name, out := pick(t, 120); name != "" || out != "" {
+		t.Errorf("with Kode added: added %q, showed:\n%s", name, out)
 	}
 }
 

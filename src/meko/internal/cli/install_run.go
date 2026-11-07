@@ -308,9 +308,9 @@ var upcoming = []pickRow{
 var skipRow = pickRow{label: "skip for now", detail: "explore the base platform — add an experience anytime"}
 
 // pickExtension is a first install's last question, asked after the links: "Choose your agentic
-// experience", which of the known extensions not installed yet to add (each by its Verb, the meko
-// command that runs it, with its Summary), or none; the upcoming ones are listed too, dim, and
-// can't be picked. The one picked is installed as meko extension install does, on the terminal,
+// experience", which of the known extensions not installed yet that have a Summary to add (each by
+// its Verb, the meko command that runs it, with its Summary), or none; the upcoming ones are listed
+// too, dim, and can't be picked. The one picked is installed as meko extension install does, on the terminal,
 // where it asks its own questions; it returns its name, or "" for none. Where it can't (no
 // terminal) or mayn't (--non-interactive) ask, it says how to add one later. A failed extension
 // install is a ✗ row and its error, and Meko stays installed.
@@ -323,10 +323,10 @@ func pickExtension(l paths.Layout, ask bool, stdout, stderr io.Writer) func(r re
 		var names []string
 		var rows []pickRow
 		for _, n := range extensions.KnownNames() {
-			if _, ok := reg.Entries[n]; ok {
+			c := extensions.Known[n]
+			if _, ok := reg.Entries[n]; ok || c.Summary == "" {
 				continue
 			}
-			c := extensions.Known[n]
 			names = append(names, n)
 			rows = append(rows, pickRow{label: cmp.Or(c.Verb, n), detail: c.Summary})
 		}
