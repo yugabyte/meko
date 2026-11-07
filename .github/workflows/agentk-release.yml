@@ -226,9 +226,6 @@ jobs:
           /tmp/smoke/"$pkg"-*/bin/me_kode selftest
           # Its name before, which services installed then and older Mekos run.
           /tmp/smoke/"$pkg"-*/bin/agentk selftest
-          # The copy under the old name, by the path installs from before the rename to Kode run.
-          tar -xzf out/agent-k-local-*.tar.gz -C /tmp/smoke
-          /tmp/smoke/agent-k-local-*/bin/agent-k-local selftest
 
       - uses: actions/upload-artifact@v7
         with:
@@ -309,9 +306,6 @@ jobs:
           "$smoke"/"$pkg"-*/bin/me_kode selftest
           # Its name before, which services installed then and older Mekos run.
           "$smoke"/"$pkg"-*/bin/agentk selftest
-          # The copy under the old name, by the path installs from before the rename to Kode run.
-          tar -xzf out/agent-k-local-*.tar.gz -C "$smoke"
-          "$smoke"/agent-k-local-*/bin/agent-k-local selftest
 
       - uses: actions/upload-artifact@v7
         with:

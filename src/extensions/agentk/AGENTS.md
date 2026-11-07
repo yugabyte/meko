@@ -33,8 +33,7 @@ list and the services say it's a Meko extension's: the release's launcher (`bin/
 `meko kode` runs) and its Node (`node/bin/me_kode`), the systemd units (`me_kode.service`,
 `me_kode-host.service`) and the launchd labels (`com.yugabyte.me_kode`, `.host`). It was `me_koder`
 before, `agentk` before that, and `agent-k-local` before the rename to AgentK.
-What installs from before still have keeps working: every release also ships its tarball as
-`agent-k-local-<version>-…` (until #238), its `bin/me_koder`, `bin/agentk` and `bin/agent-k-local`
+What installs from before still have keeps working: every release's `bin/me_koder` and `bin/agentk`
 are links to `bin/me_kode` (`scripts/package-release.sh`), Meko's start removes the old
 `~/.local/bin` links (Kode never makes one: `src/server/cmdlink.ts`), and a service keeps its old
 name until `meko kode install` moves it (`dropOldNames` in `src/server/service.ts`). A Meko from
