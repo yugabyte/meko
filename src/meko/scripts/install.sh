@@ -181,9 +181,9 @@ fi
 # ---- already installed: nothing to do ----
 if ! $reinstall && [ "$installed" = "$version" ]; then
   if [ -n "$asked" ]; then
-    say "  $g✓$n ${b}Meko $version is installed$n$d · --reinstall sets it up again$n"
+    say "  ${g}✓$n ${b}Meko $version is installed$n$d · --reinstall sets it up again$n"
   else
-    say "  $g✓$n ${b}Meko $version is up to date$n$d · --reinstall sets it up again$n"
+    say "  ${g}✓$n ${b}Meko $version is up to date$n$d · --reinstall sets it up again$n"
   fi
   exit 0
 fi
@@ -191,9 +191,9 @@ fi
 # ---- header ----
 say ""
 if [ -n "$installed" ] && [ "$installed" != "$version" ]; then
-  say "  $bl◆$n ${b}meko$n  $d$installed → $version · $where$n"
+  say "  ${bl}◆$n ${b}meko$n  $d$installed → $version · $where$n"
 else
-  say "  $bl◆$n ${b}meko$n  $d$version · $where$n"
+  say "  ${bl}◆$n ${b}meko$n  $d$version · $where$n"
   [ -n "$installed" ] || say "    ${d}Installs into your home folder, no sudo$n"
 fi
 say ""
@@ -230,7 +230,7 @@ fi
 curl -fsSL -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" || die "the download of SHA256SUMS failed"
 (cd "$tmp" && grep " $tarball\$" SHA256SUMS | sha256_check >/dev/null) || die "checksum verification failed for $tarball"
 size=$(wc -c <"$tmp/$tarball" | tr -d ' ')
-row "$g✓$n" Download "meko $version" "$((size / 1000000)) MB in $(($(date +%s) - began))s · checksum verified"
+row "${g}✓$n" Download "meko $version" "$((size / 1000000)) MB in $(($(date +%s) - began))s · checksum verified"
 
 # ---- unpack into app/<version> ----
 # It takes seconds (some 400 MB, more in a container's home folder), so on a terminal the Install
