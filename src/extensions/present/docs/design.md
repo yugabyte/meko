@@ -158,9 +158,10 @@ present`, the Extensions page): it checks the signature and the checksum, unpack
 `bin/me_present version --json` names it, and points `app/current` at it. The program is
 `me_present`, so a process list says it's a Meko extension's, and the extension `present` (its
 folder, tags, tarballs and pages). It has no command of its own on PATH: people run `meko present
-<command>`, which runs `app/current/bin/me_present` with `MEKO_HOME` set. Its name was Presenter
-until Nov 2026; Meko's status row still reads a headline an older release prints with that name
-(`Catalog.OldTitles`), and a deck made before keeps the datapack description `Presenter deck "…"`.
+<command>`, which runs `app/current/bin/me_present` with `MEKO_HOME` set. An older release
+still prints "Presenter" in its own output; Meko's status row drops that old title from its headline
+too (`Catalog.OldTitles`). A deck's datapack is described as `Deck "…" (Present)`, and one made by
+an older release as `Presenter deck "…"`.
 Present was the
 extension `presenter`, with the program `me_presenter` (`meko_presenter` before), and nothing moves
 an install from then. Meko no longer knows it: it stays in `extensions.json`, so `meko start` and

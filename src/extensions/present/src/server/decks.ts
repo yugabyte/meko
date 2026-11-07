@@ -172,7 +172,7 @@ export class DeckStore {
     for (let n = 1; n <= 20 && !row; n++) {
       const name = n === 1 ? base : `${base.slice(0, 60 - String(n).length - 1)}-${n}`;
       try {
-        row = await this.meko.createDatapack(name, `Present deck "${title.slice(0, 200)}"`);
+        row = await this.meko.createDatapack(name, `Deck "${title.slice(0, 200)}" (Present)`);
       } catch (e) {
         if (!(e instanceof MekoError && /conflict|taken|exists/i.test(e.message))) throw e;
       }

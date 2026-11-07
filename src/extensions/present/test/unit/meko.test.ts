@@ -31,10 +31,10 @@ describe('Meko\'s tools as Present calls them', () => {
       if (name === 'datapack_create') return args.conversation_id ? { datapack_id: 'dp1', name: args.name } : {};
       return { message: 'datapack updated' };
     });
-    expect(await m.createDatapack('present/deck/acme', 'Present deck "Acme"')).toEqual({ id: 'dp1', name: 'present/deck/acme', description: 'Present deck "Acme"' });
+    expect(await m.createDatapack('present/deck/acme', 'Deck "Acme" (Present)')).toEqual({ id: 'dp1', name: 'present/deck/acme', description: 'Deck "Acme" (Present)' });
     expect(m.calls.slice(1)).toEqual([
       { name: 'datapack_create', args: { name: 'present/deck/acme', conversation_id: 'c1' } },
-      { name: 'datapack_update', args: { datapack_id: 'dp1', description: 'Present deck "Acme"', conversation_id: 'c1' } },
+      { name: 'datapack_update', args: { datapack_id: 'dp1', description: 'Deck "Acme" (Present)', conversation_id: 'c1' } },
     ]);
   });
 

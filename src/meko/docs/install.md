@@ -518,9 +518,9 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   program with what follows, `MEKO_HOME` set, on the terminal, and exits as it does. One command
   works for every extension and data folder (a leading `--data-dir` picks another), and nothing in
   `~/.local/bin` can run another data folder's release by mistake.
-- Present was called Presenter until Nov 2026. A release from before still says so in its own
-  output: Meko's status row drops that old title from its headline (`Catalog.OldTitles`), and its
-  `meko start` and `meko stop` rows say Presenter until it updates.
+- An older Present release still prints "Presenter" in its own output: Meko's status row drops
+  that old title from its headline as it does Present (`Catalog.OldTitles`), and the `meko start`
+  and `meko stop` rows it prints say Presenter until it updates.
 - Present was the extension `presenter` (program `me_presenter`), and nothing moves an install
   from then: its `extensions.json` entry stays, a name Meko no longer knows, which `meko start`
   still starts (and fails to) and `meko extension delete presenter` only forgets. Present's

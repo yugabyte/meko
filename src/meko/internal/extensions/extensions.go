@@ -78,7 +78,7 @@ var Known = map[string]Catalog{
 	// it is, and never updated.
 	"present": {
 		Title: "Present",
-		// It was Presenter until Nov 2026, and an older release's status headline still says so.
+		// An older release still says Presenter in its status headline.
 		OldTitles: []string{"Presenter"},
 		Description: "Builds presentations that branch with the room from your datapacks: Claude drafts the story " +
 			"map and the slides, and you pick each path live.",

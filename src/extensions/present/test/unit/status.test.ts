@@ -13,7 +13,7 @@ describe('meko present status, shaped like meko status', () => {
       '  ✓ Server          healthy',
       '  ✓ Claude Code     installed',
       '',
-      '  Pages    meko ui, then Present',
+      '  Pages    meko ui, then Present in its sidebar',
       '  Home     /home/alice/.meko/extensions/present',
     ]);
     expect(runs(facts())).toBe(true);

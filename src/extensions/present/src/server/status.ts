@@ -49,7 +49,7 @@ export function statusLines(f: StatusFacts, color = process.stdout.isTTY === tru
   }
   lines.push(f.claude ? summaryRow('✓', 'Claude Code', 'installed', color) : summaryRow('!', 'Claude Code', 'not found: install it to build decks', color));
   lines.push('');
-  lines.push(`  ${'Pages'.padEnd(9)}meko ui, then Present`);
+  lines.push(`  ${'Pages'.padEnd(9)}meko ui, then Present in its sidebar`);
   lines.push(`  ${'Home'.padEnd(9)}${f.home}`);
   if (f.pid === null) {
     lines.push('');
