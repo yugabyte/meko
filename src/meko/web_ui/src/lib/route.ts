@@ -1,7 +1,9 @@
 // The UI's routes, on the History API: /datapacks/<id>/<tab>, /projects, /projects/<id>, /status,
-// /extensions, /settings, /settings/meko-cloud and /calls (its filters in the query: callFilter).
-// meko serve answers every such path with index.html. The gate (Gate.tsx) sends the old sign-in and
-// account addresses (/signin, /setup, /account) on into these (lib/auth).
+// /agents, /extensions, /settings, /settings/meko-cloud and /calls (its filters in the query:
+// callFilter).
+// meko serve answers every such path with index.html. The gate (Gate.tsx) sends the old sign-in,
+// account and datapack Connect addresses (/signin, /setup, /account, /datapacks/<id>/connect) on
+// into these (lib/auth).
 
 import { useCallback, useEffect, useState } from "react";
 import type { CallFilter } from "./types";
@@ -15,7 +17,6 @@ export const TABS = [
   "artifacts",
   "search",
   "gaps",
-  "connect",
 ] as const;
 export type Tab = (typeof TABS)[number];
 
@@ -25,7 +26,7 @@ export interface Route {
   // A conversation open in the conversations tab, or the memories tab's scope.
   itemId?: string;
   // A page of the whole install rather than of a datapack.
-  view?: "status" | "extensions" | "settings" | "meko-cloud" | "cloud-gaps" | "projects" | "project" | "calls";
+  view?: "status" | "agents" | "extensions" | "settings" | "meko-cloud" | "cloud-gaps" | "projects" | "project" | "calls";
   // The project open on the project view.
   projectId?: string;
   // Something on the page to scroll to and point out, as the address's #fragment: a conversation's
@@ -35,7 +36,9 @@ export interface Route {
 
 export function parse(path: string): Route {
   const [, root, id, tab, item] = path.split("/");
-  if (root === "status" || root === "extensions" || root === "calls") return { tab: "overview", view: root };
+  if (root === "status" || root === "agents" || root === "extensions" || root === "calls") {
+    return { tab: "overview", view: root };
+  }
   if (root === "settings" && id === "meko-cloud") return { tab: "overview", view: "meko-cloud" };
   if (root === "settings" && !id) return { tab: "overview", view: "settings" };
   if (root === "projects") return id ? { tab: "overview", view: "project", projectId: id } : { tab: "overview", view: "projects" };
@@ -53,7 +56,7 @@ export function parse(path: string): Route {
 // (an extension's page, /ext/<name>/) is a page of its own, for the browser to load.
 export function isAppPath(path: string): boolean {
   const root = path.split("/")[1];
-  return ["", "datapacks", "status", "extensions", "settings", "gaps", "projects", "calls"].includes(root);
+  return ["", "datapacks", "status", "agents", "extensions", "settings", "gaps", "projects", "calls"].includes(root);
 }
 
 export function href(r: Route): string {
@@ -64,6 +67,9 @@ export function href(r: Route): string {
   if (!r.datapackId) return "/";
   return `/datapacks/${r.datapackId}/${r.tab}${r.itemId ? `/${r.itemId}` : ""}${r.focus ? `#${r.focus}` : ""}`;
 }
+
+// The Agents page: the agents on this computer, which connect to Meko itself, not to a datapack.
+export const AGENTS: Route = { tab: "overview", view: "agents" };
 
 export const PROJECTS: Route = { tab: "overview", view: "projects" };
 export const project = (projectId: string): Route => ({ tab: "overview", view: "project", projectId });

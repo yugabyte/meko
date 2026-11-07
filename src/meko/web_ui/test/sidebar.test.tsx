@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
-// The sidebar's datapacks against a faked /api/v1: one list, each row opened where its web_url says
-// (this UI's pages, Meko Cloud's web app in a new tab, or nowhere), with no location in any request.
+// The sidebar against a faked /api/v1: its top links, and its datapacks, one list, each row opened
+// where its web_url says (this UI's pages, Meko Cloud's web app in a new tab, or nowhere), with no
+// location in any request.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 import { Sidebar } from "../src/components/Sidebar";
 import { ApiError } from "../src/lib/api";
+import type { Route } from "../src/lib/route";
 import type { Datapack } from "../src/lib/types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -54,6 +56,7 @@ async function render(
     linked?: boolean;
     createdURL?: string | null;
     onCreated?: (id: string, open: boolean) => void;
+    view?: Route["view"];
   } = {},
 ) {
   serve(props.linked ?? true, props.createdURL ?? null);
@@ -69,7 +72,7 @@ async function render(
         loading={false}
         error={props.error}
         onRefresh={() => {}}
-        view={undefined}
+        view={props.view}
         theme="light"
         onToggleTheme={() => {}}
         onCreated={props.onCreated ?? (() => {})}
@@ -189,4 +192,14 @@ test("Settings is a gear at the foot of the sidebar, not a row in the top links"
   expect(gear.closest(".border-t")).not.toBeNull();
   expect(gear.textContent).toBe("");
   expect(document.querySelectorAll('a[href="/settings"]')).toHaveLength(1);
+});
+
+test("Agents is a top link under Status, above Extensions, opening the Agents page", async () => {
+  await render({ view: "agents" });
+  const top = [...document.querySelectorAll<HTMLAnchorElement>("aside a")].map((a) => a.getAttribute("href"));
+  expect(top.indexOf("/status")).toBe(top.indexOf("/agents") - 1);
+  expect(top.indexOf("/agents")).toBeLessThan(top.indexOf("/extensions"));
+  const agents = document.querySelector<HTMLAnchorElement>('aside a[href="/agents"]')!;
+  expect(agents.textContent).toBe("Agents");
+  expect(agents.getAttribute("aria-current")).toBe("page");
 });
