@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -22,7 +20,8 @@ func TestNextSteps(t *testing.T) {
 	learn := [2]string{"meko memory-extractor use claude", "learn memories from your conversations, through Claude Code"}
 	share := [2]string{"meko cloud-link", "share with your team through Meko Cloud"}
 	addAgentK := [2]string{"meko extension install agentk", "add AgentK, which runs coding agents from task to merged PR"}
-	openAgentK := [2]string{"me_koder ui", "open AgentK"}
+	openAgentK := [2]string{"meko kode ui", "open AgentK"}
+	openPresent := [2]string{"meko ui", "open the web UI, then Presenter in its sidebar"}
 	status := [2]string{"meko status", "check on Meko at any time"}
 	statusInstall := [2]string{"meko status", "check on Meko at any time · meko uninstall removes it"}
 	for _, c := range []struct {
@@ -40,15 +39,14 @@ func TestNextSteps(t *testing.T) {
 		}(), nextInstall, [][2]string{openAgentK, connect, learn, share, statusInstall}},
 		{"install, Presenter just added", func() nextState {
 			s := done
-			s.added = "presenter"
+			s.added = "present"
 			return s
-		}(), nextInstall, [][2]string{{"meko ui /ext/presenter/", "open Presenter"}, openAgentK, statusInstall}},
+		}(), nextInstall, [][2]string{openPresent, openAgentK, statusInstall}},
 		{"install, Presenter just added, AgentK not installed", func() nextState {
 			s := fresh
-			s.added = "presenter"
+			s.added = "present"
 			return s
-		}(), nextInstall, [][2]string{{"meko ui /ext/presenter/", "open Presenter"}, connect, learn, share, addAgentK,
-			statusInstall}},
+		}(), nextInstall, [][2]string{openPresent, connect, learn, share, addAgentK, statusInstall}},
 		{"install --no-ui, AgentK just added: the web UI it needs first", func() nextState {
 			s := fresh
 			s.webOff, s.agentK, s.added = true, true, "agentk"
@@ -73,9 +71,9 @@ func TestNextSteps(t *testing.T) {
 		{"cloud-link with Meko stopped: start it first", nextState{agent: claude, connected: true, claude: true,
 			extracting: true, linked: true, agentK: true, agentKRead: true}, nextUse, [][2]string{
 			{"meko start", "start Meko"}, openAgentK}},
-		{"me_koder runs another Meko's AgentK", nextState{running: true, agent: claude, connected: true, claude: true,
-			extracting: true, linked: true, agentK: true, agentKRead: true, agentKOther: true}, nextUse, [][2]string{ui,
-			{"meko ui /ext/agentk/", "open AgentK"}}},
+		{"another data folder than meko kode's", nextState{running: true, agent: claude, connected: true, claude: true,
+			extracting: true, linked: true, agentK: true, agentKRead: true, agentKOther: "/data/meko two"}, nextUse,
+			[][2]string{ui, {"meko kode --data-dir '/data/meko two' ui", "open AgentK"}}},
 		{"the extensions' registry unread: no AgentK step", nextState{running: true, agent: claude, connected: true,
 			extracting: true, linked: true}, nextUse, [][2]string{ui}},
 	} {
@@ -120,28 +118,14 @@ func TestEveryText(t *testing.T) {
 	}
 }
 
-// me_koder on PATH is this Meko's AgentK only when it's the registered command, links followed.
-func TestOnPathAs(t *testing.T) {
-	bin, app := t.TempDir(), t.TempDir()
-	exe := filepath.Join(app, "me_koder")
-	other := filepath.Join(app, "other")
-	for _, f := range []string{exe, other} {
-		if err := os.WriteFile(f, []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: a test script
-			t.Fatal(err)
-		}
+// meko kode runs the AgentK of the data folder MEKO_HOME names, else ~/.meko's.
+func TestIsDefaultDataDir(t *testing.T) {
+	root, other := t.TempDir(), t.TempDir()
+	t.Setenv("MEKO_HOME", root)
+	if !isDefaultDataDir(root) {
+		t.Error("MEKO_HOME's data folder isn't the default")
 	}
-	if err := os.Symlink(exe, filepath.Join(bin, "me_koder")); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin)
-	if !onPathAs(exe) {
-		t.Error("the link on PATH to the registered command isn't the same program")
-	}
-	if onPathAs(other) || onPathAs("") {
-		t.Error("another command is the same program")
-	}
-	t.Setenv("PATH", t.TempDir())
-	if onPathAs(exe) {
-		t.Error("me_koder isn't on PATH, but is the same program")
+	if isDefaultDataDir(other) {
+		t.Error("another data folder is the default")
 	}
 }

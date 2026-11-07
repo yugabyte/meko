@@ -37,7 +37,7 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions run in AgentK's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
-  `me_koder attach <session>` (`Ctrl+\` detaches).
+  `meko kode attach <session>` (`Ctrl+\` detaches).
 - **Claude Code, OpenCode or Kiro, per session.** New sessions start on the default agent
   (Settings → Harness), or pick **Agent** under **Advanced** in New session once more than one of
   Claude Code, [OpenCode](https://opencode.ai) 2.0.0 or later (signed in to a model provider with

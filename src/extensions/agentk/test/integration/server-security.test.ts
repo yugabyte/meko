@@ -40,7 +40,7 @@ describe('HTTP API: access control', () => {
     await env.cleanup();
   });
 
-  /** Listens on the home's web socket, as `me_koder serve` does: Meko is what connects to it. */
+  /** Listens on the home's web socket, as `meko kode serve` does: Meko is what connects to it. */
   async function listen(): Promise<string> {
     await app.ready();
     await listenPrivate(app.server, env.core.paths.webSock, 'the web socket');

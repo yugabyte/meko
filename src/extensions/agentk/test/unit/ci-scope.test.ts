@@ -18,7 +18,7 @@ const run = (...paths: string[]) => {
   expect(r.status, r.stderr).toBe(0);
   return r.stdout;
 };
-const out = (agentk: boolean, meko: boolean, presenter = false) => `agentk=${agentk}\nmeko=${meko}\npresenter=${presenter}\n`;
+const out = (agentk: boolean, meko: boolean, present = false) => `agentk=${agentk}\nmeko=${meko}\npresent=${present}\n`;
 
 describe('ci-scope.sh', () => {
   it.each([
@@ -28,9 +28,9 @@ describe('ci-scope.sh', () => {
     ['src/meko/cmd/meko/main.go', false, true, false],
     ['src/meko/AGENTS.md', false, false, false],
     ['src/meko/internal/paths/testdata/a.md', false, true, false],
-    ['src/extensions/presenter/src/server/cli.ts', false, false, true],
-    ['src/extensions/presenter/AGENTS.md', false, false, false],
-    ['src/extensions/presenter/test/fixtures/a.md', false, false, true],
+    ['src/extensions/present/src/server/cli.ts', false, false, true],
+    ['src/extensions/present/AGENTS.md', false, false, false],
+    ['src/extensions/present/test/fixtures/a.md', false, false, true],
     ['src/extensions/agentk/README.md', false, false, false],
     ['src/extensions/agentk/docs/design/releases.md', false, false, false],
     ['src/extensions/agentk/src/web/REVIEW.md', false, false, false],
@@ -49,14 +49,14 @@ describe('ci-scope.sh', () => {
     ['docs/new.md', true, true, true],
     ['docs/README.md', true, true, true],
     ['scripts/README.md', true, false, false],
-  ])('%s runs agentk=%s meko=%s presenter=%s', (path, agentk, meko, presenter) => {
-    expect(run(path)).toBe(out(agentk, meko, presenter));
+  ])('%s runs agentk=%s meko=%s present=%s', (path, agentk, meko, present) => {
+    expect(run(path)).toBe(out(agentk, meko, present));
   });
 
   it('runs each component any path needs', () => {
     expect(run('AGENTS.md', 'src/meko/go.mod')).toBe(out(false, true));
     expect(run('src/meko/go.mod', 'src/extensions/agentk/src/a.ts')).toBe(out(true, true));
-    expect(run('src/extensions/presenter/src/a.ts', 'src/meko/go.mod')).toBe(out(false, true, true));
+    expect(run('src/extensions/present/src/a.ts', 'src/meko/go.mod')).toBe(out(false, true, true));
     expect(run('README.md', '.claude/x', 'src/extensions/agentk/README.md', 'src/meko/REVIEW.md')).toBe(out(false, false));
   });
 

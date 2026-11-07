@@ -1,5 +1,5 @@
 /**
- * `me_koder status`'s output, from what it found: shaped like `meko status`. A marked headline,
+ * `meko kode status`'s output, from what it found: shaped like `meko status`. A marked headline,
  * then a row per part that runs (the server, the session host, the services), then the links in a
  * box, as Meko's summary draws them.
  * Meko shows the headline in its own status row, without the mark and "AgentK" (src/meko/docs/install.md),
@@ -78,7 +78,7 @@ export function formatStatus(f: StatusFacts, paint: (k: Kind, mark: string) => s
   if (f.services === 'other') row('warn', 'Service', 'none for this home (the installed services run another one)');
   else if (f.services) {
     const { kind, units } = f.services;
-    if (!units.some((u) => u.installed)) row('warn', 'Service', 'not installed (me_koder install sets it up)');
+    if (!units.some((u) => u.installed)) row('warn', 'Service', 'not installed (meko kode install sets it up)');
     else if (units.every((u) => u.installed && u.running)) row('ok', 'Service', kind);
     else if (units.every((u) => !u.running)) row('warn', 'Service', `${kind}, stopped`);
     else row('warn', 'Service', `${kind}: ${units.filter((u) => !u.running).map((u) => `${u.id} ${u.installed ? u.text : 'not installed'}`).join('; ')}`);
@@ -88,7 +88,7 @@ export function formatStatus(f: StatusFacts, paint: (k: Kind, mark: string) => s
   lines.push(...box(`AgentK ${f.version}`, [['Web UI', f.webUrl ?? `none (${f.webWhy ?? 'unknown'})`], ['Home', f.home], ['Logs', f.logs]]));
   if (!runs) {
     lines.push('');
-    lines.push('  Start it: me_koder start');
+    lines.push('  Start it: meko kode start');
   }
   return lines;
 }

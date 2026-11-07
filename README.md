@@ -113,7 +113,7 @@ merged PR, and keeps each project's designs and learnings in a Meko datapack.
 Install it with:
 ```sh
 meko extension install agentk     # -- --agent claude picks its coding agent
-me_koder ui                       # opens AgentK in your browser
+meko kode ui                      # opens AgentK in your browser
 ```
 
 ## How it works

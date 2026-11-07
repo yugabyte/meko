@@ -41,14 +41,14 @@ var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
 type cmdFlags struct {
-	keepExtensions, noService, noUI, purge, check, follow, force, noOpen, withExtensions bool
-	verbose                                                                              bool
-	lines                                                                                int
-	server, memoryEngine, service                                                        bool
-	access                                                                               string
-	all                                                                                  bool
-	auto, version                                                                        string
-	extra                                                                                []string // after --
+	keepExtensions, noService, noUI, purge, check, follow, force, withExtensions bool
+	verbose                                                                      bool
+	lines                                                                        int
+	server, memoryEngine, service                                                bool
+	access                                                                       string
+	all                                                                          bool
+	auto, version                                                                string
+	extra                                                                        []string // after --
 }
 
 // Main runs the program argv0 names (meko-cli, or else meko) with args and returns the exit code.
@@ -132,6 +132,10 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	if cmd == "_launch" && prog == progMeko {
 		return runLaunch(rest, stderr)
 	}
+	// meko kode and meko present run an extension's own commands: all that follows is its.
+	if name, ok := extensionOfVerb(cmd); ok && prog == progMeko {
+		return runExtensionCommand(name, rest, stdout, stderr)
+	}
 	// meko extension <sub> is the command "extension <sub>", and meko agent <sub> "agent <sub>";
 	// alone, each lists its subcommands.
 	if isGroup(cmd) && prog == progMeko {
@@ -147,7 +151,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		}
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
-	// meko ui start and meko ui stop are commands of their own; meko ui alone, or with a path, opens it.
+	// meko ui start and meko ui stop are commands of their own; meko ui alone opens it.
 	if cmd == "ui" && prog == progMeko && len(rest) > 0 && (rest[0] == "start" || rest[0] == "stop") {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
@@ -244,9 +248,6 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&t.out, "o", "", "the file to write (default meko-<name>-<date>.json here)")
 		fs.BoolVar(&t.force, "force", false, "replace the file if it exists")
 	}
-	if cmd == "ui" {
-		fs.BoolVar(&c.noOpen, "no-open", false, "print the link without opening the browser")
-	}
 	if cmd == "start" || cmd == "restart" || cmd == "serve" {
 		fs.IntVar(&o.Port, "port", 0, "the agents' listener's port (MCP and API) on 127.0.0.1 (default 7778)")
 		fs.StringVar(&o.LogLevel, "log-level", "", "debug, info, warn or error (default info)")
@@ -275,7 +276,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
 	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "extension install",
-		"extension update", "extension delete", "export", "ui", "agent connect", "agent disconnect":
+		"extension update", "extension delete", "export", "agent connect", "agent disconnect":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
 			if code, ok := parse(fs.Args()[1:]); !ok {
@@ -338,7 +339,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		return runLogs(l, logsOptions{follow: c.follow, lines: c.lines, server: c.server, memoryEngine: c.memoryEngine,
 			service: c.service, json: t.json}, stdout)
 	case "ui":
-		return runUI(l, t.text, !c.noOpen, stdout, stderr)
+		return runUI(l, stdout, stderr)
 	case "ui start":
 		return runUISwitch(l, true, stdout, stderr)
 	case "ui stop":

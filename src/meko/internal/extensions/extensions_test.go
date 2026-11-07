@@ -134,15 +134,15 @@ func TestCatalogFindsTheCommandInItsHome(t *testing.T) {
 	}
 }
 
-// One ~/.local/bin/me_presenter serves all of a user's Meko data folders, but a release belongs to
-// one: Find skips the link when it runs another data folder's release, and takes it when it runs
-// this one's (or isn't a release at all).
-func TestCatalogFindSkipsAnotherDataFoldersRelease(t *testing.T) {
+// A ~/.local/bin link an older Meko made into a release serves all of a user's Meko data folders,
+// but a release belongs to one: Find passes the link over, and each data folder finds its own
+// release's program, or none.
+func TestCatalogFindSkipsLinksIntoReleases(t *testing.T) {
 	home, a, b := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("PATH", t.TempDir())
-	pr := Known["presenter"]
+	pr := Known["present"]
 	release := func(root string) update.App {
-		app := pr.App(root, "presenter")
+		app := pr.App(root, "present")
 		const v = "0.20261024.0"
 		if err := os.MkdirAll(filepath.Join(app.Dir(v), "bin"), 0o700); err != nil {
 			t.Fatal(err)
@@ -163,27 +163,25 @@ func TestCatalogFindSkipsAnotherDataFoldersRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := pr.Find("presenter", home, a); got != link {
-		t.Errorf("A found %q, want its link %q", got, link)
+	if got := pr.Find("present", home, a); got != appA.CurrentExe() {
+		t.Errorf("A found %q, want its own %q", got, appA.CurrentExe())
 	}
-	if got := pr.Find("presenter", home, b); got != "" {
+	if got := pr.Find("present", home, b); got != "" {
 		t.Errorf("B found %q, A's release", got)
 	}
 	appB := release(b)
-	if got := pr.Find("presenter", home, b); got != appB.CurrentExe() {
+	if got := pr.Find("present", home, b); got != appB.CurrentExe() {
 		t.Errorf("B found %q, want its own %q", got, appB.CurrentExe())
 	}
-	if appB.MayLink(home) || !appA.MayLink(home) {
-		t.Error("B may replace A's link, or A may not")
-	}
-	if pr.Release(b, "presenter", link) != "" || pr.Release(a, "presenter", link) != "0.20261024.0" {
+	if pr.Release(b, "present", link) != "" || pr.Release(a, "present", link) != "0.20261024.0" {
 		t.Error("Release judged the link by the wrong data folder")
 	}
 }
 
-// An AgentK installed while its command was agentk moves onto me_koder: its version gets the new
-// name, ~/.local/bin/me_koder links to it, the registry runs that, and the links of its old names
-// into this data folder go. An old name's link into another data folder's release stays.
+// An AgentK installed while its command was agentk moves onto me_kode, with no command on PATH: its
+// version gets the new name, the registry runs app/current/bin/me_kode, and the ~/.local/bin links
+// of its old names into this data folder go. An old name's link into another data folder's release
+// stays.
 func TestRenameMovesAnInstallOntoItsNewCommand(t *testing.T) {
 	const v = "0.20261030.0"
 	home, root, other := t.TempDir(), t.TempDir(), t.TempDir()
@@ -232,14 +230,14 @@ func TestRenameMovesAnInstallOntoItsNewCommand(t *testing.T) {
 	if err := r.Rename(root, home); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(bin, "me_koder")
-	if target, err := os.Readlink(link); err != nil || target != app.CurrentExe() {
-		t.Errorf("~/.local/bin/me_koder -> %q (%v)", target, err)
+	if _, err := os.Lstat(filepath.Join(bin, "me_kode")); !os.IsNotExist(err) {
+		t.Errorf("~/.local/bin/me_kode was made: %v", err)
 	}
-	if _, err := os.Stat(link); err != nil {
-		t.Errorf("~/.local/bin/me_koder doesn't run: %v", err)
+	if _, err := os.Stat(app.CurrentExe()); err != nil {
+		t.Errorf("app/current/bin/me_kode doesn't run: %v", err)
 	}
-	if again, _ := Load(root); again.Entries["agentk"].Command != link || !again.Entries["agentk"].InstalledByMeko {
+	if again, _ := Load(root); again.Entries["agentk"].Command != app.CurrentExe() ||
+		!again.Entries["agentk"].InstalledByMeko {
 		t.Errorf("registry %+v", again.Entries["agentk"])
 	}
 	if _, err := os.Lstat(filepath.Join(bin, "agentk")); !os.IsNotExist(err) {
@@ -252,8 +250,64 @@ func TestRenameMovesAnInstallOntoItsNewCommand(t *testing.T) {
 	if err := r.Rename(root, home); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := Load(root); again.Entries["agentk"].Command != link {
+	if again, _ := Load(root); again.Entries["agentk"].Command != app.CurrentExe() {
 		t.Errorf("registry after a second run %+v", again.Entries["agentk"])
+	}
+}
+
+// An AgentK installed while its command was me_koder moves onto me_kode the same way: its version,
+// whose bin/ has me_koder with agentk and agent-k-local linking to it, gets bin/me_kode, the
+// registry runs that, and ~/.local/bin/me_koder goes.
+func TestRenameMovesAMeKoderInstallOntoMeKode(t *testing.T) {
+	const v = "0.20261105.0"
+	home, root := t.TempDir(), t.TempDir()
+	app := Known["agentk"].App(root, "agentk")
+	bin := filepath.Join(app.Dir(v), "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	//nolint:gosec // G306: a test's program
+	if err := os.WriteFile(filepath.Join(bin, "me_koder"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"agentk", "agent-k-local"} {
+		if err := os.Symlink("me_koder", filepath.Join(bin, n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(app.Dir(v), "VERSION"), []byte(v+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(v, filepath.Join(app.Root, "current")); err != nil {
+		t.Fatal(err)
+	}
+	local := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(local, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(local, "me_koder")
+	if err := os.Symlink(filepath.Join(app.Root, "current", "bin", "me_koder"), old); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := Load(root)
+	r.Entries["agentk"] = Entry{Command: old, InstalledByMeko: true}
+	if err := r.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Rename(root, home); err != nil {
+		t.Fatal(err)
+	}
+	if target, err := os.Readlink(filepath.Join(bin, "me_kode")); err != nil || target != "me_koder" {
+		t.Errorf("bin/me_kode -> %q (%v)", target, err)
+	}
+	if _, err := os.Stat(app.CurrentExe()); err != nil {
+		t.Errorf("app/current/bin/me_kode doesn't run: %v", err)
+	}
+	if again, _ := Load(root); again.Entries["agentk"].Command != app.CurrentExe() {
+		t.Errorf("registry %+v", again.Entries["agentk"])
+	}
+	if _, err := os.Lstat(old); !os.IsNotExist(err) {
+		t.Errorf("~/.local/bin/me_koder is left: %v", err)
 	}
 }
 
@@ -420,7 +474,7 @@ func TestAutoUpdateReadsTheOldSwitch(t *testing.T) {
 	if !cat.AutoUpdate(root, "agentk", Entry{AutoUpdate: &on}) {
 		t.Error("the switch, once set, didn't count")
 	}
-	if !Known["presenter"].AutoUpdate(root, "presenter", Entry{}) {
-		t.Error("presenter off")
+	if !Known["present"].AutoUpdate(root, "present", Entry{}) {
+		t.Error("present off")
 	}
 }

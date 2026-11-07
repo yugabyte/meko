@@ -562,10 +562,11 @@ func makeMekoCLI(app update.App, log *slog.Logger) {
 	}
 }
 
-// renameExtensions moves this data folder's extensions installed under an older name of their
-// command onto the current one (extensions.Registry.Rename): AgentK's agentk becomes me_koder. Like
+// renameExtensions moves this data folder's release installs of extensions onto app/current's
+// program by its current name, with no command on PATH (extensions.Registry.Rename): AgentK's
+// ~/.local/bin/me_koder (or agentk) gives way to app/current/bin/me_kode, run as meko kode. Like
 // makeMekoCLI, serve runs it only once its release is past probation: a Meko rolled back after it
-// would have a registry naming links its catalog doesn't know, and old links it can't make again.
+// would have a registry naming a program its catalog doesn't know, and old links it can't make again.
 func renameExtensions(l paths.Layout, log *slog.Logger) {
 	home, err := os.UserHomeDir()
 	if err != nil {

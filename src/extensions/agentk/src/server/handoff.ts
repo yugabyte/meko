@@ -8,7 +8,7 @@ import { defaultDeps, heldLease, type InstanceDeps } from './instance.js';
 import { expandHome, type Paths } from './paths.js';
 
 /**
- * What `me_koder _handoff --json` prints for Meko (its internal/extensions Handoff): where the server
+ * What `me_kode _handoff --json` prints for Meko (its internal/extensions Handoff): where the server
  * listens, for Meko's web listener to serve at /ext/agentk/, and the web settings and login this
  * install had when it served browsers itself, which Meko takes over with its port. Meko asks at each
  * of its starts and fills in only what it doesn't have yet.

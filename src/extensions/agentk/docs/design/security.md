@@ -46,7 +46,7 @@ own copy.
   When Meko refuses a request (a 401, or a socket it refused), the page asks Meko's
   `/api/v1/auth/status`, and goes to Meko's sign-in only when it says remote access and not signed
   in, which only a Meko with a login says; otherwise it keeps retrying.
-- **The handoff.** At each of its starts Meko runs `me_koder _handoff --json` (`handoff.ts`), which
+- **The handoff.** At each of its starts Meko runs `me_kode _handoff --json` (`handoff.ts`), which
   says where the socket is and, for an install that served browsers itself (on port 7777, over
   HTTPS with its own login), its old `[server]` bind and port, its certificate (self-signed in
   `certs/`, or `[tls]`'s) and its login (`owner` in `state.db`). Meko takes the port, access and

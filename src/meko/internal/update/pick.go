@@ -60,7 +60,7 @@ func TarballName(version, goos, arch string) string {
 }
 
 // PackageTarball is a release's tarball of package name for a platform: Meko's, or an extension's
-// that Meko installs from its releases (presenter-<version>-<os>-<arch>.tar.gz).
+// that Meko installs from its releases (present-<version>-<os>-<arch>.tar.gz).
 func PackageTarball(name, version, goos, arch string) string {
 	return fmt.Sprintf("%s-%s-%s-%s.tar.gz", name, version, goos, arch)
 }

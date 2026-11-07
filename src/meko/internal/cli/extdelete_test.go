@@ -28,8 +28,8 @@ func TestExtensionDeleteKeepsTheData(t *testing.T) {
 	noRealExtensions(t)
 	app, data := withAgentKData(t, dir)
 	home, _ := os.UserHomeDir()
-	link := filepath.Join(home, ".local", "bin", "me_koder")
-	// The link to its old name that an install from before me_koder left goes too.
+	link := filepath.Join(home, ".local", "bin", "me_kode")
+	// The link to its old name that an install from before me_kode left goes too.
 	oldLink := filepath.Join(home, ".local", "bin", "agentk")
 	if err := os.Symlink(app.CurrentExe(), oldLink); err != nil {
 		t.Fatal(err)

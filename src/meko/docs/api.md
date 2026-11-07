@@ -349,8 +349,8 @@ datapack: Meko makes the default only on first start, and once it's gone `search
 file to its link and follows `knowledgebase_document_status` until it's indexed, a file already uploaded too
 (`--no-wait` returns once it's uploaded; a file that fails makes the command exit 1), and `meko-cli upload_status
 <key>`. A name two datapacks have asks for the id. `meko-cli export` works only on this computer's
-datapacks, linked or not ([cloud.md](cloud.md#meko-cli)). `meko ui [path]` opens the web listener's URL ([web.md](web.md)), at a path when given
-(`/ext/agentk/` for AgentK); the link carries no credential, and `--no-open` only prints it. While
+datapacks, linked or not ([cloud.md](cloud.md#meko-cli)). `meko ui` opens the web listener's URL ([web.md](web.md)) and prints it, or only prints it with
+no browser here (over SSH, or on Linux without a display); the link carries no credential. While
 the web UI is off it says so, and `meko ui start` turns it on; `meko ui stop` turns it off.
 `meko agent list`, `connect` and `disconnect` are in [Agents](#agents). `meko token --json` prints the MCP URL, the web
 listener's (`web_url`, where AgentK finds its own address), the token,
