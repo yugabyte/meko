@@ -145,7 +145,7 @@ the `agentk-v…` releases through it, and pruning never deletes the newest `v�
 prefix is a lane of its own that stops growing). Meko's
 releases are the repo's "latest", since its installer is the one-line install, so Kode's are
 published with `--latest=false`. Meko finds Kode's releases by their tags (its catalog lists
-both prefixes), and What's new compares two versions by their tags, trying each prefix
+all three prefixes), and What's new compares two versions by their tags, trying each prefix
 (`TAG_PREFIXES` in `updates.ts`), since pruning deletes releases but keeps their tags.
 
 **Updates are Meko's.** Meko checks GitHub for Kode's releases with its own (one list for Meko
@@ -227,8 +227,8 @@ since the release before it, and releases beyond the newest 5 are deleted, so on
 don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx`) shows every
 change between two versions instead: the server asks GitHub for the commits between their tags
 (`GET /api/update/notes`, `Updates.notes()` in `updates.ts`, through `gh` once `gh auth status`
-passes, else HTTPS: `repos/yugabyte/meko/compare/<from tag>...<to tag>`, each of either
-prefix) and lists the `feat`, `fix`, `perf` and `deps`
+passes, else HTTPS: `repos/yugabyte/meko/compare/<from tag>...<to tag>`, each tagged
+`kode-v…`, `agentk-v…` or `v…`, every pair of `TAG_PREFIXES` tried) and lists the `feat`, `fix`, `perf` and `deps`
 subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out the subjects that name only `meko` or `present`) (`src/server/releasenotes.ts`), with
 **Breaking changes** first (a `!` subject only there, not again under its type) and each line
 linked to its PR. GitHub returns at most 250 commits for a
