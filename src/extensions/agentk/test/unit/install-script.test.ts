@@ -367,30 +367,23 @@ describe('deps.sh: installing missing tools', () => {
   });
 
   it.each([
-    ['Claude Code', 'claude', `[ "$1 $2" = "auth status" ] && echo '{ "loggedIn": false }'`, 'claude auth login', ['claude auth login']],
+    ['Claude Code', 'claude', `[ "$1 $2" = "auth status" ] && echo '{ "loggedIn": false }'`, ['claude auth status --json', 'claude auth login']],
     // OpenCode with no provider signed in (and none's key in the environment).
-    ['OpenCode', 'opencode', `[ "$1 $2" = "auth list" ] && echo 'No authenticated integrations'`, 'opencode auth login', ['opencode auth list --standalone', 'opencode auth login --standalone']],
-  ])('offers to sign %s in, reading the terminal’s own device rather than /dev/tty', async (_, cmd, body, login, expected) => {
+    ['OpenCode', 'opencode', `[ "$1 $2" = "auth list" ] && echo 'No authenticated integrations'`, ['opencode auth list --standalone', 'opencode auth login --standalone']],
+    ['Kiro', 'kiro-cli', '[ "$1" = whoami ] && exit 1', ['kiro-cli whoami', 'kiro-cli login']],
+    ['gh', 'gh', '[ "$1 $2" = "auth status" ] && exit 1', ['gh auth status', 'gh auth login']],
+  ])('checks %s’s sign-in reading no terminal, and offers it on the terminal’s own device, from /dev/tty', async (_, cmd, body, [check, login]) => {
     have('git', 'curl', 'gh');
-    // The sign-in logs what its input is. (Bun, which Claude Code and OpenCode run on, stops on
-    // macOS when it's /dev/tty, whose name it keeps here, but not when it's the device itself.)
-    const input = `[ "$*" = "${expected.at(-1)!.slice(cmd.length + 1)}" ] && echo "input $(readlink /proc/self/fd/0 2>/dev/null || tty)" >> "${log}"`;
-    stub(bin, cmd, `echo "${cmd} $*" >> "${log}"; ${input}; ${body}; exit 0`);
-    const r = await runInTerminal('y', `Sign in now (${login})?`);
+    // Each call logs what its input is. The script's own input is /dev/tty, as Meko's first install
+    // hands it over. Bun, which Claude Code and OpenCode run on, stops on macOS when its input is
+    // /dev/tty (whose name it keeps here), even for the check, but not when it's the device itself.
+    stub(bin, cmd, `echo "${cmd} $* <$(readlink /proc/self/fd/0 2>/dev/null || tty)" >> "${log}"; ${body}; exit 0`);
+    const r = await runInTerminal('y', `Sign in now (${login.replace(' --standalone', '')})?`, [], '</dev/tty');
     expect(r.code).toBe(0);
-    expect(r.calls.slice(0, -1)).toEqual(expected);
-    expect(r.calls.at(-1)).toMatch(/^input \/dev\/(pts\/\d+|ttys\d+)$/);
-  });
-
-  it("checks Claude Code's sign-in away from the terminal, even when the script's input is /dev/tty", async () => {
-    have('git', 'curl', 'gh');
-    // Claude Code's status check with a terminal for input reopens it, and on macOS Bun stops when
-    // that's /dev/tty, as it is in Meko's first install: the signed-in Claude was asked to sign in.
-    stub(bin, 'claude', `echo "claude $*" >> "${log}"; [ "$1 $2" = "auth status" ] && { echo "status input $(readlink /proc/self/fd/0 2>/dev/null || tty)" >> "${log}"; echo '{ "loggedIn": true }'; }; exit 0`);
-    const r = await runInTerminal('n', 'Sign in now (claude auth login)?', [], '</dev/tty');
-    expect(r.code).toBe(0);
-    expect(r.out).not.toContain('Sign in now (claude auth login)?');
-    expect(r.calls.find((c) => c.startsWith('status input'))).toMatch(/^status input (\/dev\/null|not a tty)$/);
+    const mine = r.calls.filter((c) => c.startsWith(`${cmd} `));
+    expect(mine.map((c) => c.replace(/ <.*$/, ''))).toEqual([check, login]);
+    expect(mine[0]).toMatch(/ <(\/dev\/null|not a tty)$/);
+    expect(mine[1]).toMatch(/ <\/dev\/(pts\/\d+|ttys\d+)$/);
   });
 });
 

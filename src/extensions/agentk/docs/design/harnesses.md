@@ -176,8 +176,8 @@ environment, `kiro-cli whoami`) and offers `claude auth login`, `opencode auth l
 `kiro-cli login`, each reading the device `/dev/tty` stands for (the script's controlling terminal as
 `ps -o tty=` names it, such as `/dev/ttys003`, where its questions are asked), not `/dev/tty` itself: on macOS Bun, which Claude Code and OpenCode run on, stops with "EINVAL: invalid
 argument, kqueue" when its input is `/dev/tty`, which kqueue can't watch, and Meko's first install
-hands `meko kode install` the terminal as `/dev/tty`. The checks themselves read no terminal
-(`claude auth status </dev/null`): with a terminal for input, Claude Code's status check reopens it
+hands `meko kode install` the terminal as `/dev/tty`. The checks themselves, `gh auth status` too,
+read no terminal (`</dev/null`): with a terminal for input, Claude Code's status check reopens it
 to read keys, so with `/dev/tty` it stopped the same way on macOS, and a signed-in Claude Code was
 asked to sign in on every first install. `meko kode install` then reads each
 agent's version (`settleAgents`): with none it stops, saying what to install (and, for OpenCode,
