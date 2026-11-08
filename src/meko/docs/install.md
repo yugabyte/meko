@@ -205,6 +205,35 @@ url` (`MEKO_CALL_HOME_URL`), unless `config.toml`, `MEKO_CALL_HOME`, `YB_DISABLE
 UI's setting (read from the database) turned them off. It waits at most 3 s and prints nothing.
 `install.sh`'s own failures (the platform, the download, the disk) aren't sent.
 
+### First commands and uninstalls to call home
+
+A first install (`MEKO_INSTALL_FIRST=1` from `install.sh`) starts a list of the first 15 commands
+run after it, once it's done (after the extension picker, so what the picked extension's install
+runs isn't on it), in `first-commands.jsonl` in the data folder (`internal/callhome/firstcommands.go`),
+so the usage stats can say how people get going and where they stop. Each `meko` and `meko-cli`
+run appends one line as it ends, while the list has room: the command's name in the help
+(`extension install`, `search`; `help`; `unknown` for a name Meko doesn't know, since what was
+typed could be anything), the names of the flags it was given, whether its output went to a
+terminal (`tty`: a person's command, or a program's such as an extension's `meko token --json` or
+an agent's `meko-cli search`), its exit code, how long it ran, the whole minutes since the install
+(`mins_since_install`) and the version. Never an argument or a flag's value; `meko kode …` and
+`meko present …` are `kode` and `present`, without what follows. The install itself isn't on the
+list, and neither are `serve`, `_launch` or a meko that meko runs with `MEKO_PARENT=1` (`meko
+update`'s `extension update --all`, and a staged release's `version --json` before an update
+switches to it). An install that didn't start a list (one made by an older Meko,
+or an upgrade) has no `first-commands.jsonl` and records nothing; a list kept with the data folder
+is kept by a new install too. Recording is local
+and ignores the usage stats' switches; writing it never changes a command's output or exit code.
+
+The heartbeat carries the list as `firstCommands` (report schema 5) until a report with all 15 is
+taken. Since the heartbeat goes only while a server runs, `meko uninstall` and `meko destroy` also
+send an event of their own once they've worked (`internal/callhome/uninstall.go`): `uninstall` or
+`destroy` in the heartbeat's envelope, with `--purge` or `--with-extensions`, the version, platform,
+architecture, service manager, the day of the first heartbeat and the first commands so far,
+themselves last while there's room. They read what they send before removing anything and go
+where a failed install's report goes, under the same switches; a declined one, or `destroy` with no
+data of Meko's, sends nothing. Each waits at most 3 s and prints nothing.
+
 ## Release builds
 
 `src/meko/scripts/package-release.sh <version> <arch> <node-dir> <out-dir>`, run on the platform

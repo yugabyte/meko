@@ -36,6 +36,7 @@ func runUpdate(l paths.Layout, check bool, stdout, stderr io.Writer) int {
 	}
 	cmd := exec.Command(exe, args...) //nolint:gosec // G204: the meko release just installed
 	cmd.Stdout, cmd.Stderr = stdout, stderr
+	cmd.Env = append(os.Environ(), envParent+"=1") // not one of the first commands: meko ran it
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {

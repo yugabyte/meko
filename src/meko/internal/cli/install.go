@@ -211,6 +211,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			{"meko start", "start Meko"},
 			{"meko status", "check on Meko at any time"},
 		})
+		startFirstCommands(l, run)
 		return exitOK
 	}
 	if other := m.DataDir(); m.Installed() && other != "" && other != l.Root {
@@ -284,7 +285,17 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 		o.pick = pickExtension(l, run.ask, stdout, stderr)
 	}
 	printRunning(l, o, stdout)
+	startFirstCommands(l, run)
 	return exitOK
+}
+
+// startFirstCommands begins the list of the first commands after a first install, for the usage
+// stats, once the install is done: what it ran itself (the picker's extension install, and the
+// meko token --json that extension runs) isn't on it.
+func startFirstCommands(l paths.Layout, run installRunInfo) {
+	if run.first {
+		_ = callhome.StartFirstCommands(l.FirstCommands, version.Version, time.Now())
+	}
 }
 
 // setWebAccess writes how browsers reach Meko (its access) to web.toml (config.AddWeb) when neither it nor

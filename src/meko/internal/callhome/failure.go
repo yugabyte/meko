@@ -12,7 +12,8 @@ import (
 // FailureCommand is the envelope's command for a failed meko install.
 const FailureCommand = "install_failure"
 
-// FailureTimeout is the longest a failed install waits to send its report.
+// FailureTimeout is the longest a failed install waits to send its report, and an uninstall or
+// destroy its event.
 const FailureTimeout = 3 * time.Second
 
 // The steps a failed meko install reports (Failure.Step).
@@ -62,8 +63,14 @@ type FailureEnvelope struct {
 // SendFailure posts a failed install's report to url, giving up after FailureTimeout.
 func SendFailure(ctx context.Context, client *http.Client, url, installID string, f Failure, now time.Time) error {
 	f.Schema = 1
-	body, err := json.Marshal(FailureEnvelope{CallhomeType: "meko", Command: FailureCommand,
+	return sendEvent(ctx, client, url, f.Version, FailureEnvelope{CallhomeType: "meko", Command: FailureCommand,
 		Timestamp: Timestamp(now), InstallID: installID, Version: f.Version, Payload: f})
+}
+
+// sendEvent posts one of the CLI's own reports (a failed install's, an uninstall's) to url, giving
+// up after FailureTimeout.
+func sendEvent(ctx context.Context, client *http.Client, url, version string, envelope any) error {
+	body, err := json.Marshal(envelope)
 	if err != nil {
 		return err
 	}
@@ -74,7 +81,7 @@ func SendFailure(ctx context.Context, client *http.Client, url, installID string
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "meko/"+f.Version)
+	req.Header.Set("User-Agent", "meko/"+version)
 	res, err := client.Do(req)
 	if err != nil {
 		return err

@@ -170,7 +170,7 @@ func TestSendsCountsOnly(t *testing.T) {
 		t.Errorf("envelope: %+v", e)
 	}
 	p := e.Payload
-	if p.Schema != 4 || p.Install.FirstDay != "2026-11-09" || p.Install.Commit != "abc1234" ||
+	if p.Schema != 5 || p.FirstCommands != nil || p.Install.FirstDay != "2026-11-09" || p.Install.Commit != "abc1234" ||
 		!p.Install.Extensions["kode"] {
 		t.Errorf("install: %+v", p.Install)
 	}

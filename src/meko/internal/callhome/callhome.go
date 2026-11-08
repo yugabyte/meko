@@ -6,7 +6,8 @@
 //
 // Only counts, enums and versions are sent, and the install's random id: never a datapack, memory,
 // conversation or file's name or content, a query, a path, a host name or a token. An agent_id is
-// cut to its client (claude_code:my-repo is claude_code) and matched against a fixed list.
+// cut to its client (claude_code:my-repo is claude_code) and matched against a fixed list, and a
+// command run after install is its name in the CLI's list and its flags' names, never what followed.
 package callhome
 
 import (
@@ -60,7 +61,11 @@ const (
 	KeyEnabled   = "call_home_enabled"
 	keyLastSent  = "call_home_last_sent"
 	keyFirstSent = "call_home_first_sent"
-	keyFirstDay  = "call_home_first_day"
+	// KeyFirstDay is the UTC day of the install's first report.
+	KeyFirstDay = "call_home_first_day"
+	// keyFirstCommandsSent is "true" once a report that carried all FirstCommandsMax first commands
+	// was taken: later ones leave them out.
+	keyFirstCommandsSent = "call_home_first_commands_sent"
 )
 
 // OffByWebUI is State.By when the web UI's setting turned usage stats off.
@@ -139,12 +144,34 @@ type ContextGaps struct {
 	AgentTaught    int `json:"agentTaught"`
 }
 
+// Command is one of the first commands run after a first install (FirstCommandsMax of them, by
+// people or by programs), recorded by the CLI as it ends. Never an argument or a flag's value.
+type Command struct {
+	N int `json:"n"` // its place in the list, from 1
+	// Cmd is its name in meko's or meko-cli's help (meko extension install is "extension install"),
+	// help, or UnknownCommand.
+	Cmd string `json:"cmd"`
+	// Flags are the names of the flags it was given, sorted (help for -h or --help).
+	Flags []string `json:"flags"`
+	// TTY is whether its output went to a terminal: a person's, rather than a program's such as an
+	// extension's meko token --json or an agent's meko-cli search.
+	TTY  bool  `json:"tty"`
+	Exit int   `json:"exit"` // its exit code
+	Ms   int64 `json:"ms"`   // how long it ran
+	// MinsSinceInstall is the whole minutes from the first install to its start.
+	MinsSinceInstall int64  `json:"mins_since_install"`
+	Version          string `json:"version"` // the meko that ran it
+}
+
 // Report is the payload.
 type Report struct {
 	Schema  int     `json:"schema"`
 	Install Install `json:"install"`
 	Totals  Totals  `json:"totals"`
 	Days    []Day   `json:"days"` // oldest first
+	// FirstCommands are the first commands after a first install, until a report with all of them
+	// was taken. Schema 5 added them.
+	FirstCommands []Command `json:"firstCommands,omitempty"`
 }
 
 // Envelope is the body: yugabyted's call home fields, with the report as the payload.
@@ -190,20 +217,25 @@ type Options struct {
 	// Facts is what the report says about the install, but its first day.
 	Facts func(context.Context) Install
 	// Tools are the MCP tools reported by name; the rest are "other".
-	Tools  []string
-	Log    *slog.Logger
-	Client *http.Client
-	Now    func() time.Time
-	Rand   func() float64
+	Tools []string
+	// FirstCommands is the first commands' file (paths.Layout.FirstCommands), and Commands the
+	// command names reported as they are; the rest are UnknownCommand.
+	FirstCommands string
+	Commands      []string
+	Log           *slog.Logger
+	Client        *http.Client
+	Now           func() time.Time
+	Rand          func() float64
 	// FirstCheck, when set, replaces Run's random first delay (for tests).
 	FirstCheck time.Duration
 }
 
 // Sender sends the report while usage stats are on and there's somewhere to send it.
 type Sender struct {
-	o       Options
-	tools   map[string]bool
-	failing bool // the last send failed: failures are logged once until a send works again
+	o        Options
+	tools    map[string]bool
+	commands map[string]bool
+	failing  bool // the last send failed: failures are logged once until a send works again
 }
 
 // New makes a Sender.
@@ -227,7 +259,11 @@ func New(o Options) *Sender {
 	for _, t := range o.Tools {
 		tools[t] = true
 	}
-	return &Sender{o: o, tools: tools}
+	commands := map[string]bool{}
+	for _, c := range o.Commands {
+		commands[c] = true
+	}
+	return &Sender{o: o, tools: tools, commands: commands}
 }
 
 // Endpoint is where reports go: [call_home] url, else DefaultURL from a release install; "" when
@@ -308,13 +344,13 @@ func (s *Sender) firstDay(ctx context.Context, last, now time.Time) bool {
 // envelope is what the next send carries.
 func (s *Sender) envelope(ctx context.Context) (Envelope, error) {
 	now := s.o.Now()
-	firstDay, ok, err := s.o.Store.Setting(ctx, keyFirstDay)
+	firstDay, ok, err := s.o.Store.Setting(ctx, KeyFirstDay)
 	if err != nil {
 		return Envelope{}, err
 	}
 	if !ok {
 		firstDay = now.UTC().Format(time.DateOnly)
-		if err = s.o.Store.SetSetting(ctx, keyFirstDay, firstDay); err != nil {
+		if err = s.o.Store.SetSetting(ctx, KeyFirstDay, firstDay); err != nil {
 			return Envelope{}, err
 		}
 	}
@@ -383,10 +419,27 @@ func (s *Sender) report(ctx context.Context, now time.Time, days int) (Report, e
 	if install.Extensions == nil {
 		install.Extensions = map[string]bool{}
 	}
-	return Report{Schema: 4, Install: install, Totals: Totals{Datapacks: t.Datapacks, Memories: t.Memories,
-		Learnings: t.Learnings, PromotedMemories: t.PromotedMemories, Artifacts: t.Artifacts,
-		Conversations: t.Conversations, KBDocuments: t.KBDocuments, KBBytes: t.KBBytes, DBBytes: t.DBBytes},
+	return Report{Schema: 5, Install: install, FirstCommands: s.firstCommands(ctx),
+		Totals: Totals{Datapacks: t.Datapacks, Memories: t.Memories,
+			Learnings: t.Learnings, PromotedMemories: t.PromotedMemories, Artifacts: t.Artifacts,
+			Conversations: t.Conversations, KBDocuments: t.KBDocuments, KBBytes: t.KBBytes, DBBytes: t.DBBytes},
 		Days: out}, nil
+}
+
+// firstCommands are the first commands to report: none once a report took all of them, or when
+// there's no list or it can't be read (they're an extra, as Context Gaps' counts are).
+func (s *Sender) firstCommands(ctx context.Context) []Command {
+	if s.o.FirstCommands == "" {
+		return nil
+	}
+	if v, _, err := s.o.Store.Setting(ctx, keyFirstCommandsSent); err != nil || v == "true" {
+		return nil
+	}
+	list, err := ReadFirstCommands(s.o.FirstCommands, func(c string) bool { return s.commands[c] })
+	if err != nil {
+		return nil
+	}
+	return list.Commands
 }
 
 // Tick sends a report if one is due. It never fails; true when one was sent.
@@ -440,7 +493,14 @@ func (s *Sender) send(ctx context.Context, url string, now time.Time, first bool
 			return err
 		}
 	}
-	return s.setTime(rec, keyLastSent, now)
+	if err = s.setTime(rec, keyLastSent, now); err != nil {
+		return err
+	}
+	// The first commands are an extra: failing to note that all of them went only sends them again.
+	if len(e.Payload.FirstCommands) >= FirstCommandsMax {
+		_ = s.o.Store.SetSetting(rec, keyFirstCommandsSent, "true")
+	}
+	return nil
 }
 
 // post sends the envelope, giving up after sendTimeout.
