@@ -2940,5 +2940,5 @@ export type TermServerMessage =
 //        updates; the page checks, updates and sets Update automatically through Meko's own routes, on its origin:
 //        GET /api/v1/extensions, POST /api/v1/extensions/kode/check and /update, PATCH /api/v1/extensions/kode)
 // GET    /api/update/notes?from=&to=           → ReleaseNotes   (What's new: the feat, fix, perf and deps commits between
-//        the two versions' tags (agentk-v… or v…), from GitHub; 400 unless both are versions and from is older,
+//        the two versions' tags (kode-v…, agentk-v… or v…), from GitHub; 400 unless both are versions and from is older,
 //        502 when GitHub can't compare them)
