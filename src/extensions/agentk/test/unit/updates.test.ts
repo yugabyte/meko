@@ -15,6 +15,7 @@ import {
   pruneSnapshots,
   snapshotBeforeMigrating,
   switchedAway,
+  TAG_PREFIXES,
   Updates,
   type CompareSource,
 } from '../../src/server/updates.js';
@@ -66,15 +67,22 @@ describe('Updates', () => {
     expect(make('0.2.0').u.status()).toEqual({ current: '0.1.0', justUpdatedFrom: null, lastUpdatedFrom: null });
   });
 
+  it("tries every prefix Kode's releases have been tagged with, as the release scripts know them", () => {
+    // What's new 404s on every release whose tag prefix is missing here (kode-v… once was).
+    const script = resolve(__dirname, '../../../../../scripts/release/product.sh');
+    const prefixes = execFileSync('sh', ['-c', '. "$1" --product agentk && printf %s "$tag_prefixes"', 'sh', script], { encoding: 'utf8' });
+    expect(TAG_PREFIXES.join(' ')).toBe(prefixes);
+  });
+
   it("reads What's new from the commits between two tags, newest first, asking GitHub once per range", async () => {
-    // Across the switch from v… to agentk-v… tags: GitHub knows only v0.0.9 and agentk-v0.1.0.
+    // Across the switch from agentk-v… to kode-v… tags: GitHub knows only agentk-v0.0.9 and kode-v0.1.0.
     let down = true;
     const notFound = () => Object.assign(new Error('Command failed: gh api'), { stderr: 'gh: Not Found (HTTP 404)\n' });
     const compare = vi.fn(async (_repo: string, base: string, head: string) => {
-      if (down || base !== 'v0.0.9' || head !== 'agentk-v0.1.0') throw notFound();
+      if (down || base !== 'agentk-v0.0.9' || head !== 'kode-v0.1.0') throw notFound();
       return {
         totalCommits: 300,
-        url: 'https://github.com/o/r/compare/v0.0.9...agentk-v0.1.0',
+        url: 'https://github.com/o/r/compare/agentk-v0.0.9...kode-v0.1.0',
         commits: [
           { sha: '1111111aaa', message: 'fix: the older fix', url: 'c1' },
           { sha: '2222222bbb', message: 'docs: not a change', url: 'c2' },
@@ -88,8 +96,8 @@ describe('Updates', () => {
     down = false;
     const n = await u.notes('0.0.9', '0.1.0');
     expect(await u.notes('0.0.9', '0.1.0')).toBe(n);
-    expect(compare).toHaveBeenLastCalledWith('yugabyte/meko', 'v0.0.9', 'agentk-v0.1.0');
-    expect(n).toMatchObject({ from: '0.0.9', to: '0.1.0', commits: 3, totalCommits: 300, compareUrl: 'https://github.com/o/r/compare/v0.0.9...agentk-v0.1.0' });
+    expect(compare).toHaveBeenLastCalledWith('yugabyte/meko', 'agentk-v0.0.9', 'kode-v0.1.0');
+    expect(n).toMatchObject({ from: '0.0.9', to: '0.1.0', commits: 3, totalCommits: 300, compareUrl: 'https://github.com/o/r/compare/agentk-v0.0.9...kode-v0.1.0' });
     expect(n.sections).toEqual([{ title: 'Fixes', items: [expect.objectContaining({ summary: 'the newer fix' }), expect.objectContaining({ summary: 'the older fix' })] }]);
   });
 

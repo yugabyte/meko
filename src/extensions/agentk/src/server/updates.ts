@@ -72,7 +72,7 @@ export function compareSemver(a: string, b: string): number {
   return 0;
 }
 
-/** A version as its tag names it after the prefix (`agentk-v`, `v`), nothing around it. */
+/** A version as its tag names it after the prefix (`kode-v`, `agentk-v`, `v`), nothing around it. */
 const BARE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /** Whether What's new can show the changes from `from` to `to`: both bare versions, `from` the older. */
@@ -81,10 +81,11 @@ export function notesRange(from: string, to: string): boolean {
 }
 
 /**
- * The prefixes of Kode's release tags, newest scheme first: `agentk-v<version>`, and `v<version>`
- * before releases were tagged by product (scripts/release/product.sh).
+ * The prefixes of Kode's release tags, newest scheme first, as `tag_prefixes` in
+ * scripts/release/product.sh: `kode-v<version>`, `agentk-v<version>` before Meko called it Kode,
+ * and `v<version>` before releases were tagged by product.
  */
-export const TAG_PREFIXES = ['agentk-v', 'v'] as const;
+export const TAG_PREFIXES = ['kode-v', 'agentk-v', 'v'] as const;
 
 // ---------------------------------------------------------------------------
 // Comparing two tags on GitHub (What's new)
@@ -289,7 +290,7 @@ export class Updates {
     const src = this.deps.source ?? (await defaultCompareSource());
     let c: Comparison | null = null;
     let last: unknown;
-    // Each version's tag is agentk-v<version>, or v<version> from before: try them in that order.
+    // Each version's tag has one of TAG_PREFIXES, newest scheme first: try them in that order.
     outer: for (const a of TAG_PREFIXES) {
       for (const b of TAG_PREFIXES) {
         try {
