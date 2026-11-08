@@ -40,7 +40,7 @@ func TestEveryCommandHasHelp(t *testing.T) {
 				continue // meko kode --help is Kode's own help: TestExtensionCommandRunsItsProgram
 			}
 			var out, errb bytes.Buffer
-			code := runProg(prog, append(strings.Fields(c.name), "--help"), &out, &errb)
+			code := runProg(prog, append(strings.Fields(c.name), "--help"), &out, &errb, &tracked{})
 			if code != exitOK || !strings.Contains(out.String(), "Usage: "+c.usage) ||
 				!strings.Contains(out.String(), c.examples[0].cmd) || errb.Len() != 0 {
 				t.Errorf("%s %s --help: exit %d, output %q, errors %q", prog, c.name, code, out.String(), errb.String())
@@ -344,7 +344,7 @@ func TestMekoAloneSaysWhereToStart(t *testing.T) {
 		t.Errorf("set up, stopped:\n%s", out.String())
 	}
 	out.Reset()
-	if runProg(progMekoCLI, nil, &out, &out); strings.Contains(out.String(), "New here?") {
+	if runProg(progMekoCLI, nil, &out, &out, &tracked{}); strings.Contains(out.String(), "New here?") {
 		t.Errorf("meko-cli's help says where Meko starts:\n%s", out.String())
 	}
 }

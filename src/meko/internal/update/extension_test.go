@@ -110,6 +110,12 @@ func TestCheckBinaryAndChecks(t *testing.T) {
 	if err := CheckBinary(exe, "0.20261022.0"); err == nil {
 		t.Error("another plain version passed")
 	}
+	// Run with EnvParent, so a staged meko doesn't count its version --json among the first commands.
+	t.Setenv(EnvParent, "")
+	script(`[ "$` + EnvParent + `" = 1 ] && echo '{"version":"0.20261022.0"}'` + "\n")
+	if err := CheckBinary(exe, "0.20261022.0"); err != nil {
+		t.Errorf("run without %s: %v", EnvParent, err)
+	}
 
 	const v = "0.20261024.0"
 	f := filepath.Join(t.TempDir(), "x.tar.gz")

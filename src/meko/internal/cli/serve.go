@@ -286,7 +286,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	// Usage stats to YugabyteDB's call home service: from release installs, or to [call_home] url.
 	usage := callhome.New(callhome.Options{Store: st, Config: cfg.CallHome, Release: isRelease,
-		Facts: installFacts(l, cfg, svc), Tools: mcp.ToolNames(), Log: log, FirstCheck: testCallHomeFirstCheck})
+		Facts: installFacts(l, cfg, svc), Tools: mcp.ToolNames(), FirstCommands: l.FirstCommands,
+		Commands: commandNames(), Log: log, FirstCheck: testCallHomeFirstCheck})
 	// Embeds turns for conversation search and knowledge-base chunks as they arrive, and any the
 	// context engine missed while down; indexes knowledge files; keeps the call log to its retention;
 	// and sends the usage stats.

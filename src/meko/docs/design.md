@@ -132,6 +132,8 @@ of input means no; a no exits 1), or doesn't ask with `--force`.
   secrets/                   the file secret store (install.md)
   update.json                the last update check
   extensions.json            the extensions meko start and stop run (install.md)
+  first-commands.jsonl       0600; the first commands after a first install, for the usage stats
+                             (install.md); only on an install that began with it
   extensions/<name>/         each extension's own data: extensions/kode is Kode's home, which
                              follows wherever this folder is; destroy keeps it unless told otherwise
 ```

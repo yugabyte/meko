@@ -54,6 +54,9 @@ type Layout struct {
 	Extensions string
 	// Certs holds the self-signed certificate browsers get with remote access (internal/tlscert).
 	Certs string
+	// FirstCommands is the first commands run after a first install, for the usage stats
+	// (internal/callhome, firstcommands.go): only on an install that began with it.
+	FirstCommands string
 }
 
 // New returns the layout of the data folder at root (an absolute path).
@@ -84,6 +87,7 @@ func New(root string) Layout {
 		KnowledgeFiles: filepath.Join(root, "knowledgebase-files"),
 		Extensions:     filepath.Join(root, "extensions"),
 		Certs:          filepath.Join(root, "certs"),
+		FirstCommands:  filepath.Join(root, "first-commands.jsonl"),
 	}
 }
 

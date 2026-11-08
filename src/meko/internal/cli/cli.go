@@ -17,7 +17,9 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
@@ -52,17 +54,23 @@ type cmdFlags struct {
 }
 
 // Main runs the program argv0 names (meko-cli, or else meko) with args and returns the exit code.
-// Run by meko-cli's old name, it runs nothing and names the meko-cli command instead.
+// Run by meko-cli's old name, it runs nothing and names the meko-cli command instead. Once the
+// command ends, it's recorded among the first commands after a first install (tracked.finish).
 func Main(argv0 string, args []string, stdout, stderr io.Writer) int {
+	prog := progMeko
 	switch filepath.Base(argv0) {
 	case progMekoCLI:
-		return RunMekoCLI(args, stdout, stderr)
+		prog = progMekoCLI
 	case progMekosh:
 		fmt.Fprintf(stderr, "%s is %s now: %s\n", progMekosh, progMekoCLI,
 			shellQuote(append([]string{progMekoCLI}, mekoshArgs(args)...)))
 		return exitUsage
 	}
-	return Run(args, stdout, stderr)
+	tr := &tracked{}
+	begun := time.Now()
+	code := runProg(prog, args, stdout, stderr, tr)
+	tr.finish(code, begun, stdout)
+	return code
 }
 
 // mekoshArgs are a mekosh command line's args as meko-cli takes them. mekosh took --data-dir before
@@ -92,17 +100,18 @@ flags:
 
 // RunMekoCLI runs meko-cli's command in args (without the program name) and returns the exit code.
 func RunMekoCLI(args []string, stdout, stderr io.Writer) int {
-	return runProg(progMekoCLI, args, stdout, stderr)
+	return runProg(progMekoCLI, args, stdout, stderr, &tracked{})
 }
 
 // Run runs meko's command in args (without the program name) and returns the exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
-	return runProg(progMeko, args, stdout, stderr)
+	return runProg(progMeko, args, stdout, stderr, &tracked{})
 }
 
-// runProg runs prog's command in args.
-func runProg(prog string, args []string, stdout, stderr io.Writer) int {
+// runProg runs prog's command in args, saying in tr which one it was.
+func runProg(prog string, args []string, stdout, stderr io.Writer, tr *tracked) int {
 	if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help")) {
+		tr.cmd = "help"
 		printUsage(stdout, prog, true)
 		return exitOK
 	}
@@ -111,18 +120,21 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		if g := rest[0]; prog == progMeko && isGroup(g) {
 			if len(rest) == 1 {
+				tr.cmd, tr.flags = g, []string{"help"}
 				printGroupHelp(stdout, prog, g)
 				return exitOK
 			}
 			if _, ok := lookup(prog, g+" "+rest[1]); !ok {
+				tr.cmd = callhome.UnknownCommand
 				return unknownSubcommand(prog, g, rest[1], stderr)
 			}
-			return runProg(prog, []string{g, rest[1], "--help"}, stdout, stderr)
+			return runProg(prog, []string{g, rest[1], "--help"}, stdout, stderr, tr)
 		}
 		if _, ok := lookup(prog, rest[0]); !ok {
+			tr.cmd = callhome.UnknownCommand
 			return unknownCommand(prog, rest[0], nil, stderr)
 		}
-		return runProg(prog, []string{rest[0], "--help"}, stdout, stderr)
+		return runProg(prog, []string{rest[0], "--help"}, stdout, stderr, tr)
 	case "--version":
 		if prog == progMeko {
 			cmd = "version"
@@ -130,23 +142,28 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	}
 	// What an extension's launcher runs; not in the help, not for people.
 	if cmd == "_launch" && prog == progMeko {
+		tr.skip = true
 		return runLaunch(rest, stderr)
 	}
 	// meko kode and meko present run an extension's own commands: all that follows is its.
 	if name, ok := extensionOfVerb(cmd); ok && prog == progMeko {
+		tr.cmd = cmd
 		return runExtensionCommand(name, rest, stdout, stderr)
 	}
 	// meko extension <sub> is the command "extension <sub>", and meko agent <sub> "agent <sub>";
 	// alone, each lists its subcommands.
 	if isGroup(cmd) && prog == progMeko {
+		tr.cmd = cmd
 		if len(rest) == 0 || rest[0] == "-h" || rest[0] == "--help" || rest[0] == "help" {
 			printGroupHelp(stdout, prog, cmd)
 			if len(rest) == 0 {
 				return exitUsage
 			}
+			tr.flags = []string{"help"}
 			return exitOK
 		}
 		if _, ok := lookup(prog, cmd+" "+rest[0]); !ok {
+			tr.cmd = callhome.UnknownCommand
 			return unknownSubcommand(prog, cmd, rest[0], stderr)
 		}
 		cmd, rest = cmd+" "+rest[0], rest[1:]
@@ -157,8 +174,10 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	}
 	info, ok := lookup(prog, cmd)
 	if !ok || cmd == args[0] && strings.Contains(cmd, " ") { // a subcommand is two words
+		tr.cmd = callhome.UnknownCommand
 		return unknownCommand(prog, cmd, rest, stderr)
 	}
+	tr.cmd, tr.skip = cmd, cmd == "serve"
 	if cmd == "memory-extractor" {
 		return runMemoryExtractor(rest, stdout, stderr)
 	}
@@ -257,9 +276,15 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		// log file.
 		fs.BoolVar(&detached, "detached", false, "log only to the log file")
 	}
-	// parse parses flags, and says how a bad one went: -h prints the command's help (exit 0).
+	// parse parses flags, and says how a bad one went: -h prints the command's help (exit 0). The
+	// flags' names go in tr, never their values.
 	parse := func(args []string) (int, bool) {
 		err := fs.Parse(args)
+		tr.flags = nil
+		fs.Visit(func(fl *flag.Flag) { tr.flags = append(tr.flags, fl.Name) })
+		if errors.Is(err, flag.ErrHelp) {
+			tr.flags = append(tr.flags, "help")
+		}
 		switch {
 		case errors.Is(err, flag.ErrHelp):
 			printCommandHelp(stdout, prog, info, fs)
@@ -326,7 +351,18 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
+	tr.root = root
 	l := paths.New(root)
+	// uninstall and destroy say so to call home once they've worked: what they say is read now,
+	// before they remove the data folder or the service.
+	switch cmd {
+	case "uninstall":
+		tr.leaving = prepareLeaving(l, callhome.UninstallCommand, callhome.Uninstall{Purge: c.purge})
+	case "destroy":
+		if paths.LooksLikeDataDir(l.Root) {
+			tr.leaving = prepareLeaving(l, callhome.DestroyCommand, callhome.Uninstall{WithExtensions: c.withExtensions})
+		}
+	}
 	switch cmd {
 	case "stop":
 		return runStop(l, c.keepExtensions, stdout, stderr)
@@ -354,7 +390,12 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	case "destroy":
 		return runDestroy(l, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdin, stdout, stderr)
 	case "install":
-		return runInstall(l, c.noService, c.access, c.noUI, stdout, stderr)
+		_, before := os.Stat(l.FirstCommands)
+		code := runInstall(l, c.noService, c.access, c.noUI, stdout, stderr)
+		if _, after := os.Stat(l.FirstCommands); before != nil && after == nil {
+			tr.started = true // a first install: the list starts after it
+		}
+		return code
 	case "uninstall":
 		return runUninstall(l, c.purge, destroyOptions{force: c.force}, stdout, stderr)
 	case "extension list":

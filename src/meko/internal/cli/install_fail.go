@@ -87,32 +87,46 @@ func knownFailure(kind string) bool {
 }
 
 // sendInstallFailure sends a failed install's step and error class to call home, where the usage
-// stats would go: from a release install or to [call_home] url, unless config.toml, the
-// environment or the web UI's setting (read from the database, which no server may be running
-// to answer for) turned them off, or the database is there but can't be read. It waits at most
-// callhome.FailureTimeout and says nothing.
+// stats would go (callHomeTarget). It waits at most callhome.FailureTimeout and says nothing.
 var sendInstallFailure = func(l paths.Layout, release bool, f callhome.Failure) {
+	if to, ok := callHomeTarget(l, release); ok {
+		_ = callhome.SendFailure(context.Background(), http.DefaultClient, to.url, to.installID, f, time.Now())
+	}
+}
+
+// callHomeTo is where a report the CLI sends itself goes, the install's id, and the day of its
+// first heartbeat ("" before one).
+type callHomeTo struct {
+	url, installID, firstDay string
+}
+
+// callHomeTarget is where a report the CLI sends itself (a failed install's, an uninstall's) goes:
+// where the usage stats would, from a release install or to [call_home] url. ok is false when
+// there's neither, or config.toml, the environment or the web UI's setting (read from the
+// database, which no server may be running to answer for) turned usage stats off, or the database
+// is there but can't be read. With no database yet, the id is a new one for this report alone.
+func callHomeTarget(l paths.Layout, release bool) (to callHomeTo, ok bool) {
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil || !cfg.CallHome.Enabled {
-		return
+		return to, false
 	}
-	url := cfg.CallHome.URL
-	if url == "" && release {
-		url = callhome.DefaultURL
+	to.url = cfg.CallHome.URL
+	if to.url == "" && release {
+		to.url = callhome.DefaultURL
 	}
-	if url == "" {
-		return
+	if to.url == "" {
+		return to, false
 	}
-	ctx := context.Background()
-	_, settings, err := store.Peek(ctx, l.DB, store.KeyInstallID, callhome.KeyEnabled)
+	_, settings, err := store.Peek(context.Background(), l.DB, store.KeyInstallID, callhome.KeyEnabled,
+		callhome.KeyFirstDay)
 	if err != nil || settings[callhome.KeyEnabled] == "false" {
-		return // a database that can't be read can't say the web UI didn't turn usage stats off
+		return to, false // a database that can't be read can't say the web UI didn't turn usage stats off
 	}
-	id := settings[store.KeyInstallID]
-	if id == "" {
-		id = uuid.NewString() // no database yet: an id for this report alone
+	to.installID, to.firstDay = settings[store.KeyInstallID], settings[callhome.KeyFirstDay]
+	if to.installID == "" {
+		to.installID = uuid.NewString()
 	}
-	_ = callhome.SendFailure(ctx, http.DefaultClient, url, id, f, time.Now())
+	return to, true
 }
 
 // portScan is how many ports after Meko's install tries when another program holds it.

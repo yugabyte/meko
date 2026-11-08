@@ -159,6 +159,10 @@ func (a App) Unpack(tarball, version string) error {
 	return nil
 }
 
+// EnvParent is set on the commands of Meko's own releases that Meko runs itself, such as a staged
+// release's version --json: they aren't among the first commands people run (cli's tracked).
+const EnvParent = "MEKO_PARENT"
+
 // CheckBinary runs `<exe> version --json` and checks it names version: a binary that can't run on
 // this machine never becomes current. Meko's, Kode's and Present's answer {"version":
 // "<version>"}; a Kode release from before --json prints the bare version, which counts too.
@@ -166,7 +170,9 @@ func CheckBinary(exe, version string) error {
 	name := filepath.Base(exe)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, exe, "version", "--json").Output() //nolint:gosec // G204: the staged release
+	cmd := exec.CommandContext(ctx, exe, "version", "--json") //nolint:gosec // G204: the staged release
+	cmd.Env = append(os.Environ(), EnvParent+"=1")
+	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
