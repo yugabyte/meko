@@ -15,7 +15,7 @@ is on, as on the tabs) at the right of the name's first line, so many show at on
 opened with one click, in any project. A task's [code review](code-review.md) is never a tab or a row of its own: it's
 a part joined to its task's tab and rail row, a blue magnifier (its lens pulses while the review
 works, and shows Meko's "m" during a Meko call) and how far it has got (`3/6`: each pass, then
-scoring as one step, moving on as each pass reports), its result (`2·1` blockers·majors until the task has said what it did with each
+scoring as one step, moving on as each pass reports), its result (`2·1·4` blockers·majors·minors until the task has said what it did with each
 finding) or a red `!`. Once the review reads `LGTM` (it kept nothing, or the task has said what it
 did with every finding) it's settled, and its part leaves the tab and the row (`reviewBadge()`):
 the task looks like one with no review, and its findings open from the ⋯ menu's or sheet's review

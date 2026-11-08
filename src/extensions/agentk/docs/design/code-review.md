@@ -390,9 +390,9 @@ has got (`reviewSteps()`: each pass of a sweep, then scoring as one step, so Sag
 run at once, on Claude Code and OpenCode, or one after another, on Kiro; with depth > 1 the passes
 count again for each sweep; the tooltip says how many passes have reported, and names the sweep,
 and while scoring how many candidates have been scored, since a batch of scorers runs at once),
-the counts (`2·1`) in the needs-you color with its lens knocking while the round's findings wait on
-the user (`triage`, `reviewWaitsOnYou()`), `R1` while the task fixes round 1's findings, the result (`2·1`,
-blockers·majors, until the task has said what it did with every kept finding, every round's,
+the counts (`2·1·4`) in the needs-you color with its lens knocking while the round's findings wait on
+the user (`triage`, `reviewWaitsOnYou()`), `R1` while the task fixes round 1's findings, the result (`2·1·4`,
+blockers·majors·minors, until the task has said what it did with every kept finding, every round's,
 through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LGTM`) or a red `!`.
 Once it reads `LGTM` the review is settled (`reviewSettled()`), and the tab and the rail row leave its part
 out (`reviewBadge()` in `src/web/util.ts`): the task looks like one with no review, and its findings
