@@ -296,16 +296,19 @@ export function reviewSettled(r: Pick<CodeReviewSummary, 'state' | 'counts' | 'a
   return !!r && r.state === 'done' && !doneShowsCounts(r);
 }
 
-/** The review's part of a task's tab: the short count after the magnifier. */
+/**
+ * The review's part of a task's tab: the short count after the magnifier. Its findings read
+ * blockers·majors·minors (`2·1·4`, `severityBadge`).
+ */
 export function reviewSegmentText(r: CodeReviewSummary): string {
   switch (r.state) {
     case 'failed':
     case 'cancelled':
       return '!';
     case 'done':
-      return doneShowsCounts(r) ? `${r.counts.blocker}·${r.counts.major}` : 'LGTM';
+      return doneShowsCounts(r) ? severityBadge(r.counts) : 'LGTM';
     case 'triage':
-      return `${r.counts.blocker}·${r.counts.major}`;
+      return severityBadge(r.counts);
     case 'sweeping':
     case 'scoring':
       return `${reviewStep(r)}/${reviewSteps(r)}`;
@@ -345,6 +348,11 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
 /** The Code gate's line for a done review: what it found until the task addressed it, then LGTM. */
 export function reviewDoneText(r: CodeReviewSummary): string {
   return doneShowsCounts(r) ? `Reviewed: ${countsText(r.counts)}` : 'Reviewed: LGTM';
+}
+
+/** `2·1·4`: blockers·majors·minors, zeros included, for the review's part of a task's tab. */
+function severityBadge(c: SeverityCounts): string {
+  return SEVERITIES.map((s) => c[s]).join('·');
 }
 
 /** `2 blockers, 1 major` (or `no findings`), for messages. */
