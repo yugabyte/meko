@@ -388,11 +388,14 @@ if $gh_offer; then
   fi
 fi
 
-# Each agent there has to be signed in before Kode can run sessions on it.
+# Each agent there has to be signed in before Kode can run sessions on it. The sign-in checks read
+# no terminal (</dev/null): with one for input, Claude Code's reopens it to read keys, and when that
+# input is /dev/tty (as Meko's first install hands it over), Bun on macOS stops with "EINVAL:
+# invalid argument, kqueue", which would read as not signed in.
 agents=""
 if command -v claude >/dev/null 2>&1; then
   agents="Claude Code"
-  if ! claude auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
+  if ! claude auth status --json </dev/null 2>/dev/null | grep -q '"loggedIn": *true'; then
     if $interactive && ask "  Claude Code isn't signed in. Sign in now (claude auth login)?"; then
       claude auth login <"$term" || warn "Claude Code" "sign-in didn't finish; run 'claude auth login' later"
     else
@@ -420,7 +423,7 @@ if has_opencode; then
 fi
 if command -v kiro-cli >/dev/null 2>&1; then
   agents="${agents:+$agents, }Kiro"
-  if ! kiro-cli whoami >/dev/null 2>&1; then
+  if ! kiro-cli whoami </dev/null >/dev/null 2>&1; then
     if $interactive && ask "  Kiro isn't signed in. Sign in now (kiro-cli login)?"; then
       kiro-cli login <"$term" || warn "Kiro" "sign-in didn't finish; run 'kiro-cli login' later"
     else
@@ -432,7 +435,7 @@ fi
 # gh signs in to GitHub for PRs and reviews.
 if $gh_skipped; then
   warn "GitHub" "gh isn't installed: Kode asks for it when you open a PR"
-elif ! gh auth status >/dev/null 2>&1; then
+elif ! gh auth status </dev/null >/dev/null 2>&1; then
   if $interactive && ask "  gh isn't signed in to GitHub. Kode needs it for PRs and reviews. Sign in now (gh auth login)?"; then
     gh auth login <"$term" || warn "GitHub" "sign-in didn't finish; run 'gh auth login' later"
   else
