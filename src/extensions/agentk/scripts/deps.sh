@@ -392,7 +392,10 @@ fi
 agents=""
 if command -v claude >/dev/null 2>&1; then
   agents="Claude Code"
-  if ! claude auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
+  # Not on this terminal: with a terminal for input, the check reopens it to read keys, and when
+  # that input is /dev/tty (Meko's first install hands it over so), Bun on macOS stops with
+  # "EINVAL: invalid argument, kqueue", which would read as not signed in.
+  if ! claude auth status --json </dev/null 2>/dev/null | grep -q '"loggedIn": *true'; then
     if $interactive && ask "  Claude Code isn't signed in. Sign in now (claude auth login)?"; then
       claude auth login <"$term" || warn "Claude Code" "sign-in didn't finish; run 'claude auth login' later"
     else

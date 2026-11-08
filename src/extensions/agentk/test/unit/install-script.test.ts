@@ -285,11 +285,12 @@ describe('deps.sh: installing missing tools', () => {
   });
 
   /** Runs the script in a terminal, answering its question with `answer` (and then the `more` questions, in order). */
-  function runInTerminal(answer: string, prompt = 'Install them now?', more: [string, string][] = []): Promise<{ code: number; out: string; calls: string[] }> {
+  function runInTerminal(answer: string, prompt = 'Install them now?', more: [string, string][] = [], input = ''): Promise<{ code: number; out: string; calls: string[] }> {
     return new Promise((resolve) => {
       // Once the script ends, a shell keeps the terminal open until its last output is read: a pty
-      // whose program has exited can lose what it wrote just before.
-      const wrap = 'sh "$0"; s=$?; printf "\\n[exited %s]" "$s"; read -r _; exit "$s"';
+      // whose program has exited can lose what it wrote just before. `input` redirects the script's
+      // own input, as Meko's first install does with /dev/tty.
+      const wrap = `sh "$0" ${input}; s=$?; printf "\\n[exited %s]" "$s"; read -r _; exit "$s"`;
       const p = pty.spawn(join(bin, 'sh'), ['-c', wrap, SCRIPT], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', KODE_BREW_DIRS: '' } });
       let out = '';
       const questions: [string, string][] = [[prompt, answer], ...more];
@@ -379,6 +380,17 @@ describe('deps.sh: installing missing tools', () => {
     expect(r.code).toBe(0);
     expect(r.calls.slice(0, -1)).toEqual(expected);
     expect(r.calls.at(-1)).toMatch(/^input \/dev\/(pts\/\d+|ttys\d+)$/);
+  });
+
+  it("checks Claude Code's sign-in away from the terminal, even when the script's input is /dev/tty", async () => {
+    have('git', 'curl', 'gh');
+    // Claude Code's status check with a terminal for input reopens it, and on macOS Bun stops when
+    // that's /dev/tty, as it is in Meko's first install: the signed-in Claude was asked to sign in.
+    stub(bin, 'claude', `echo "claude $*" >> "${log}"; [ "$1 $2" = "auth status" ] && { echo "status input $(readlink /proc/self/fd/0 2>/dev/null || tty)" >> "${log}"; echo '{ "loggedIn": true }'; }; exit 0`);
+    const r = await runInTerminal('n', 'Sign in now (claude auth login)?', [], '</dev/tty');
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain('Sign in now (claude auth login)?');
+    expect(r.calls.find((c) => c.startsWith('status input'))).toMatch(/^status input (\/dev\/null|not a tty)$/);
   });
 });
 
