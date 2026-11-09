@@ -15,17 +15,19 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 )
 
-// syncPoll is how often meko cloud_sync asks how its sync is going.
+// syncPoll is how often meko cloud-sync asks how its sync is going.
 var syncPoll = 2 * time.Second
 
-// runCloudSync is meko cloud_sync <datapack>: one of this Meko's datapacks moved to the linked Meko
-// Cloud, through the running server, waiting until it's there or has failed.
+// runCloudSync is meko cloud-sync <datapack>: one of this Meko's datapacks moved to the linked Meko
+// Cloud, through the running server, waiting until it's there or has failed. Because the sync deletes
+// it here, it first asks for the datapack's name, as the web UI does (unless --force).
 func runCloudSync(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("meko cloud_sync", flag.ContinueOnError)
+	fs := flag.NewFlagSet("meko cloud-sync", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {}
 	dataDir := fs.String("data-dir", "", "the data folder (default ~/.meko, or MEKO_HOME)")
 	check := fs.Bool("check", false, "only check whether it fits your Meko Cloud plan")
+	force := fs.Bool("force", false, "don't ask for the datapack's name before syncing it")
 	var name string
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		name, args = args[0], args[1:]
@@ -33,14 +35,14 @@ func runCloudSync(args []string, stdout, stderr io.Writer) int {
 	err := fs.Parse(args)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
-		c, _ := lookup(progMeko, "cloud_sync")
+		c, _ := lookup(progMeko, "cloud-sync")
 		printCommandHelp(stdout, progMeko, c, fs)
 		return exitOK
 	case err != nil:
-		fmt.Fprintln(stderr, "See meko cloud_sync --help")
+		fmt.Fprintln(stderr, "See meko cloud-sync --help")
 		return exitUsage
 	case name == "" && fs.NArg() == 0:
-		c, _ := lookup(progMeko, "cloud_sync")
+		c, _ := lookup(progMeko, "cloud-sync")
 		printCommandHelp(stdout, progMeko, c, fs)
 		return exitUsage
 	}
@@ -56,10 +58,11 @@ func runCloudSync(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, fmt.Errorf("%w (is Meko running? meko start)", err))
 	}
 	ctx := context.Background()
-	id, err := localDatapack(ctx, c, name)
+	id, dpName, err := localDatapack(ctx, c, name)
 	if err != nil {
 		return fail(stderr, err)
 	}
+	name = dpName // named by its id: say and ask for its name
 	base := "/api/v1/datapacks/" + url.PathEscape(id) + "/cloud-sync"
 	var pc cloudsync.Precheck
 	if err = c.send(ctx, http.MethodPost, base+"/precheck", nil, &pc); err != nil {
@@ -71,6 +74,9 @@ func runCloudSync(args []string, stdout, stderr io.Writer) int {
 			return exitError
 		}
 		return exitOK
+	}
+	if !*force && !confirmName(stdin, stdout, name) {
+		return fail(stderr, fmt.Errorf("that isn't %s's name, so it wasn't synced", name))
 	}
 	var run cloudsync.Run
 	if err = c.send(ctx, http.MethodPost, base, nil, &run); err != nil {
@@ -121,23 +127,36 @@ func printPrecheck(w io.Writer, name string, pc cloudsync.Precheck) {
 	}
 }
 
-// localDatapack is the id of this Meko's datapack named name (or with the id name).
-func localDatapack(ctx context.Context, c *client, name string) (string, error) {
+// confirmName asks for the datapack's name before a sync deletes it here, and reports whether the
+// answer is exactly that name. End of input is no.
+func confirmName(in io.Reader, stdout io.Writer, name string) bool {
+	a := newAnswerReader(in)
+	fmt.Fprintf(stdout, "Syncing moves %s to Meko Cloud and deletes it from this computer\n", name)
+	fmt.Fprint(stdout, "Type its name to confirm: ")
+	line, err := a.ReadString('\n')
+	if err != nil || !a.term {
+		fmt.Fprintln(stdout) // only a terminal echoes the answer's newline, and only if it came
+	}
+	return strings.TrimRight(line, "\r\n") == name
+}
+
+// localDatapack is the id and name of this Meko's datapack named name (or with the id name).
+func localDatapack(ctx context.Context, c *client, name string) (string, string, error) {
 	var rows []struct {
 		ID     string `json:"datapack_id"`
 		Name   string `json:"datapack_name"`
 		WebURL string `json:"web_url"`
 	}
 	if err := c.get(ctx, "/api/v1/datapacks", &rows); err != nil {
-		return "", err
+		return "", "", err
 	}
 	for _, r := range rows {
 		if (r.Name == name || strings.EqualFold(r.ID, name)) && strings.HasPrefix(r.WebURL, "/") {
-			return r.ID, nil
+			return r.ID, r.Name, nil
 		}
 		if r.Name == name || strings.EqualFold(r.ID, name) {
-			return "", fmt.Errorf("%s is already in Meko Cloud", name)
+			return "", "", fmt.Errorf("%s is already in Meko Cloud", name)
 		}
 	}
-	return "", fmt.Errorf("no datapack called %s on this computer: meko-cli datapacks lists them", name)
+	return "", "", fmt.Errorf("no datapack called %s on this computer: meko-cli datapacks lists them", name)
 }

@@ -323,7 +323,7 @@ key, in Settings › Meko Cloud, before anything else.
 
 Because a sync deletes the datapack here, the web UI starts one only after the owner ticks that it
 moves to Meko Cloud and is deleted from this computer, and types the datapack's name, as deleting a
-datapack asks.
+datapack asks; `meko cloud-sync` asks for the name too, unless `--force`.
 
 1. **Precheck**: Meko measures the datapack (`store.SyncSize`: memories, collective ones too; the
    turns Cloud would make searchable, none when it's opted out of conversation search; its files'

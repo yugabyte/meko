@@ -154,10 +154,12 @@ var mekoCommands = []command{
 			{"meko cloud-link --off", "unlink it: the extensions use this Meko"},
 			{"meko cloud-link --url https://meko.example.com/mcp", "link another Meko server"},
 		}},
-	{name: "cloud_sync", group: "Connect", summary: "Move one of this computer's datapacks to Meko Cloud",
-		usage: "meko cloud_sync <datapack> [--check]", examples: []example{
-			{"meko cloud_sync invoices", "check it fits your plan, move it to Meko Cloud, and delete it here"},
-			{"meko cloud_sync invoices --check", "only check whether it fits your Meko Cloud plan"},
+	{name: "cloud-sync", group: "Connect", summary: "Move one of this computer's datapacks to Meko Cloud",
+		usage: "meko cloud-sync <datapack> [--check]", examples: []example{
+			{"meko cloud-sync invoices", "check it fits your plan, ask for its name, move it to Meko Cloud and delete it here"},
+			{"meko cloud-sync invoices --check", "only check whether it fits your Meko Cloud plan"},
+			{"echo invoices | meko cloud-sync invoices", "confirm with its name on stdin"},
+			{"meko cloud-sync invoices --force", "don't ask for its name"},
 		}},
 	{name: groupExtension, subcommands: true, summary: "List, install, update and delete Meko's extensions",
 		usage: "meko extension list|install|update|delete [<name>] [flags]", examples: []example{
