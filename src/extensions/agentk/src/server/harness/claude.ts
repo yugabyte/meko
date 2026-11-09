@@ -56,12 +56,13 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
       await deps.claudeCode.version();
     },
     async beforeLaunch({ row, repo, log }) {
-      // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
+      // Claude Code keys folder trust by the git root, which for a worktree is the main repo, and
+      // only the repo's own entry counts: a trusted home or repos folder doesn't.
       if (repo) await trustFolder(repo, log);
       // Started by its local spelling (claudePath), a worktree isn't tied back to its repo (its .git
       // file names the stored spelling), so Claude asks about the worktree itself: trust exactly it.
       const cwd = claudePath(row.worktree_path);
-      if (cwd !== row.worktree_path) await trustFolder(cwd, log, true);
+      if (cwd !== row.worktree_path) await trustFolder(cwd, log);
     },
     trustFolder,
     trustPrompt: TRUST_PROMPT_RE,
