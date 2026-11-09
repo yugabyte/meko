@@ -1003,22 +1003,32 @@ describe('github helpers', () => {
 });
 
 describe('Claude folder trust', () => {
-  it('trusts a folder once and recognizes trusted parents', async () => {
+  it("trusts a folder by its own entry and its real path's, never a parent's, keeping what's there", async () => {
     const { ensureWorkspaceTrust, isTrusted } = await import('../../src/server/trust.js');
-    const { writeFileSync, readFileSync, mkdtempSync: mk } = await import('node:fs');
+    const { writeFileSync, readFileSync, mkdirSync, symlinkSync, realpathSync, mkdtempSync: mk } = await import('node:fs');
     const dir = mk(join(tmpdir(), 'akl-trust-'));
     process.env.CLAUDE_CONFIG_DIR = dir;
-    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ projects: { '/home/u': { hasTrustDialogAccepted: true } }, other: 1 }));
-    expect(ensureWorkspaceTrust('/home/u/.agent-k-local/worktrees')).toBe('already');
-    expect(ensureWorkspaceTrust('/data/ak/worktrees')).toBe('added');
-    const cfg = JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8'));
-    expect(cfg.other).toBe(1);
-    expect(isTrusted('/data/ak/worktrees/p/s', cfg)).toBe(true);
-    expect(ensureWorkspaceTrust('/data/ak/worktrees')).toBe('already');
-    // Exact: a trusted parent doesn't count (Claude asks about a worktree it can't tie to its repo).
-    expect(isTrusted('/data/ak/worktrees/p/s', cfg, true)).toBe(false);
-    expect(ensureWorkspaceTrust('/data/ak/worktrees/p/s', true)).toBe('added');
-    expect(ensureWorkspaceTrust('/data/ak/worktrees/p/s', true)).toBe('already');
+    const file = join(dir, '.claude.json');
+    const read = () => JSON.parse(readFileSync(file, 'utf8')) as { other: number; projects: Record<string, { hasTrustDialogAccepted?: boolean }> };
+    writeFileSync(file, JSON.stringify({ projects: { '/home/u': { hasTrustDialogAccepted: true }, '/home/u/code/old': { lastSessionId: 's1' } }, other: 1 }));
+    // A trusted parent doesn't count: Claude Code still asks about a git repo under it.
+    expect(isTrusted('/home/u/code/demo', read())).toBe(false);
+    expect(ensureWorkspaceTrust('/home/u/code/demo')).toBe('added');
+    expect(ensureWorkspaceTrust('/home/u/code/demo')).toBe('already');
+    // An entry Claude made keeps its fields, and so does the rest of the file.
+    expect(ensureWorkspaceTrust('/home/u/code/old')).toBe('added');
+    expect(read().other).toBe(1);
+    expect(read().projects['/home/u/code/demo']).toEqual({ hasTrustDialogAccepted: true });
+    expect(read().projects['/home/u/code/old']).toEqual({ lastSessionId: 's1', hasTrustDialogAccepted: true });
+    // Claude keys trust by the real path: a folder reached through a symlink gets both spellings.
+    const real = join(dir, 'real', 'demo');
+    mkdirSync(real, { recursive: true });
+    symlinkSync(join(dir, 'real'), join(dir, 'link'));
+    const linked = join(dir, 'link', 'demo');
+    expect(ensureWorkspaceTrust(linked)).toBe('added');
+    expect(read().projects[linked]).toEqual({ hasTrustDialogAccepted: true });
+    expect(read().projects[realpathSync(real)]).toEqual({ hasTrustDialogAccepted: true });
+    expect(ensureWorkspaceTrust(linked)).toBe('already');
   });
 });
 
