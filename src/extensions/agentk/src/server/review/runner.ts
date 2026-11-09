@@ -1225,8 +1225,6 @@ export class CodeReviews {
     this.core.changed();
     if (r.purpose === 'pr') await this.sendPr(id, queued, true);
     else if (r.stage === 'review') await this.core.lifecycle.syncReviewLine(r.task_id);
-    // A workshop's level may review again once its gotchas are in Meko (src/server/workshops.ts).
-    if (!r.hand_off) this.core.workshops.firstLookDone(r.task_id);
   }
 
   /** A done review's PR prompt, with its line, and its last round's findings unless they went as a fix prompt (`findings`). */

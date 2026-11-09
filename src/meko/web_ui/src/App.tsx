@@ -173,7 +173,7 @@ export default function App({ auth }: { auth: AuthStatus }) {
                 {route.tab === "overview" && <OverviewPage datapack={current.data} />}
                 {route.tab === "metrics" && <MetricsPage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "search" && <SearchPage datapack={current.data} />}
-                {route.tab === "gaps" && <ContextGapsPage datapack={current.data} />}
+                {route.tab === "gaps" && <ContextGapsPage datapack={current.data} routeFilter={route.itemId} />}
                 {route.tab === "memories" && <MemoriesPage datapack={current.data} routeScope={route.itemId} onChanged={onChanged} />}
                 {route.tab === "knowledge" && <KnowledgePage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "conversations" && (

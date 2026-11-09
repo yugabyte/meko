@@ -680,6 +680,38 @@ export async function demoBranch(dir: string, base: string, branch: string, patc
   await demoGit(dir, who, date, 'checkout', '--quiet', base);
 }
 
+/**
+ * Detaches every worktree of the demo repo <dir> but its main checkout that has one of <branches>
+ * checked out, keeping its files and uncommitted changes, so recommitDemo can make the branches
+ * again. False when one couldn't be detached.
+ */
+export async function freeDemoBranches(dir: string, branches: string[]): Promise<boolean> {
+  await tryGit(dir, 'worktree', 'prune');
+  for (const wt of await listWorktrees(dir)) {
+    if (!wt.branch || !branches.includes(wt.branch) || samePath(wt.path, dir)) continue;
+    if (!(await detachWorktree(wt.path))) return false;
+  }
+  return true;
+}
+
+/**
+ * Commits <file>'s change on <base> in the demo repo <dir> (HEAD is <base> there), then makes each of
+ * <branches> again from the new <base> with its patch, so they carry the change without a diff of
+ * their own for it. Throws when a branch is checked out in a worktree that's still there: free them
+ * first (freeDemoBranches).
+ */
+export async function recommitDemo(dir: string, base: string, file: string, message: string, branches: { name: string; patch: string }[], who: GitIdent): Promise<void> {
+  const date = new Date().toISOString();
+  await demoGit(dir, who, date, 'checkout', '--quiet', base);
+  await demoGit(dir, who, date, 'add', '--', file);
+  await demoGit(dir, who, date, 'commit', '--quiet', '-m', message);
+  await demoGit(dir, who, date, 'worktree', 'prune');
+  for (const br of branches) {
+    await demoGit(dir, who, date, 'branch', '-D', br.name);
+    await demoBranch(dir, base, br.name, br.patch, who);
+  }
+}
+
 // ---- Review a PR ----
 
 /**

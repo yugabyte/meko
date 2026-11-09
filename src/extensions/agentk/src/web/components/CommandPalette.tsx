@@ -83,7 +83,7 @@ export function CommandPalette({
   currentSession: Session | null;
   onClose: () => void;
   onNewProject: () => void;
-  /** Starts the Kode tour (or goes to its host when its project is open). */
+  /** Starts the Kode tour (or goes to its project when it's open). */
   onStartTour: () => void;
   onNewSession: (projectId: string) => void;
   /** Opens the Move to another stage dialog for the session on screen. */

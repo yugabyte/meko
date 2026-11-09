@@ -792,6 +792,20 @@ const MIGRATIONS: string[] = [
   // launch (SessionManager.launch); NULL when it started with none. Passed to every launch as
   // AK_FIRST_PROMPT, for AgentK's view mod to draw that prompt folded.
   `ALTER TABLE sessions ADD COLUMN first_prompt TEXT;`,
+  // 52: a workshop project's tour, which Kode runs itself (src/server/tour.ts): the level and stage
+  // on screen, when the level (re)started (its sessions are the ones made since), the stages passed
+  // over and the levels finished. Everything else about a stage is read from what its work left.
+  `
+  CREATE TABLE workshop_tours (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    level TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    level_at INTEGER NOT NULL DEFAULT 0,
+    skipped_json TEXT NOT NULL DEFAULT '[]',
+    finished_json TEXT NOT NULL DEFAULT '[]',
+    updated_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export function openDb(path: string): Db {

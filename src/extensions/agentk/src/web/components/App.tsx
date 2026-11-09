@@ -293,6 +293,8 @@ export function App() {
   const liveRef = useRef<LiveCount>({ projectId: null, live: 0 });
   const liveIdsRef = useRef<string[]>([]);
   const currentId = currentProject?.id ?? null;
+  // A tour's project never asks to close: its levels end by archiving their sessions, and the tour goes on.
+  const tourProject = !!currentProject?.workshop;
   const liveCount = live.length;
   const liveIds = live.map((s) => s.id).join('\n');
   const failedIds = (state?.failedStarts ?? []).map((f) => f.id).join('\n');
@@ -305,10 +307,10 @@ export function App() {
     liveIdsRef.current = liveIds ? liveIds.split('\n') : [];
     const failed = new Set(failedIds.split('\n'));
     const failedStart = prevIds.some((id) => failed.has(id));
-    if (currentId && lastSessionClosed(prev, next) && route.view === 'project' && modalKind === 'none' && !failedStart && !document.hidden) {
+    if (currentId && !tourProject && lastSessionClosed(prev, next) && route.view === 'project' && modalKind === 'none' && !failedStart && !document.hidden) {
       setModal({ kind: 'close-project', projectId: currentId });
     }
-  }, [currentId, liveCount, liveIds, failedIds, route.view, modalKind]);
+  }, [currentId, tourProject, liveCount, liveIds, failedIds, route.view, modalKind]);
 
   // Normalize the route once state is known: pick a project/session when none is chosen
   // or the chosen one no longer exists.
@@ -452,13 +454,13 @@ export function App() {
     }
   };
 
-  // The Kode tour: its demo project and host, or the host of the one already open.
+  // The Kode tour: its demo project, where the tour panel shows the stage it's on.
   const [tourStarting, setTourStarting] = useState(false);
   const startTour = async () => {
     setTourStarting(true);
     try {
       const r = await api.startWorkshop(AGENTK_TOUR);
-      navigate({ view: 'project', projectId: r.projectId, sessionId: r.sessionId });
+      navigate({ view: 'project', projectId: r.projectId, sessionId: null });
     } catch (e) {
       showToast(errorMessage(e));
     } finally {
@@ -707,6 +709,7 @@ export function App() {
             onFindingsTaken={findingsTaken}
             onFindingsShown={setFindingsOpenFor}
             onOpenFindings={openFindings}
+            onOpenProject={() => setModal({ kind: 'new-project' })}
             onError={showToast}
           />
         ) : (
@@ -719,7 +722,7 @@ export function App() {
                 A project is an effort to build or improve a feature, product or service, worked on in one of your git repos. Each task you start in it gets its own worktree and Claude session.
               </p>
               <div className="empty-actions">
-                <button className="btn primary" disabled={tourStarting} onClick={() => void startTour()} title="A demo project and a session that walks you through Kode and what Meko adds">
+                <button className="btn primary" disabled={tourStarting} onClick={() => void startTour()} title="A demo project where Kode walks you through what it does and what Meko adds">
                   {tourStarting ? <Busy label="Starting the tour" /> : 'Take the Kode tour'}
                 </button>
                 <button className="btn" onClick={() => setModal({ kind: 'new-project' })}>

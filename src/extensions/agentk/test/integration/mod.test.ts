@@ -60,7 +60,6 @@ describe("Kode's mod in Claude (real session host + git, fake claude)", () => {
     const prompt = first.args[first.args.indexOf('--') + 1];
     expect(prompt).toBeTruthy();
     expect(first.env.KODE_FIRST_PROMPT).toBe(prompt.split('\n').map((l) => l.trim()).find(Boolean));
-    expect(first.env.KODE_HIDDEN_PROMPT).toBe('');
     expect(env.core.sessions.row(s.id).first_prompt).toBe(first.env.KODE_FIRST_PROMPT);
     await env.core.host.kill(env.core.sessions.row(s.id).tmux_name);
     await env.core.sessions.reconcile();

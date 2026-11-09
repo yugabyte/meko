@@ -7,7 +7,7 @@ import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
   AutoConnectClaim, ChangedText, EventsClientMessage, GhStatus, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
-  HeldReview, HeldReviewsResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  HeldReview, HeldReviewsResult, TourActRequest, TourActResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
   CloseWorkItemsRequest, CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
@@ -393,6 +393,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post<{ Params: { id: string } }>('/api/workshops/:id/go', async (req, reply) => {
     await core.workshops.go(req.params.id);
     return reply.code(204).send();
+  });
+  // The tour's guide card buttons (src/server/tour.ts).
+  app.post<{ Params: { id: string }; Body: TourActRequest }>('/api/workshops/:id/act', async (req): Promise<TourActResult> => core.tours.act(req.params.id, req.body));
+  // The demo's game, played sandboxed: an opaque origin, so its scripts (which an agent edits) can't reach Kode.
+  app.get<{ Params: { id: string; where: string; '*': string } }>('/api/workshops/:id/play/:where/*', async (req, reply) => {
+    const f = core.tours.playFile(req.params.id, req.params.where, req.params['*']);
+    reply.header('Content-Security-Policy', "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:");
+    return reply.type(f.type).send(f.body);
   });
 
   // ---- projects ----

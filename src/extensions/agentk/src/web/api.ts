@@ -2,6 +2,8 @@ import type { CodeReviewDetail, CodeReviewFinding } from '../shared/codereview';
 import type {
   AutoConnectClaim,
   AppState,
+  TourActRequest,
+  TourActResult,
   Workshop,
   WorkshopStart,
   CloseWorkItemsRequest,
@@ -173,6 +175,7 @@ export const api = {
 
   workshops: () => get<Workshop[]>('/api/workshops'),
   startWorkshop: (id: string) => post<WorkshopStart>(`/api/workshops/${enc(id)}/start`, {}),
+  tourAct: (id: string, req: TourActRequest) => post<TourActResult>(`/api/workshops/${enc(id)}/act`, req),
   openProject: (b: CreateProjectRequest) => post<OpenedProject>('/api/projects', b),
   updateProject: (id: string, b: UpdateProjectRequest) => request<Project>('PATCH', `/api/projects/${enc(id)}`, b),
   closeProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),

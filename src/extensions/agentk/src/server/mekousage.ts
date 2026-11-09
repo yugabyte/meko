@@ -601,7 +601,7 @@ export function aboutTokens(n: number): string {
 }
 
 /**
- * What Meko did for one session so far, for a workshop's host (GuideEvents): Kode's search at
+ * What Meko did for one session so far, for a tour's card (src/server/tour.ts): Kode's search at
  * start, Claude's lookups and what they found, and the estimated tokens saved, by the formula the
  * Usage page uses. Empty when the session made no Meko lookup and got nothing at start.
  */

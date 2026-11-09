@@ -33,7 +33,7 @@ export interface LearnJob {
  * What a poll answers: the prompts to submit, a part of a learn step to run, and a line for the mod
  * to show (what a learn step saved); null for none of them.
  */
-export type PollAnswer = { prompts: { id: string; text: string; hidden?: true }[]; learn?: LearnJob; toast?: string } | null;
+export type PollAnswer = { prompts: { id: string; text: string }[]; learn?: LearnJob; toast?: string } | null;
 
 /** The mod protocol that runs learn steps (its /mod/hello and every poll say which it speaks). */
 export const LEARN_PROTOCOL = 2;
@@ -50,11 +50,6 @@ export interface DroppedPrompt {
 interface Pending {
   id: string;
   text: string;
-  /**
-   * A workshop host's events: the mod hides a bare "OK" in its turn. The prompt's own row is hidden by
-   * Kode's view mod, by its first line (KODE_HIDDEN_PROMPT), not by this.
-   */
-  hidden: boolean;
   /** Answered to a poll; waiting for the mod's ack. */
   handed: boolean;
   timer: NodeJS.Timeout;
@@ -268,23 +263,20 @@ export class ModLinks {
     for (const p of fresh) p.handed = true;
     l.learn = null;
     l.toast = null;
-    return { prompts: fresh.map((p) => ({ id: p.id, text: p.text, ...(p.hidden ? { hidden: true as const } : {}) })), ...(learn ? { learn } : {}), ...(toast ? { toast } : {}) };
+    return { prompts: fresh.map((p) => ({ id: p.id, text: p.text })), ...(learn ? { learn } : {}), ...(toast ? { toast } : {}) };
   }
 
   /**
    * Sends a prompt through the mod. Resolves with its id once the server has told the mod to submit
    * it (Claude runs it when it's next idle); rejects when the mod doesn't ack it within ACCEPT_MS, or the link
-   * is reset, and then the mod is told not to submit it. For a `hidden` one (a workshop host's events)
-   * the mod draws a bare "OK" in its turn as nothing; Kode's view mod hides the prompt's own row by
-   * its first line (KODE_HIDDEN_PROMPT).
+   * is reset, and then the mod is told not to submit it.
    */
-  send(session: string, text: string, hidden = false): Promise<string> {
+  send(session: string, text: string): Promise<string> {
     const l = this.link(session);
     return new Promise((resolve, reject) => {
       const p: Pending = {
         id: randomUUID(),
         text,
-        hidden,
         handed: false,
         resolve,
         reject,

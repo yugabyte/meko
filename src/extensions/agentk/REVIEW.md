@@ -158,7 +158,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       previews (`/changes/image`) to image types inside the worktree, the base commit, or one of
       the branch's listed commits and its parent, with the sandboxing content policy; a file's text
       (`/changes/file`, JSON) to a file the diff shown changes (never an unchanged, untracked or
-      gitignored one), inside the repo, text only, at most 1 MB.
+      gitignored one), inside the repo, text only, at most 1 MB. The one other case is the tour's
+      demo, played (`GET /api/workshops/:id/play/:where/*`, `playFile` in `tour.ts`): only a
+      workshop project's demo repo or one of its sessions' worktrees, by real path inside it, no
+      dot-file or dot-folder, known types only, at most 5 MB, under
+      `Content-Security-Policy: sandbox allow-scripts` with `default-src 'none'` (an opaque origin
+      that can't reach Kode's API or the network), its scripts and stylesheets put inline, and the
+      bundle's `play` line in a bar on top, HTML-escaped (`withBar`).
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
       `allow-same-origin`, and the frame's content policy still blocks network requests and comes
       first in the frame's document. Markdown designs are sanitized with no forms or styles, by
@@ -280,8 +286,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Schema changes are a new migration; shipped migrations are unchanged.
 - [ ] A workshop's demo (`src/workshops/`, docs/design/workshops.md) stays local and the same on
       every install: no remote, none of the user's git config, and its gotchas never in the repo.
-      A workshop's project opens no PR (`checkOpensPr`), and its host never passes a gate for the
-      user. A change to a level's patch or `gotchas.md` comes with a passing `npm run
+      A workshop's project opens no PR (`checkOpensPr`), and its tour moves on only from the
+      user's own buttons (`POST /api/workshops/:id/act`, a stale stage a 409), never by itself. A change to a level's patch or `gotchas.md` comes with a passing `npm run
       check:demo-review` in the PR description.
 - [ ] Every project still has exactly one dedicated datapack; each session gets its own `MEKO_AGENT_ID` and pin (`sessionAgentId()`), never one keyed on the project id.
 - [ ] Several projects can share a repo, and many can run sessions on it at once: per-project state

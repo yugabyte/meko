@@ -68,9 +68,9 @@ export const START_STAGES: StartStage[] = ['explore', 'design', 'code'];
 /**
  * What a session is for, beyond its kind: `learn`, a learn session (`CreateSessionRequest.learn`),
  * a task started at Explore that seeds the project's dedicated datapack from the repo and its PRs,
- * and closes by itself when it's done; `guide`, a workshop's host (`src/server/workshops.ts`), a
- * task at Explore that walks the user through a bundled workshop by starting other sessions. Null
- * for every other session.
+ * and closes by itself when it's done; `guide`, a workshop's host from before Kode ran its tours
+ * itself (docs/design/workshops.md): none is made any more, and the server archives an open one at its
+ * start, but stored rows still read. Null for every other session.
  */
 export type SessionPurpose = 'learn' | 'guide';
 
@@ -95,8 +95,8 @@ export const LEARN_WARN_PRS = 200;
 export const LEARN_WARN_FILES = 5_000;
 
 /**
- * A workshop bundled with Kode (`src/workshops/<id>/`): a script for a host session (Session.purpose
- * `guide`) and the demo repo it's played in, built locally with no remote (docs/design/workshops.md).
+ * A workshop bundled with Kode (`src/workshops/<id>/`): a tour Kode runs itself (`TourState`), its
+ * levels' stages and the demo repo it's played in, built locally with no remote (docs/design/workshops.md).
  */
 export interface Workshop {
   id: string;
@@ -104,8 +104,6 @@ export interface Workshop {
   summary: string;
   /** Its open project, or null when it isn't open. */
   projectId: string | null;
-  /** That project's open host session, or null. */
-  hostId: string | null;
   /** The brief its project home's Learn the project opens with (a level's `learn`), or null. */
   learn: LearnBrief | null;
 }
@@ -113,10 +111,142 @@ export interface Workshop {
 /** The Kode tour: the workshop a fresh install starts by itself, and the empty state and palette offer. */
 export const AGENTK_TOUR = 'agentk-101';
 
-/** POST /api/workshops/:id/start: the workshop's project and its host session. */
+/** POST /api/workshops/:id/start: the workshop's project, where its tour panel shows the stage it's on. */
 export interface WorkshopStart {
   projectId: string;
-  sessionId: string;
+}
+
+/**
+ * What a tour stage does (`workshop.json`'s `stages[].kind`), which Kode's code runs: `repo` shows the
+ * demo; `review-first-look` makes the gotchas datapack again, empty, and begins the level's task, whose
+ * first look starts by itself; `teach` uploads the gotchas; `review-context` runs the review again with
+ * them; `learn` makes the project's datapack again, empty, and starts Learn the project; `ask` and
+ * `ask-again` begin a level's named question sessions.
+ */
+export type TourStageKind = 'repo' | 'review-first-look' | 'teach' | 'review-context' | 'learn' | 'ask' | 'ask-again';
+
+export const TOUR_STAGE_KINDS: readonly TourStageKind[] = ['repo', 'review-first-look', 'teach', 'review-context', 'learn', 'ask', 'ask-again'];
+
+/**
+ * Where the stage on screen is, worked out each time from Kode's records: `ready` (its button starts
+ * it), `running`, `done` (its result shown; Next goes on), `failed` (with Retry), or `blocked`
+ * (it can't run here: the level's session was closed).
+ */
+export type TourPhase = 'ready' | 'running' | 'done' | 'failed' | 'blocked';
+
+/**
+ * A button on the guide card. The server runs `begin` (the welcome card's Start the tour), `next`,
+ * `run`, `retry`, `finish` and `goto` (POST /api/workshops/:id/act); the page itself runs
+ * `own-repo` (Open project, the tour left where it is) and `close` (Close tour: closes the tour's
+ * project, after asking).
+ */
+export type TourActionId = 'begin' | 'next' | 'run' | 'retry' | 'finish' | 'goto' | 'own-repo' | 'close';
+
+export const TOUR_SERVER_ACTIONS: readonly TourActionId[] = ['begin', 'next', 'run', 'retry', 'finish', 'goto'];
+
+export interface TourAction {
+  id: TourActionId;
+  label: string;
+  primary?: boolean;
+  /** Shown red: Close tour. */
+  danger?: boolean;
+}
+
+/** A link the card shows: the game to play (served by Kode, `play`) or a page of Meko's (opened in a new tab). */
+export interface TourLink {
+  label: string;
+  /** For `play`, a path under Kode's base (`api/workshops/…/play/…`); otherwise a full URL. */
+  href: string;
+  kind: 'play' | 'meko';
+  /**
+   * The card's first button, and its blue one until it's clicked (the page keeps that): Play the
+   * game, before Move on.
+   */
+  first?: boolean;
+}
+
+/** One review's side of the scoreboard: what it kept, how many credit a Meko gotcha (and which), and what its session took in. */
+export interface TourScoreSide {
+  /** Findings kept in its first round. */
+  kept: number;
+  /** Of those, the ones that credit a Meko gotcha. */
+  caught: number;
+  gotchas: string[];
+  /** Input, cache reads and cache writes of the review's session, subagents included. */
+  tokensIn: number;
+  /** Credits its session billed (Kiro), else 0. */
+  credits: number;
+}
+
+/** The scoreboard: the review without context (the first look) and the review with the team's gotchas, each null until it's done. */
+export interface TourScore {
+  cold: TourScoreSide | null;
+  context: TourScoreSide | null;
+  /** The headline difference, once both are done: what the review with context caught with Meko. */
+  difference: string | null;
+}
+
+export interface TourStageInfo {
+  id: string;
+  title: string;
+  /** `skipped`: passed over (a stage that couldn't run here). */
+  status: 'done' | 'current' | 'todo' | 'skipped';
+}
+
+export interface TourLevelInfo {
+  id: string;
+  title: string;
+  stages: TourStageInfo[];
+  finished: boolean;
+  /** Why it can't run here (it needs a datapack of the project's own), or null. */
+  blocked: string | null;
+}
+
+/**
+ * A workshop project's tour (`ProjectWithSessions.tour`), worked out from `workshop_tours` and the
+ * records the stages leave (code reviews, uploads, sessions, learn steps): the levels and their
+ * stages for the rail, and the stage on screen's card.
+ */
+export interface TourState {
+  workshop: string;
+  levels: TourLevelInfo[];
+  /** The level and stage on screen. */
+  level: string;
+  stage: string;
+  kind: TourStageKind;
+  title: string;
+  phase: TourPhase;
+  /** The guide card's text (Markdown-light: paragraphs, **bold**, `code`), with Kode's numbers filled in. */
+  text: string;
+  actions: TourAction[];
+  links: TourLink[];
+  /** The session the stage works in, which the page shows under the panel; null before it's begun. */
+  sessionId: string | null;
+  /** Level 1's scoreboard; null for a level without one. */
+  score: TourScore | null;
+  /** What the level teaches, over the card on its first stage; else null. */
+  lead: string | null;
+  /**
+   * The welcome card, shown once before the tour begins (no stage on the rail yet): `title` and
+   * `text` are the welcome's, and its one button is `begin`.
+   */
+  welcome: boolean;
+  /** Every level is finished. */
+  finished: boolean;
+}
+
+/** POST /api/workshops/:id/act: a guide card's button, pressed on the stage it was shown for. */
+export interface TourActRequest {
+  /** The stage the button was on (`TourState.stage`): another one is stale, refused with a 409. */
+  stage: string;
+  action: TourActionId;
+  /** For `goto`: the level to switch to. */
+  level?: string;
+}
+
+export interface TourActResult {
+  /** The session the action began or works in, for the page to show; null when there's none. */
+  sessionId: string | null;
 }
 
 /**
@@ -937,6 +1067,8 @@ export interface ProjectWithSessions extends Project {
   sessions: Session[];
   /** Token usage across all the project's sessions, archived ones included. */
   usage: TokenUsage;
+  /** A workshop project's tour (src/server/tour.ts); absent for every other project. */
+  tour?: TourState | null;
 }
 
 /**
@@ -2721,13 +2853,19 @@ export type TermServerMessage =
 // POST   /api/invites/:datapackId/later        → 204   (hides it here; the invite stays in Meko)
 // POST   /api/projects        CreateProjectRequest → OpenedProject   (opens a project on a repo here, a clone, or a new repo;
 //        409 when a new repo's folder is already taken)
-// GET    /api/workshops                        → Workshop[]   (the bundled workshops, each with its open project and host)
-// POST   /api/workshops/:id/start              → WorkshopStart   (builds the demo repo, opens it as a project and starts its
-//        host; a workshop whose project is open goes to its host, starting one when none is open; 404 for an unknown
-//        workshop, 500 with the reason when the demo can't be built)
-// POST   /api/workshops/:id/go                 → 204   (the user's go at a level's pause, as "go" typed to its host does:
-//        after the first look, the gotchas go into Meko and Kode reviews again; 404 when the workshop isn't open,
-//        409 when nothing waits for a go)
+// GET    /api/workshops                        → Workshop[]   (the bundled workshops, each with its open project)
+// POST   /api/workshops/:id/start              → WorkshopStart   (builds the demo repo and opens it as a project, where
+//        its tour starts; a workshop whose project is open goes to it; 404 for an unknown workshop, 500 with the
+//        reason when the demo can't be built)
+// POST   /api/workshops/:id/act   TourActRequest → TourActResult   (a guide card's button; 404 when the workshop isn't
+//        open, 409 for a stage that isn't the one on screen or a button it doesn't offer now)
+// POST   /api/workshops/:id/go                 → 204   (after a level's first look: the gotchas go into Meko and Kode
+//        reviews again, Teach it and Review with context in one, for scripts/check-demo-review.mjs; 404 when the
+//        workshop isn't open, 409 when no first look is done and waiting)
+// GET    /api/workshops/:id/play/:where/*      → a file of the demo (`main`: the demo repo; a session's id: its
+//        worktree), read-only, under `Content-Security-Policy: sandbox allow-scripts` (an opaque origin); an HTML page
+//        comes with its scripts and stylesheets inline and the workshop's `play` line in a bar on top; 404 for
+//        anything outside it, a dot-file, or a project that isn't the workshop's
 // GET    /api/projects/:id                     → Project   (404 once it's closed: the UI asks for a project it just
 //        opened when a state push comes without it)
 // PATCH  /api/projects/:id    UpdateProjectRequest → Project

@@ -12,7 +12,6 @@
 //   - the session's first prompt, which Kode passes on claude's command line: Claude Code draws it
 //     like typed text, so the server names its first line in KODE_FIRST_PROMPT at every launch
 //     (empty when the conversation didn't start with Kode's prompt).
-// A prompt whose first line is KODE_HIDDEN_PROMPT (a workshop host's "Kode events:") draws as nothing.
 // A prompt Kode typed into the terminal (while its mod wasn't linked) draws as Claude Code draws it.
 //
 // It must never get in Claude's way: a row it can't read draws as Claude Code draws it.
@@ -25,14 +24,9 @@ import type { EngineInterface, Register } from 'claude-code'
 const SENDER = 'kode'
 /** The most of a first line a drawn row keeps. */
 const LINE_MAX = 200
-/** What a hidden row draws. */
-const NOTHING = { type: 'Box', props: { display: 'none' } } as const
-
 interface Marks {
   /** The first line of the conversation's first prompt, when Kode sent it; '' otherwise. */
   first: string
-  /** The first line of Kode's hidden prompts; '' when it sends none. */
-  hidden: string
 }
 
 let marks: Promise<Marks> | null = null
@@ -40,7 +34,6 @@ let marks: Promise<Marks> | null = null
 function marksOf($: EngineInterface): Promise<Marks> {
   marks ??= (async () => ({
     first: ((await $.env.get('KODE_FIRST_PROMPT')) ?? (await $.env.get('AK_FIRST_PROMPT')) ?? '').trim(),
-    hidden: ((await $.env.get('KODE_HIDDEN_PROMPT')) ?? (await $.env.get('AK_HIDDEN_PROMPT')) ?? '').trim(),
   }))()
   return marks
 }
@@ -68,7 +61,6 @@ export const register: Register = (on) => {
       const m = await marksOf($)
       const line = firstLine(p.text)
       const sent = p.origin?.kind === 'plugin' && p.origin.name === SENDER
-      if (sent && m.hidden && line === m.hidden) return NOTHING
       const first = p.origin?.kind !== 'plugin' && !!m.first && line === m.first
       const text = sent || first ? folded(p.text) : null
       return next(text === null ? e : { ...e, props: { ...e.props, text } } as typeof e)

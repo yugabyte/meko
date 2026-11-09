@@ -37,6 +37,7 @@ import { MekoLinkDialog } from './MekoLinkDialog';
 import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
+import { TourPanel } from './TourPanel';
 
 /** Where this browser keeps the Review a PR sessions whose PR's design it has opened by itself. */
 const REVIEW_DESIGNS_KEY = 'ak-review-designs-shown';
@@ -96,6 +97,7 @@ export function ProjectView({
   onFindingsTaken,
   onFindingsShown,
   onOpenFindings,
+  onOpenProject,
   onError,
 }: {
   project: ProjectWithSessions;
@@ -129,6 +131,8 @@ export function ProjectView({
   onFindingsShown: (taskId: string | null) => void;
   /** Shows a task's code review findings, beside its terminal: from its magnifier, the gate or the ⋯ sheet. */
   onOpenFindings: (task: Session) => void;
+  /** Opens Open project (the tour's Skip, use my own repo). */
+  onOpenProject: () => void;
   onError: (msg: string) => void;
 }) {
   const mobile = useIsMobile();
@@ -547,6 +551,9 @@ export function ProjectView({
         </TopBar>
       ) : null}
 
+      {/* A workshop's project: its tour, which Kode runs, above the sessions it begins. */}
+      {project.tour && session && <TourPanel project={project} tour={project.tour} full={false} onOpenProject={onOpenProject} onError={onError} />}
+
       {/* Desktop: the tabs (when shown), then one row with the stages and their gate, what needs you,
           and the ⋯ menu with the session's other actions. On a phone the stages, their gate and the
           actions are in the ⋯ sheet, to leave the room to the terminal. */}
@@ -623,7 +630,9 @@ export function ProjectView({
         />
       )}
 
-      <div className="workarea">
+      {/* With no session open, a tour's panel takes the work area: there's no terminal to show yet. */}
+      {project.tour && !session && <TourPanel project={project} tour={project.tour} full onOpenProject={onOpenProject} onError={onError} />}
+      {(session || !project.tour) && <div className="workarea">
         {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with
             its design or changes open, and kept it on screen beside the next one. */}
         {session ? (
@@ -662,7 +671,7 @@ export function ProjectView({
             initialScroll={findingsScroll}
           />
         )}
-      </div>
+      </div>}
 
       {session && (
         <footer className="foot">
@@ -987,10 +996,6 @@ function StageBar({
       gate = session.purpose === 'learn' ? (
         <span className="gate-pill" title="Kode closes this session once it has saved what it learned">
           Learning the project
-        </span>
-      ) : session.purpose === 'guide' ? (
-        <span className="gate-pill" title="This session hosts the tour: it starts the sessions you work in">
-          Guiding you
         </span>
       ) : (
         <button

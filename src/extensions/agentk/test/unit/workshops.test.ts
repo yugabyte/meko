@@ -6,7 +6,9 @@ import { join, relative } from 'node:path';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PROMPT_MAX } from '../../src/server/actions.js';
-import { buildDemoRepo, demoMekoMd, freeFolder, levelPrompts, listBundles, readWorkshop, renderGuide } from '../../src/server/workshops.js';
+import { buildDemoRepo, demoMekoMd, freeFolder, gotchaList, levelPrompts, listBundles, readWorkshop } from '../../src/server/workshops.js';
+import { fillText, inlineAssets, insideRoot, withBar } from '../../src/server/tour.js';
+import { scoreDifference, sideText, tokensText } from '../../src/shared/tour.js';
 import { parseMekoMd } from '../../src/shared/mekomd.js';
 import { AGENTK_TOUR } from '../../src/shared/types.js';
 
@@ -49,18 +51,12 @@ describe('the bundled workshops', () => {
     }
   });
 
-  it("renders the host's script with every placeholder filled and each level's prompt in it", () => {
-    for (const b of bundles) {
-      const text = renderGuide(b, { projectId: 'p1', repo: '/code/demo', meko: 'on', harness: 'Claude Code', gotchas: 'adlc/repo/demo/gotchas', datapack: 'adlc/proj/demo/init' });
-      expect(text).not.toMatch(/\{\{\w+\}\}/);
-      for (const l of b.levels) {
-        for (const p of levelPrompts(b, l.id)) {
-          expect(text).toContain(p.text);
-          // A named session's prompt goes under its name, which the host starts it with.
-          if (p.name) expect(text).toContain(`#### Session "${p.name}"`);
-        }
-      }
-    }
+  it("lists a gotchas file's ids and titles from its headings, and none without one", () => {
+    const root = tmp();
+    writeFileSync(join(root, 'gotchas.md'), '# Gotchas\n\n## MG-1: The first trap\n\nWhy.\n\n## MG-2 The second trap\n\n### Not a gotcha\n');
+    const b = { ...readWorkshop(AGENTK_TOUR), root, gotchas: { file: 'gotchas.md', datapack: 'adlc/repo/demo/gotchas', about: '' } };
+    expect(gotchaList(b)).toEqual([{ id: 'MG-1', title: 'The first trap' }, { id: 'MG-2', title: 'The second trap' }]);
+    expect(gotchaList({ ...b, gotchas: null })).toEqual([]);
   });
 
   it("keeps Level 2's answer fixed: the demo's tests cover neither running into itself nor a full board", () => {
@@ -77,10 +73,12 @@ describe('the bundled workshops', () => {
 
   it('reads a level prompt list and a learn brief, and refuses bad ones', () => {
     const root = tmp();
-    const write = (levels: unknown[]) => {
+    const REPO_STAGE = [{ id: 'repo', kind: 'repo', title: 'The repo', text: { done: 'A game.' } }];
+    const write = (levels: Record<string, unknown>[]) => {
+      levels = levels.map((l) => ({ stages: REPO_STAGE, ...l }));
       mkdirSync(join(root, 'demo'), { recursive: true });
       writeFileSync(join(root, 'demo', 'workshop.json'), JSON.stringify({
-        id: 'demo', title: 'Demo', summary: 's', guide: 'GUIDE.md',
+        id: 'demo', title: 'Demo', summary: 's', end: 'The end.',
         repo: { dir: 'repo', folder: 'demo', author: { name: 'A', email: 'a@example.com' }, date: '2026-01-01T00:00:00Z', message: 'm', branches: [] },
         levels,
       }));
@@ -93,6 +91,17 @@ describe('the bundled workshops', () => {
     expect(write([{ id: 'a', title: 'A', prompt: [{ name: 'One', file: 'one.md' }, { name: 'one', file: 'two.md' }] }])).toThrow(/share a name/);
     expect(write([{ id: 'a', title: 'A', prompt: 'a.md', learn: { about: '', months: 0 } }])).toThrow(/learn brief/);
     expect(write([{ id: 'a', title: 'A', prompt: 'a.md', learn: { about: 'x', months: 999 } }])).toThrow(/learn brief/);
+    // Stages: a known kind, the text it needs, known placeholders, and what their kind needs of the level.
+    const stage = (st: Record<string, unknown>) => write([{ id: 'a', title: 'A', prompt: 'a.md', stages: [st] }]);
+    expect(write([{ id: 'a', title: 'A', prompt: 'a.md', stages: [] }])).toThrow(/no stages/);
+    expect(stage({ id: 's', kind: 'dance', title: 'S', text: { done: 'd' } })).toThrow(/unknown kind/);
+    expect(stage({ id: 's', kind: 'teach', title: 'S', text: { done: 'd' } })).toThrow(/ready and running/);
+    expect(stage({ id: 's', kind: 'repo', title: 'S', text: { done: 'In {{nowhere}}.' } })).toThrow(/unknown placeholder \{\{nowhere\}\}/);
+    expect(stage({ id: 's', kind: 'review-context', title: 'S', text: { ready: 'r', running: 'r', done: 'd' } })).toThrow(/needs its level's review/);
+    expect(stage({ id: 's', kind: 'learn', title: 'S', text: { ready: 'r', running: 'r', done: 'd' } })).toThrow(/learn brief/);
+    expect(write([{ id: 'a', title: 'A', prompt: 'a.md', stages: [...REPO_STAGE, ...REPO_STAGE] }])).toThrow(/share an id/);
+    expect(stage({ id: 's', kind: 'repo', title: 'S', text: { done: 'In {{repo}}.' }, labels: { next: 'Go', other: 'x' } })().levels[0].stages[0])
+      .toEqual({ id: 's', kind: 'repo', title: 'S', text: { done: 'In {{repo}}.' }, labels: { next: 'Go' } });
   });
 
   it('builds the demo: main with the bug and MEKO.md, the teammate\'s fix on its branch, and no gotchas in the repo', async () => {
@@ -127,5 +136,48 @@ describe('the bundled workshops', () => {
     };
     expect(scoreAfterNewGame(game('main'))).toBe(1);
     expect(scoreAfterNewGame(game('demo/score-fix'))).toBe(0);
+  });
+});
+
+describe("the tour's pure parts", () => {
+  it('says tokens and credits short', () => {
+    expect(tokensText({ tokensIn: 41234, credits: 0 })).toBe('41.2k tokens in');
+    expect(tokensText({ tokensIn: 999, credits: 0 })).toBe('999 tokens in');
+    expect(tokensText({ tokensIn: 2_500_000, credits: 0 })).toBe('2.5M tokens in');
+    expect(tokensText({ tokensIn: 0, credits: 3.456 })).toBe('3.46 credits');
+    expect(sideText(null)).toBe('—');
+    expect(sideText({ kept: 1, caught: 1, gotchas: ['MG-2'], tokensIn: 1000, credits: 0 })).toBe('1 issue');
+  });
+
+  it("gives the scoreboard's difference: what Meko caught", () => {
+    const side = (caught: number) => ({ kept: 2, caught, gotchas: caught ? ['MG-2'] : [], tokensIn: 40000, credits: 0 });
+    expect(scoreDifference(side(1))).toBe('Caught with Meko: MG-2');
+    expect(scoreDifference(side(0))).toBe('Nothing caught with Meko this time');
+  });
+
+  it('fills a stage\'s text, leaving a placeholder with no value as it is', () => {
+    expect(fillText(' Found {{cold.kept}} in {{repo}}. {{failure}} ', { 'cold.kept': '2 issues', repo: '~/code/kode-demo' })).toBe('Found 2 issues in ~/code/kode-demo. {{failure}}');
+  });
+
+  it('plays only real files inside the demo, and puts its scripts and stylesheets inline', () => {
+    const root = join(tmp(), 'demo');
+    mkdirSync(join(root, 'src'), { recursive: true });
+    mkdirSync(join(root, '.git'));
+    writeFileSync(join(root, 'index.html'), '<link rel="stylesheet" href="style.css">\n<script src="src/game.js"></script>\n<script src="https://cdn.example.com/x.js"></script>\n<script src="../outside.js"></script>');
+    writeFileSync(join(root, 'style.css'), 'body { color: red }');
+    writeFileSync(join(root, 'src', 'game.js'), 'var Game = 1; // </script> stays inside');
+    writeFileSync(join(root, '.git', 'config'), 'secret');
+    writeFileSync(join(root, '..', 'outside.js'), 'outside');
+    expect(insideRoot(root, 'index.html')).toBeTruthy();
+    for (const bad of ['../outside.js', '.git/config', 'src/../../outside.js', 'missing.js', 'src', '']) expect(insideRoot(root, bad), bad).toBeNull();
+    const html = inlineAssets(readFileSync(join(root, 'index.html'), 'utf8'), root, root);
+    expect(html).toContain('<style>\nbody { color: red }\n</style>');
+    expect(html).toContain('<script>\nvar Game = 1; // <\\/script> stays inside\n</script>');
+    // Another site's script, and one outside the demo, are left as they are.
+    expect(html).toContain('<script src="https://cdn.example.com/x.js"></script>');
+    expect(html).toContain('<script src="../outside.js"></script>');
+    // The workshop's line goes in a bar right after <body>, escaped.
+    expect(withBar('<html><body class="x"><main></main></body></html>', 'Go back to <Kode> & play')).toMatch(/^<html><body class="x"><div role="note"[^>]*>Go back to &lt;Kode&gt; &amp; play<\/div><main>/);
+    expect(withBar('<main></main>', null)).toBe('<main></main>');
   });
 });

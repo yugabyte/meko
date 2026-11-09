@@ -136,6 +136,14 @@ test("an empty Open list says what will show up", async () => {
   expect(text()).toContain("Nothing Meko couldn't answer");
 });
 
+test("a link to /datapacks/<id>/gaps/taught opens the Taught questions", async () => {
+  expect(parseRoute(`/datapacks/${ID}/gaps/taught`)).toEqual({ datapackId: ID, tab: "gaps", itemId: "taught" });
+  serve({ [`${LIST}taught`]: () => ({ data: page([gap("which rules have no test", { state: "taught" })]) }) });
+  await render(<ContextGapsPage datapack={DATAPACK} routeFilter="taught" />);
+  expect(calls.map((c) => c.url)).toEqual([`/api/v1/datapacks/${ID}/questions?state=taught`]);
+  expect(text()).toContain("which rules have no test");
+});
+
 test("Dismiss marks the question and reloads; Restore sends null", async () => {
   let dismissed = false;
   serve({
