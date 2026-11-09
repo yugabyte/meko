@@ -288,8 +288,6 @@ unpack() {
   mkdir -p "$app" && rm -rf "$staging" && mkdir -p "$staging" || return 1
   tar -xzf "$tmp/$tarball" -C "$staging" || return 1
   [ -x "$staging/meko-$version/bin/meko" ] || return 2
-  # A tarball downloaded in a browser would carry macOS's quarantine flag; curl doesn't add it.
-  if [ "$platform" = darwin ]; then xattr -dr com.apple.quarantine "$staging" 2>/dev/null || true; fi
   rm -rf "$dest.old" || return 1
   if [ -e "$dest" ]; then mv "$dest" "$dest.old" || return 1; fi
   # --reinstall unpacks over the folder app/current points to: put it back if the new one fails.

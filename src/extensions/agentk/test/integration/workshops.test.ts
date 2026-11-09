@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { all, get, kvGet, run } from '../../src/server/db.js';
 import { NO_PR_IN_WORKSHOP } from '../../src/server/lifecycle.js';
+import { WORKSHOPS_SOURCE, WorkshopService } from '../../src/server/workshops.js';
 import { buildServer } from '../../src/server/server.js';
 import { parseMekoMd } from '../../src/shared/mekomd.js';
 import { AGENTK_TOUR, type TourActionId, type TourState } from '../../src/shared/types.js';
@@ -335,14 +336,22 @@ describe('the Kode tour (a bundled workshop Kode runs itself; real session host 
     await expect(act(tour().stage, 'next')).rejects.toMatchObject({ status: 409 });
   });
 
-  it("deletes the datapacks it made when the demo can't be built, and opens no project", async () => {
+  it("refuses a Clone into it can't use before making datapacks, and deletes the ones it made when the demo can't be built", async () => {
     uuids();
     const blocked = join(env.home, 'not-a-folder');
     writeFileSync(blocked, '');
-    env.core.updateConfig((c) => {
-      c.repos.cloneInto = blocked;
-    });
-    await expect(env.core.workshops.start(AGENTK_TOUR)).rejects.toMatchObject({ status: 500 });
+    for (const cloneInto of [blocked, '\\']) {
+      env.core.config.repos.cloneInto = cloneInto;
+      await expect(env.core.workshops.start(AGENTK_TOUR)).rejects.toMatchObject({ status: 400, message: expect.stringContaining('Change Clone into in Settings') });
+    }
+    expect(env.meko.calls.filter((c) => c.name === 'createDatapack')).toEqual([]);
+    // The folder is fine, but the demo can't be built: its branch's patch doesn't apply.
+    env.core.config.repos.cloneInto = join(env.home, 'code');
+    const broken = join(env.home, 'workshops');
+    cpSync(WORKSHOPS_SOURCE, broken, { recursive: true });
+    writeFileSync(join(broken, AGENTK_TOUR, 'branches', 'demo-score-fix.patch'), 'not a patch\n');
+    await expect(new WorkshopService(env.core, broken).start(AGENTK_TOUR)).rejects.toMatchObject({ status: 500 });
+    expect(existsSync(join(env.home, 'code', 'kode-demo'))).toBe(false);
     expect(env.meko.calls.filter((c) => c.name === 'deleteDatapack').map((c) => c.args[0]).sort()).toEqual([DEDICATED_ID, GOTCHAS_ID].sort());
     expect(env.core.workshops.list()[0].projectId).toBeNull();
   });

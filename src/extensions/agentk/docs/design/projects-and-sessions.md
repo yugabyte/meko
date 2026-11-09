@@ -46,7 +46,7 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
 [repos]
 roots = ["~/code"]        # folders the Open project dialog lists
 depth = 1                 # 1 = only direct children
-clone_into = "~/code"     # where "Clone from URL" and "New repo" put new repos
+clone_into = "~/code"     # where "Clone from URL", "New repo" and the Kode tour's demo go
 
 [worktrees]
 idle_per_repo = 3         # idle worktrees each repo keeps for its next session (0 to 20; 0 removes them)
@@ -312,7 +312,7 @@ writes its fields (repo folders, scan depth, clone folder, idle worktrees per re
 keep an unused one, server name, resolving merge conflicts) there too. An `[update]` table is
 ignored, with a warning, and goes at the next save: Meko updates Kode, by its own `[update]`. The server reads the file at
 start, so an edit made while it runs takes effect after a restart, and a save from Settings meanwhile writes over it. Per-project settings, sessions and everything else live in `state.db`. Only values that
-differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. An older
+differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. The repo folders and the clone folder must be full paths (`/…`, `~` or `~/…`): anything else would be read from the server's working folder, which nothing sets and an update can delete. The installer asks again for one that isn't, Settings refuses it, and on load a repo folder that isn't is dropped with a warning (`~/code` if none is left, or the list is empty) and a clone folder that isn't becomes the first repo folder. An older
 install's `[server] bind` and `port` and `[tls]` stay in the file for Meko's handoff
 ([security.md](security.md)), and nothing else reads them. The Meko
 URL and token are Meko's: the Meko running on this computer's own, linked to Meko Cloud or not

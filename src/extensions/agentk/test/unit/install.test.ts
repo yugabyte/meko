@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, sta
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makePrompter, opensBrowser, reposFolder, purgeHome, removeDb, serviceFailure, sessionWorktrees, welcomeTour } from '../../src/server/install.js';
+import { askReposFolder, makePrompter, opensBrowser, reposFolder, purgeHome, removeDb, serviceFailure, sessionWorktrees, welcomeTour } from '../../src/server/install.js';
 import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { ensurePrivateDir, parseDfMountPoint, parseMountType } from '../../src/server/fstype.js';
 import { pad } from '../../src/server/tty.js';
@@ -235,6 +235,21 @@ describe('makePrompter', () => {
     const never = () => { throw new Error('opened a readline'); };
     expect(await makePrompter(true, false, never).ask('Repos folder', '~/code')).toBe('~/code');
     expect(await makePrompter(false, true, never).ask('Repos folder', '~/code')).toBe('~/code');
+  });
+});
+
+describe('askReposFolder', () => {
+  it('asks again until the answer is a full path, and refuses a --repos-root that isn\'t one', async () => {
+    const answers = ['\\', 'code', ' ~/src '];
+    const asked: string[] = [];
+    const ask = async (q: string, def: string) => {
+      asked.push(`${q} [${def}]`);
+      return answers.shift()!.trim() || def;
+    };
+    expect(await askReposFolder(ask, '~/code')).toBe('~/src');
+    expect(asked).toHaveLength(3);
+    expect(await askReposFolder(ask, '~/code', '/srv/repos')).toBe('/srv/repos');
+    await expect(askReposFolder(ask, '~/code', '\\')).rejects.toThrow('--repos-root must be a full path');
   });
 });
 

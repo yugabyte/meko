@@ -27,6 +27,7 @@ import type { MekoDatapackRow } from './meko.js';
 import { MekoApiError, asGrant, routeMissing, type MekoShareLinkChange, type RedeemedShareLink, type ShareLinkRow } from './mekoapi.js';
 import { globalReview, resolveMekoWebUrl } from './config.js';
 import { setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
+import { isFullPath } from './paths.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
@@ -603,8 +604,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.reposRoots !== undefined && (!Array.isArray(b.reposRoots) || !b.reposRoots.length || b.reposRoots.some((r) => typeof r !== 'string' || !r.trim()))) {
       throw new HttpError(400, 'List at least one repos folder.');
     }
+    const relative = (b.reposRoots ?? []).find((r) => !isFullPath(r.trim()));
+    if (relative !== undefined) throw new HttpError(400, `Repo folders must be full paths, starting with / or ~/: ${relative.trim()} isn't one.`);
     if (b.reposDepth !== undefined && (!Number.isInteger(b.reposDepth) || b.reposDepth < 1 || b.reposDepth > 4)) throw new HttpError(400, 'Scan depth must be between 1 and 4.');
     if (b.cloneInto !== undefined && typeof b.cloneInto !== 'string') throw new HttpError(400, 'The clone folder must be a path.');
+    if (b.cloneInto?.trim() && !isFullPath(b.cloneInto.trim())) throw new HttpError(400, `Clone into must be a full path, starting with / or ~/: ${b.cloneInto.trim()} isn't one.`);
     if (b.idleWorktreesPerRepo !== undefined && (!Number.isInteger(b.idleWorktreesPerRepo) || b.idleWorktreesPerRepo < 0 || b.idleWorktreesPerRepo > MAX_IDLE_PER_REPO)) {
       throw new HttpError(400, `Idle worktrees per repo must be a whole number from 0 to ${MAX_IDLE_PER_REPO}.`);
     }

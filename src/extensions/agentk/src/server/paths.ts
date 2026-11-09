@@ -186,6 +186,15 @@ function sockPath(home: string, name: 'hook' | 'host' | 'web'): string {
   return join(tmpdir(), `agent-k-local-${uid}`, name === 'hook' ? `${tag}.sock` : `${tag}-${name}.sock`);
 }
 
+/**
+ * Whether a folder setting is a full path (`/…`, `~` or `~/…`; not `~alice/…`). Anything else would be read from
+ * the server's working folder, which nothing sets and an update can delete, so the repo folders
+ * and Clone into must be full paths.
+ */
+export function isFullPath(p: string): boolean {
+  return p.startsWith('/') || p === '~' || p.startsWith('~/');
+}
+
 export function expandHome(p: string): string {
   if (p === '~') return homedir();
   if (p.startsWith('~/')) return join(homedir(), p.slice(2));

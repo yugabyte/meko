@@ -703,9 +703,9 @@ export class Core extends EventEmitter {
       // Kiro's plan is read once its version is known (whether it's available), unless stopping began meanwhile.
       if (h.id === 'kiro' && this.timersOn) void ready.then(() => (this.stopped ? undefined : this.kiroPlan.refresh()));
     }
+    // No folder trust for the worktrees folder: Claude Code ignores a trusted parent for a git
+    // worktree, so a launch trusts the worktree's repo instead (the adapter's beforeLaunch).
     mkdirSync(this.paths.worktrees, { recursive: true });
-    // So new worktrees skip a CLI's folder-trust prompt (Claude Code's).
-    for (const h of this.harnesses.list()) await h.trustFolder?.(this.paths.worktrees, this.log);
     // In the background: it may remove large build trees, and every change it makes to an idle
     // worktree is skipped once a session has claimed it.
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -110,9 +110,10 @@ describe('the bundled workshops', () => {
     const dest = freeFolder(parent, b.repo.folder);
     const dps = [{ name: 'adlc/repo/kode-demo/gotchas', id: '0f6b1c1e-0000-4000-8000-00000000a001', about: 'gotchas' }];
     await buildDemoRepo(b, dest, demoMekoMd(dps));
-    // A second one goes beside it.
+    // A second one goes beside it, past a link to nowhere too.
     mkdirSync(join(parent, `${b.repo.folder}-2`));
-    expect(freeFolder(parent, b.repo.folder)).toBe(join(parent, `${b.repo.folder}-3`));
+    symlinkSync(join(parent, 'nowhere'), join(parent, `${b.repo.folder}-3`));
+    expect(freeFolder(parent, b.repo.folder)).toBe(join(parent, `${b.repo.folder}-4`));
 
     expect(git(dest, 'branch', '--format=%(refname:short)').split('\n').sort()).toEqual(['demo/score-fix', 'main']);
     expect(git(dest, 'status', '--porcelain')).toBe('');

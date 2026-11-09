@@ -489,7 +489,7 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
             {...saveOn('reposDepth', () => setDepth(String(clampDepth(depth))))}
           />
         </Field>
-        <Field label="Clone into" hint="Where “Clone from URL” puts new repos.">
+        <Field label="Clone into" hint="Where new repos and the Kode tour’s demo go.">
           <input
             id="set-clone"
             className="input mono"

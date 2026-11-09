@@ -110,10 +110,10 @@ export interface Harness {
   offersMod?(paths: Paths, cfg: Config): boolean;
   /**
    * Marks a folder as trusted for a CLI that asks before working in one (Claude Code's folder trust:
-   * the repo when a project opens, the worktrees folder at start, the repo again when the dialog
-   * shows). `exact`: only an entry for `dir` itself counts, not one for a parent. Never throws.
+   * the repo when a project opens, the repo again when the dialog shows). Only an entry for `dir`
+   * itself counts, never one for a parent. Never throws.
    */
-  trustFolder?(dir: string, log: Logger, exact?: boolean): Promise<void>;
+  trustFolder?(dir: string, log: Logger): Promise<void>;
   /** Text its folder-trust dialog shows on screen; the CLI fires no hooks until it's answered. */
   trustPrompt?: RegExp;
   /** The launcher for one launch. */
