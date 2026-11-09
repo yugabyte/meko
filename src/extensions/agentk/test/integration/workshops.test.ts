@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { all, get, kvGet, run } from '../../src/server/db.js';
@@ -335,13 +335,18 @@ describe('the Kode tour (a bundled workshop Kode runs itself; real session host 
     await expect(act(tour().stage, 'next')).rejects.toMatchObject({ status: 409 });
   });
 
-  it("deletes the datapacks it made when the demo can't be built, and opens no project", async () => {
+  it("refuses a Clone into it can't use before making datapacks, and deletes the ones it made when the demo can't be built", async () => {
     uuids();
     const blocked = join(env.home, 'not-a-folder');
     writeFileSync(blocked, '');
-    env.core.updateConfig((c) => {
-      c.repos.cloneInto = blocked;
-    });
+    for (const cloneInto of [blocked, '\\']) {
+      env.core.config.repos.cloneInto = cloneInto;
+      await expect(env.core.workshops.start(AGENTK_TOUR)).rejects.toMatchObject({ status: 400, message: expect.stringContaining('Change Clone into in Settings') });
+    }
+    expect(env.meko.calls.filter((c) => c.name === 'createDatapack')).toEqual([]);
+    // The folder is fine, but the demo's own folder can't be made: a link to nowhere is there.
+    env.core.config.repos.cloneInto = join(env.home, 'code');
+    symlinkSync(join(env.home, 'nowhere'), join(env.home, 'code', 'kode-demo'));
     await expect(env.core.workshops.start(AGENTK_TOUR)).rejects.toMatchObject({ status: 500 });
     expect(env.meko.calls.filter((c) => c.name === 'deleteDatapack').map((c) => c.args[0]).sort()).toEqual([DEDICATED_ID, GOTCHAS_ID].sort());
     expect(env.core.workshops.list()[0].projectId).toBeNull();

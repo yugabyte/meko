@@ -17,7 +17,7 @@ import {
   MekoSetupError, ensureMekoSetup, latestMekoSetup, mekoClaudeGaps, readClaudeMeko, runMekoSetup,
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
-import { expandHome, getPaths, oldHome, tildify, type Paths } from './paths.js';
+import { expandHome, getPaths, isFullPath, oldHome, tildify, type Paths } from './paths.js';
 import { dropOldNames, hostServices, removeServiceLauncher, renderServiceFiles, samePath, ServiceError, SERVICES, writeServiceLauncher, type ServiceManager } from './service.js';
 import { SessionHost } from './hostclient.js';
 import { COMMAND, commandLinks } from './cmdlink.js';
@@ -86,6 +86,23 @@ export function makePrompter(
 
 // ---------------------------------------------------------------------------
 // Steps
+
+/**
+ * The repos folder: `--repos-root`, else asked until the answer is a full path (`/…`, `~` or `~/…`). A
+ * relative one would be read from the server's working folder, which isn't the installer's.
+ */
+export async function askReposFolder(ask: Prompter, def: string, given?: string): Promise<string> {
+  const full = (p: string) => isFullPath(p.trim());
+  if (given !== undefined) {
+    if (!full(given)) throw new InstallError(`--repos-root must be a full path, starting with / or ~/ (got ${given}).`);
+    return given.trim();
+  }
+  for (;;) {
+    const a = await ask('Repos folder', def);
+    if (full(a)) return a.trim();
+    ui.warn('Repos folder', `${a} isn't a full path: give one starting with / or ~/, such as ~/code.`);
+  }
+}
 
 /** Pick a local-disk location for state.db when the default is on a network filesystem. */
 function localDbLocation(): string {
@@ -339,7 +356,7 @@ export async function runInstall(args: string[]): Promise<void> {
     // 2. Basics
     ui.section('Setup');
     if (interactive && process.stdin.isTTY) ui.note('Press Enter to keep the value in brackets.');
-    const reposRoot = values['repos-root'] ?? (await ask('Repos folder', cfg.repos.roots[0] ?? '~/code'));
+    const reposRoot = await askReposFolder(ask, cfg.repos.roots[0] ?? '~/code', values['repos-root']);
     cfg.repos.roots = fresh ? [reposRoot] : [reposRoot, ...cfg.repos.roots.filter((r) => r !== reposRoot)];
     if (fresh) cfg.repos.cloneInto = reposRoot;
     if (!(interactive && process.stdin.isTTY)) ui.row('Repos folder', reposRoot);

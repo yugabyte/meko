@@ -63,6 +63,21 @@ describe('HTTP API: origin checks, projects', () => {
     expect((await state()).serverName).toBe(shortHost(hostname()));
   });
 
+  // Anything else would be read from the server's working folder, which nothing sets.
+  it.each([
+    ['cloneInto', '\\', '~/src', "Clone into must be a full path, starting with / or ~/: \\ isn't one."],
+    ['cloneInto', 'code', '/srv/repos', "Clone into must be a full path, starting with / or ~/: code isn't one."],
+    ['reposRoots', ['~/code', '~alice/code'], ['~/src', '/srv/repos'], "Repo folders must be full paths, starting with / or ~/: ~alice/code isn't one."],
+  ] as const)('refuses %s %j, which isn\'t a full path, and saves a full one', async (key, bad, good, error) => {
+    const put = (value: unknown) => app.inject({ method: 'PUT', url: '/api/settings', payload: { [key]: value } });
+    const before = structuredClone(env.core.config.repos);
+    const res = await put(bad);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe(error);
+    expect(env.core.config.repos).toEqual(before);
+    expect((await put(good)).json()[key]).toEqual(good);
+  });
+
   it('stops idle agents after 24 hours until Settings changes it, as a whole number of hours from 0 to 720', async () => {
     const put = (idleStopHours: unknown) => app.inject({ method: 'PUT', url: '/api/settings', payload: { idleStopHours } });
     expect((await app.inject({ url: '/api/settings' })).json().idleStopHours).toBe(24);

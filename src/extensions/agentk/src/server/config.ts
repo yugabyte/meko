@@ -8,7 +8,7 @@ import {
   DEFAULT_CHECK, DEFAULT_DEPTH, DEFAULT_ROUNDS, DEFAULT_STRATEGY, MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type ReviewSettings,
 } from '../shared/codereview.js';
 import { localMeko, mekoApiBase } from './mekolocal.js';
-import { expandHome, type Paths } from './paths.js';
+import { expandHome, isFullPath, type Paths } from './paths.js';
 
 export interface Config {
   /**
@@ -249,6 +249,24 @@ function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
   if (!Number.isInteger(hours) || hours < 0 || hours > MAX_IDLE_STOP_HOURS) {
     warn(`config.toml: sessions.idle_stop_hours should be a whole number from 0 to ${MAX_IDLE_STOP_HOURS}; using ${DEFAULT_CONFIG.sessions.idleStopHours}`);
     cfg.sessions.idleStopHours = DEFAULT_CONFIG.sessions.idleStopHours;
+  }
+  // A folder that isn't a full path (a typo such as `\` at the install's prompt) would be read from
+  // the server's working folder: it's dropped (`~/code` when no repo folder is left), and Clone into
+  // falls back to the first repo folder. The folders are kept trimmed, as checked.
+  const given = cfg.repos.roots.map((r) => r.trim());
+  const roots = given.filter(isFullPath);
+  if (roots.length < given.length) {
+    warn(`config.toml: repos.roots should be full paths, starting with / or ~/; ignoring ${given.filter((r) => !isFullPath(r)).map((r) => JSON.stringify(r)).join(', ')}`);
+  }
+  if (!roots.length) {
+    if (!given.length) warn(`config.toml: repos.roots is empty; using ${DEFAULT_CONFIG.repos.roots.join(', ')}`);
+    roots.push(...DEFAULT_CONFIG.repos.roots);
+  }
+  cfg.repos.roots = roots;
+  cfg.repos.cloneInto = cfg.repos.cloneInto.trim();
+  if (!isFullPath(cfg.repos.cloneInto)) {
+    warn(`config.toml: repos.clone_into should be a full path, starting with / or ~/; using ${roots[0]}`);
+    cfg.repos.cloneInto = roots[0];
   }
   if (!isHarnessId(cfg.agents.default)) {
     warn(`config.toml: agents.default should be one of ${HARNESS_IDS.join(', ')}; using ${DEFAULT_HARNESS}`);
