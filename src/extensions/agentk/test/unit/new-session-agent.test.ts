@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
 import type { CreateSessionRequest, HarnessMekoState, HarnessStatus, MekoStatus, Project, Settings, UpdateStatus } from '../../src/shared/types.js';
-import { NewSessionDialog, reviewSummary } from '../../src/web/components/NewSessionDialog.js';
+import { NewSessionDialog, reviewSummary, startName, typedName } from '../../src/web/components/NewSessionDialog.js';
 import { AgentSettings, CodeReviewSettings, HarnessBar, SettingsDialog } from '../../src/web/components/SettingsDialog.js';
 import { autoConnectToMeko, connectToMeko, setUpWithMeko } from '../../src/web/mekoagents.js';
 import { defaultAgentChoice } from '../../src/web/util.js';
@@ -99,21 +99,39 @@ describe("the New session dialog's Learn the project", () => {
     picked: /id="ns-start-learn"[^>]*aria-checked="true"/.test(html),
     fields: html.includes('id="ns-learn-about"') && !html.includes('id="ns-prompt"'),
     offer: html.includes('id="ns-learn-offer"'),
+    name: /<input[^>]*id="ns-name"[^>]*value="([^"]*)"/.exec(html)?.[1],
   });
-  const retryLearn: CreateSessionRequest = { name: 'Learn the project', learn: { about: 'The billing service.', where: 'services/billing/', months: 12 } };
+  const retryLearn: CreateSessionRequest = { name: 'Learn billing', learn: { about: 'The billing service.', where: 'services/billing/', months: 12 } };
   const retryDesign: CreateSessionRequest = { name: 'x', start: 'design', prompt: 'Fix it' };
   it.each([
-    ['is picked, with its fields and the empty-datapack line, for a project just opened on an empty datapack', dedicated, true, true, undefined, { pill: true, picked: true, fields: true, offer: true }],
-    ["isn't offered in a plain New session, even with Meko on and a dedicated datapack", dedicated, true, false, undefined, { pill: false, picked: false, fields: false, offer: false }],
-    ['is offered and picked again to retry a failed learn start', dedicated, true, false, retryLearn, { pill: true, picked: true, fields: true, offer: false }],
-    ["isn't offered to retry a failed start at Design", dedicated, true, false, retryDesign, { pill: false, picked: false, fields: false, offer: false }],
-    ["isn't offered without a dedicated datapack", { ...project, datapacks: [] } as unknown as Project, true, true, undefined, { pill: false, picked: false, fields: false, offer: false }],
-    ["isn't offered with Meko off", dedicated, false, true, undefined, { pill: false, picked: false, fields: false, offer: false }],
+    ['is picked, with its fields, its name and the empty-datapack line, for a project just opened on an empty datapack', dedicated, true, true, undefined, { pill: true, picked: true, fields: true, offer: true, name: 'Learn the project' }],
+    ["isn't offered in a plain New session, even with Meko on and a dedicated datapack", dedicated, true, false, undefined, { pill: false, picked: false, fields: false, offer: false, name: '' }],
+    ['is offered and picked again, with its typed name, to retry a failed learn start', dedicated, true, false, retryLearn, { pill: true, picked: true, fields: true, offer: false, name: 'Learn billing' }],
+    ["isn't offered to retry a failed start at Design", dedicated, true, false, retryDesign, { pill: false, picked: false, fields: false, offer: false, name: 'x' }],
+    ["isn't offered without a dedicated datapack", { ...project, datapacks: [] } as unknown as Project, true, true, undefined, { pill: false, picked: false, fields: false, offer: false, name: '' }],
+    ["isn't offered with Meko off", dedicated, false, true, undefined, { pill: false, picked: false, fields: false, offer: false, name: '' }],
   ])('%s', (_, p, mekoOn, learnFirst, initial, want) => {
     const html = learnHtml(p, mekoOn, learnFirst, initial);
     expect(shown(html)).toEqual(want);
     // A retry keeps what it asked for.
     if (initial?.learn) expect([html.includes('The billing service.'), html.includes('services/billing/')]).toEqual([true, true]);
+  });
+
+  // What picking a start does to the Name field, which a static render can't click.
+  it.each([
+    ["replaces a PR's name the user didn't type", 'Review #21 Fix the build', false, true, 'Learn the project'],
+    ["gives that PR's name back when another start is picked", 'Review #21 Fix the build', false, false, 'Review #21 Fix the build'],
+    ['leaves an untouched name empty when Learn the project goes, picked away or no longer offered', '', false, false, ''],
+    ['keeps a typed name, Learn the project too, when another start is picked', 'Learn the project', true, false, 'Learn the project'],
+  ])('%s', (_, name, edited, learn, want) => {
+    expect(startName(name, edited, learn)).toBe(want);
+  });
+
+  it('leaves a blank learn start\'s name untyped on Try again, so Design or Code clears it', () => {
+    const blank: CreateSessionRequest = { ...retryLearn, name: 'Learn the project' };
+    expect(typedName(blank)).toBe('');
+    expect(startName(typedName(blank), !!typedName(blank), false)).toBe('');
+    expect(shown(learnHtml(dedicated, true, false, blank)).name).toBe('Learn the project');
   });
 });
 
