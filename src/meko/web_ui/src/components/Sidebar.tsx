@@ -14,6 +14,7 @@ import type { Theme } from "../lib/theme";
 import { useUpdateAvailable } from "../lib/update";
 import type { Datapack } from "../lib/types";
 import { AgentsLink } from "./AgentsLink";
+import { DiscordLink } from "./DiscordLink";
 import { DatapackDialog } from "./DatapackDialog";
 import { ExtensionsLink } from "./ExtensionsLink";
 import { ProjectsLink } from "./ProjectsLink";
@@ -162,6 +163,10 @@ export function Sidebar({
             </div>
           )}
         </nav>
+
+        <div className="px-2 pb-2">
+          <DiscordLink />
+        </div>
 
         <div className="flex items-center justify-between border-t px-4 py-3 text-xs text-muted-foreground">
           <span className="flex min-w-0 items-center gap-1.5">
