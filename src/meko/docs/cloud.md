@@ -321,6 +321,10 @@ saved as `cloud_sync.enabled`): until then the button isn't shown and the preche
 409 `CLOUD_SYNC_OFF`. Turning it on doesn't link Meko Cloud; a sync while unlinked asks for the API
 key, in Settings › Meko Cloud, before anything else.
 
+Because a sync deletes the datapack here, the web UI starts one only after the owner ticks that it
+moves to Meko Cloud and is deleted from this computer, and types the datapack's name, as deleting a
+datapack asks.
+
 1. **Precheck**: Meko measures the datapack (`store.SyncSize`: memories, collective ones too; the
    turns Cloud would make searchable, none when it's opted out of conversation search; its files'
    bytes, all and the largest) and asks Meko Cloud whether that fits the account's plan. The limits

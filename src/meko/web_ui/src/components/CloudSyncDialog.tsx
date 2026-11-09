@@ -1,6 +1,8 @@
 // Moves this datapack to the linked Meko Cloud: first whether it fits the plan, each limit shown,
 // then the sync, all or nothing, on a live timeline of its steps. Once it's done, the datapack is gone
 // from this computer and lives in Meko Cloud. With no Meko Cloud link yet, it asks for the API key.
+// Because the sync deletes it here, it starts only once the person ticks that they understand and
+// types the datapack's name, as deleting a datapack or a project asks.
 
 import { useEffect, useState } from "react";
 import { Check, Cloud, ExternalLink, KeyRound, X } from "lucide-react";
@@ -12,7 +14,7 @@ import type { Datapack, SyncCheck, SyncRun } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { Dialog } from "./Dialog";
 import { SyncTimeline } from "./SyncTimeline";
-import { Button, ErrorNote, Spinner } from "./ui";
+import { Button, ErrorNote, Input, Spinner } from "./ui";
 
 const POLL_MS = 1000;
 
@@ -38,6 +40,8 @@ export function CloudSyncDialog({
   const [run, setRun] = useState<SyncRun>();
   const [error, setError] = useState<Error>();
   const [now, setNow] = useState(() => Date.now());
+  const [agreed, setAgreed] = useState(false);
+  const [typed, setTyped] = useState("");
   const syncing = run?.state === "syncing";
 
   // Opened again while it syncs (closing doesn't stop it): pick the sync up where it is.
@@ -79,6 +83,9 @@ export function CloudSyncDialog({
   const checks = run?.precheck?.checks ?? precheck.data?.checks ?? [];
   const fits = (run?.precheck ?? precheck.data)?.ok ?? false;
   const name = datapack.datapack_name;
+  // Asked once it fits and before it starts; the sync button waits for both answers.
+  const confirming = fits && !run && !!precheck.data;
+  const confirmed = agreed && typed === name;
   // Meko Cloud isn't linked: the API key comes first, in Settings › Meko Cloud.
   const needsKey = precheck.error instanceof ApiError && precheck.error.code === "CLOUD_NOT_LINKED";
   const addKey = () => {
@@ -121,7 +128,7 @@ export function CloudSyncDialog({
             <Button variant="ghost" onClick={onClose}>
               {syncing ? "Close" : "Cancel"}
             </Button>
-            <Button variant="primary" disabled={!fits || !!run} onClick={start}>
+            <Button variant="primary" disabled={!confirming || !confirmed} onClick={start}>
               <Cloud className="size-4" /> Sync to Meko Cloud
             </Button>
           </>
@@ -167,6 +174,27 @@ export function CloudSyncDialog({
               It doesn't fit your Meko Cloud <b>{precheck.data.plan}</b> plan. Upgrade your plan, or delete datapacks in
               Meko Cloud, to sync it.
             </p>
+          )}
+          {confirming && (
+            <div className="space-y-3 rounded-lg border p-3">
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={agreed}
+                  onChange={(e) => setAgreed(e.target.checked)}
+                />
+                <span>
+                  I understand that <b>{name}</b> moves to Meko Cloud and is deleted from this computer.
+                </span>
+              </label>
+              <div className="space-y-1.5">
+                <p className="text-sm">
+                  Type <b>{name}</b> to confirm.
+                </p>
+                <Input value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Type the name to confirm" />
+              </div>
+            </div>
           )}
           {timeline && <SyncTimeline run={timeline} now={now} />}
           {syncing && (

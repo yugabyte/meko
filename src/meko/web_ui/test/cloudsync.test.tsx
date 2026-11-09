@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The Sync to Meko Cloud dialog against a faked /api/v1: a datapack that doesn't fit the plan can't
-// be synced and says which limit it's over; one that fits is synced, then offers Meko Cloud's link;
-// with no Meko Cloud link, it asks for the API key instead.
+// be synced and says which limit it's over; one that fits syncs only once the box is ticked and its
+// name typed, then offers Meko Cloud's link; with no Meko Cloud link, it asks for the API key instead.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -48,6 +48,18 @@ async function render(onSynced = () => {}) {
 
 const button = (text: string) => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes(text));
 
+// Ticks "I understand" and types name, as a person confirms the sync.
+async function confirm({ tick = true, name = "invoices" } = {}) {
+  const box = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  if (tick && !box.checked) await act(async () => box.click());
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Type the name to confirm"]')!;
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => {
+    setValue.call(input, name);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 afterEach(() => {
   if (root) act(() => root!.unmount());
   root = undefined;
@@ -71,12 +83,31 @@ test("one that fits is synced, then offers Meko Cloud's link", async () => {
   const onSynced = vi.fn();
   await render(onSynced);
   expect(document.body.textContent).toContain("no limit");
+  await confirm();
   await act(async () => button("Sync to Meko Cloud")!.click());
   expect(sent).toContain(`POST /api/v1/datapacks/${ID}/cloud-sync`);
   expect(document.body.textContent).toContain("invoices is in Meko Cloud");
   expect(document.querySelector<HTMLAnchorElement>('a[href="https://cloud.example/datapacks/x"]')).not.toBeNull();
   await act(async () => button("Done")!.click());
   expect(onSynced).toHaveBeenCalled();
+});
+
+test("it syncs only once the box is ticked and the datapack's exact name typed", async () => {
+  serve({ ok: true, plan: "pro", checks: [{ check: "datapacks", used: 3, adding: 1, limit: -1, ok: true }] });
+  await render();
+  expect(document.body.textContent).toContain("is deleted from this computer");
+  const sync = () => button("Sync to Meko Cloud")!;
+  expect(sync().disabled).toBe(true);
+  await confirm({ tick: true, name: "" });
+  expect(sync().disabled).toBe(true); // ticked, nothing typed
+  await confirm({ tick: true, name: "Invoices" });
+  expect(sync().disabled).toBe(true); // a name that isn't exactly its own
+  await act(async () => document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  await confirm({ tick: false, name: "invoices" });
+  expect(sync().disabled).toBe(true); // typed, box unticked
+  await confirm();
+  expect(sync().disabled).toBe(false);
+  expect(sent).not.toContain(`POST /api/v1/datapacks/${ID}/cloud-sync`);
 });
 
 test("with no Meko Cloud link, it asks for the API key and syncs nothing", async () => {
@@ -106,6 +137,7 @@ test("a sync under way shows its steps, the upload's progress, and can be closed
   document.body.append(el);
   root = createRoot(el);
   await act(async () => root!.render(<CloudSyncDialog datapack={DP} onClose={onClose} onSynced={() => {}} />));
+  await confirm();
   await act(async () => button("Sync to Meko Cloud")!.click());
   const steps = document.querySelector('ol[aria-label="Sync steps"]')!;
   expect(steps.querySelector('[data-status="done"]')?.textContent).toContain("Pack it up");
