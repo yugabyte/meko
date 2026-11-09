@@ -117,7 +117,8 @@ meko extension install kode -- --agent kiro      # options after -- go to `meko 
 #     profile runs. --install-deps installs without asking, --no-install-deps never installs,
 #     and from Meko's Extensions page (--non-interactive) nothing is installed without
 #     --install-deps
-#  2. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
+#  2. asks for your repos folder (default ~/code; again until it's a full path, starting with / or ~/),
+#     and stops when there's no `meko` command: the
 #     Meko on this computer serves Kode to browsers (at /ext/kode/) and signs people in
 #  3. Meko: uses the Meko running on this computer, and stores nothing of it (no key is asked for;
 #     --meko-url and --meko-key, which Meko passes, go unused; --no-meko skips the next step) and

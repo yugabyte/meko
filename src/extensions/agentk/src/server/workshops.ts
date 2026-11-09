@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, cpSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readOverrides, type ReviewOverrides } from '../shared/codereview.js';
@@ -11,7 +11,7 @@ import { all, get, kvDelete, kvGet, kvSet, run, tx } from './db.js';
 import { commitDemoRepo, demoBranch, freeDemoBranches, recommitDemo, type GitIdent } from './git.js';
 import type { KnowledgeResult } from './knowledge.js';
 import { errMsg } from './log.js';
-import { expandHome } from './paths.js';
+import { expandHome, isFullPath } from './paths.js';
 import { HttpError, isDatapackLimit } from './projects.js';
 import { checkLearn } from './sessions.js';
 import { dedicatedDatapack, projectRow, projectRows, sessionDatapack, sessionRow, type SessionRow } from './store.js';
@@ -296,11 +296,38 @@ export function gotchasName(bundleName: string, folder: string): string {
   return bundleName.replace(/[^/]+\/gotchas$/, `${folder}/gotchas`);
 }
 
-/** `<base>`, or `<base>-2`, `<base>-3`, … if it's taken in <parent>. */
+/**
+ * `<base>`, or `<base>-2`, `<base>-3`, … if it's taken in <parent>. Anything there takes the name,
+ * a link to nowhere too: copying onto one aborts Node on macOS (cpSync's native `equivalent`).
+ */
 export function freeFolder(parent: string, base: string): string {
+  const taken = (p: string) => {
+    try {
+      lstatSync(p);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   let dest = join(parent, base);
-  for (let i = 2; existsSync(dest); i++) dest = join(parent, `${base}-${i}`);
+  for (let i = 2; taken(dest); i++) dest = join(parent, `${base}-${i}`);
   return dest;
+}
+
+/**
+ * The Clone into folder, made if missing, which the tour builds its demo in; a 400 that names the
+ * setting when it can't be used, before any datapack is made for the demo.
+ */
+export function cloneFolder(setting: string): string {
+  try {
+    if (!isFullPath(setting)) throw new Error("it isn't a full path");
+    const dir = expandHome(setting);
+    mkdirSync(dir, { recursive: true });
+    accessSync(dir, constants.W_OK);
+    return dir;
+  } catch (e) {
+    throw new HttpError(400, `Kode can't put the tour's demo in ${setting} (${errMsg(e)}). Change Clone into in Settings to a folder you can write to, such as ~/code, then start the tour again.`);
+  }
 }
 
 /** The demo's MEKO.md: the datapacks the code review reads (src/shared/mekomd.ts). */
@@ -693,7 +720,7 @@ export class WorkshopService {
     const open = this.projectOf(id);
     if (open) return { projectId: open };
     const meko = this.core.mekoStatus.configured;
-    const dest = freeFolder(expandHome(this.core.config.repos.cloneInto), b.repo.folder);
+    const dest = freeFolder(cloneFolder(this.core.config.repos.cloneInto), b.repo.folder);
     // The gotchas datapack goes first: at the plan's datapack limit, the project goes without its own.
     const gotchas = meko && b.gotchas ? await this.gotchasDatapack(gotchasName(b.gotchas.datapack, basename(dest))) : null;
     const dedicated = meko ? await this.dedicatedDatapack(b, dest) : null;

@@ -114,6 +114,25 @@ describe('config and db', () => {
     expect(warnings.join('\n')).toContain('server.port should be a number');
   });
 
+  it('drops repo folders that aren\'t full paths, with a warning, and Clone into falls back to the first one left', () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    mkdirSync(paths.home, { recursive: true });
+    writeFileSync(paths.config, '[repos]\nroots = ["\\\\", " ~/src", "/srv/repos", "code", "~alice/code"]\nclone_into = "\\\\"\n');
+    const warnings: string[] = [];
+    expect(loadConfig(paths, (m) => warnings.push(m)).repos).toMatchObject({ roots: ['~/src', '/srv/repos'], cloneInto: '~/src' });
+    expect(warnings).toEqual([
+      'config.toml: repos.roots should be full paths, starting with / or ~/; ignoring "\\\\", "code", "~alice/code"',
+      'config.toml: repos.clone_into should be a full path, starting with / or ~/; using ~/src',
+    ]);
+    // None left, or none listed: ~/code. A full path is kept trimmed, as it was checked.
+    for (const roots of ['["\\\\"]', '[]']) {
+      writeFileSync(paths.config, `[repos]\nroots = ${roots}\nclone_into = "code"\n`);
+      expect(loadConfig(paths, () => undefined).repos).toMatchObject({ roots: ['~/code'], cloneInto: '~/code' });
+    }
+    writeFileSync(paths.config, '[repos]\nclone_into = " ~ "\n');
+    expect(loadConfig(paths, () => undefined).repos.cloneInto).toBe('~');
+  });
+
   it("reads [code_review], keeping the default, with a warning, for a strategy it doesn't know or a count out of range", () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     mkdirSync(paths.home, { recursive: true });

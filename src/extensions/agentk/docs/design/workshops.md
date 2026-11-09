@@ -22,7 +22,7 @@ server as the session tools' skill is: `WORKSHOPS_SOURCE` in `src/server/worksho
 
 | File | What it holds |
 |---|---|
-| `workshop.json` | id, title, summary, the welcome card shown once before the tour begins (`welcome`: title and text), the tour's last card (`end`), the bar on top of the played game (`play`), the demo repo (`repo`: its files' folder, the folder name in the repos folder, the made-up author and date of main's one commit and its message, and each branch's patch), the gotchas (`file`, the gotchas datapack's `datapack` name and what's in it), the code review's settings (`codeReview`) and the model its review sessions and its Learn the project session start on for each agent (`reviewModels`: Sonnet on Claude Code, for speed), and the levels (id, title, what each teaches (`teaches`, over its first stage's card), what each needs (`datapack`), `prompt`: one prompt file, or a list of `{ name, file, learn }`, each session the level begins by its name; Level 2's `learn` is Learn the project's brief; and `stages`, below). `readWorkshop` checks it: the brief as a learn session's (`checkLearn`), and each stage's kind, text and placeholders (`checkStages`). |
+| `workshop.json` | id, title, summary, the welcome card shown once before the tour begins (`welcome`: title and text), the tour's last card (`end`), the bar on top of the played game (`play`), the demo repo (`repo`: its files' folder, the folder name in the clone folder (`[repos] clone_into`), the made-up author and date of main's one commit and its message, and each branch's patch), the gotchas (`file`, the gotchas datapack's `datapack` name and what's in it), the code review's settings (`codeReview`) and the model its review sessions and its Learn the project session start on for each agent (`reviewModels`: Sonnet on Claude Code, for speed), and the levels (id, title, what each teaches (`teaches`, over its first stage's card), what each needs (`datapack`), `prompt`: one prompt file, or a list of `{ name, file, learn }`, each session the level begins by its name; Level 2's `learn` is Learn the project's brief; and `stages`, below). `readWorkshop` checks it: the brief as a learn session's (`checkLearn`), and each stage's kind, text and placeholders (`checkStages`). |
 | `levels/*.md` | The prompt of each session a level's stages begin, under the session tools' `PROMPT_MAX` (8,000 characters). |
 | `repo/` | The demo's files on main: a small Snake game with no build, plain scripts (no ES modules and no `fetch`, so `index.html` opens from disk, where browsers refuse both), rules in `src/game.js` (on a `Game` global, `module.exports` for `node --test`) apart from the drawing in `src/ui.js`, no dot-files (a `.gitignore` there would apply to Kode's own repo). |
 | `branches/*.patch` | A teammate's change, as `git format-patch` wrote it, by a made-up author. |
@@ -112,8 +112,11 @@ There's no measuring script: if Learn already saved the untested rules, the answ
    Then the project's dedicated datapack, named as Open project names one. At the plan's datapack
    limit the gotchas one is made and the project goes without its own; any refusal is logged and
    the tour goes on without it.
-3. The demo repo in the repos folder (`[repos] clone_into`) as `kode-demo` (`-2`, `-3` when taken):
-   the files, a MEKO.md listing those datapacks (none without Meko), one commit on main by the
+3. The demo repo in the clone folder (`[repos] clone_into`, Settings › Clone into) as `kode-demo`
+   (`-2`, `-3` when taken, by anything, a link to nowhere too: `cpSync` onto one aborts Node on
+   macOS). That folder is checked before step 2 (`cloneFolder`: a full path, made
+   if missing, and writable); one that can't be used is a 400 naming Settings › Clone into, and no
+   datapack is made. The demo repo is the files, a MEKO.md listing those datapacks (none without Meko), one commit on main by the
    bundle's made-up author at its fixed date, then each branch from main with `git am` of its
    patch, which keeps the teammate's name, message and date. Git runs without the user's config
    (`GIT_CONFIG_GLOBAL=/dev/null`, no hooks, no signing), so every install gets the same history
