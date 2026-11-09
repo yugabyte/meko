@@ -1,4 +1,4 @@
-import { accessSync, constants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, cpSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readOverrides, type ReviewOverrides } from '../shared/codereview.js';
@@ -296,10 +296,21 @@ export function gotchasName(bundleName: string, folder: string): string {
   return bundleName.replace(/[^/]+\/gotchas$/, `${folder}/gotchas`);
 }
 
-/** `<base>`, or `<base>-2`, `<base>-3`, … if it's taken in <parent>. */
+/**
+ * `<base>`, or `<base>-2`, `<base>-3`, … if it's taken in <parent>. Anything there takes the name,
+ * a link to nowhere too: copying onto one aborts Node on macOS (cpSync's native `equivalent`).
+ */
 export function freeFolder(parent: string, base: string): string {
+  const taken = (p: string) => {
+    try {
+      lstatSync(p);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   let dest = join(parent, base);
-  for (let i = 2; existsSync(dest); i++) dest = join(parent, `${base}-${i}`);
+  for (let i = 2; taken(dest); i++) dest = join(parent, `${base}-${i}`);
   return dest;
 }
 

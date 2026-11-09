@@ -113,7 +113,8 @@ There's no measuring script: if Learn already saved the untested rules, the answ
    limit the gotchas one is made and the project goes without its own; any refusal is logged and
    the tour goes on without it.
 3. The demo repo in the clone folder (`[repos] clone_into`, Settings › Clone into) as `kode-demo`
-   (`-2`, `-3` when taken). That folder is checked before step 2 (`cloneFolder`: a full path, made
+   (`-2`, `-3` when taken, by anything, a link to nowhere too: `cpSync` onto one aborts Node on
+   macOS). That folder is checked before step 2 (`cloneFolder`: a full path, made
    if missing, and writable); one that can't be used is a 400 naming Settings › Clone into, and no
    datapack is made. The demo repo is the files, a MEKO.md listing those datapacks (none without Meko), one commit on main by the
    bundle's made-up author at its fixed date, then each branch from main with `git am` of its
