@@ -33,7 +33,8 @@ a single binary that has the command line, the server, the MCP tools and the RES
 
 ## Install
 
-On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
+On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon (Windows and Intel Macs aren't
+supported yet):
 
 ```sh
 curl -fsSL https://mekodata.ai/install.sh | sh
@@ -129,6 +130,27 @@ meko kode ui                      # opens Kode in your browser
   results reranked by a cross-encoder), memory extraction from conversations, and automatic text
   extraction, chunking and embedding of uploaded files. Your local datapacks embedding and reranking
   run locally.
+
+## Usage stats
+
+A release install sends anonymous usage stats to YugabyteDB, so we know how many installs are
+active, where people get stuck getting started, and why installs fail. They go to
+`diagnostics.meko.yugabyte.com`:
+
+- once a day, a report of counts (datapacks, memories, conversations, calls by tool and by agent
+  client such as `claude_code`), with the version, platform and a random install id;
+- the names of the first 15 commands run after a first install, with their flags' names, exit codes
+  and timings, never their arguments;
+- a failed install's step and error class, and an uninstall.
+
+Never the name or content of a datapack, memory, conversation or file, a query, a path, a host name
+or a token. What's sent is in [`internal/callhome`](src/meko/internal/callhome/callhome.go) and
+[install.md](src/meko/docs/install.md#install-failures-to-call-home).
+
+To turn them off, use the toggle in Meko's Settings › Anonymous usage stats (and, with Kode, the
+checkbox in Kode's Settings › General), or set `enabled = false` under `[call_home]` in
+`~/.meko/config.toml`. `MEKO_CALL_HOME=false` and `YB_DISABLE_CALLHOME=true` work too, set in the
+service's own environment. A build from source sends none.
 
 ## Build from source
 
