@@ -92,7 +92,9 @@ without a login. Its state is in `./.dev-home` (`KODE_DEV_HOME` names another fo
 a home only without a release, as here and in tests), so it never opens an installed Kode's
 database, hook socket or session host: it starts a session host of its own for that folder, which
 keeps running when `npm run dev` restarts (stop `npm run dev`, then
-`KODE_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). `npm test` is unit and
+`KODE_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). To run a branch beside an
+installed Kode on a fresh home, with the tour, and take it down afterwards, use the repo's
+side-install skill (`.claude/skills/side-install/`). `npm test` is unit and
 integration (`npm run test:unit`, `npm run test:integration`, which needs git and uses a stub
 `claude`). `node:sqlite` prints an experimental warning on Node 22; the release wrapper runs Node
 with `--disable-warning=ExperimentalWarning`.
