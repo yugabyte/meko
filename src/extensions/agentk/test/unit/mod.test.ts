@@ -37,11 +37,11 @@ describe.skipIf(!bin)("Kode's mod, checked by Claude Code", () => {
 describe.skipIf(!bin)("Kode's view mod, checked by Claude Code", () => {
   const run = (...args: string[]) => spawnSync(bin!, args, { encoding: 'utf8', timeout: 120_000 });
 
-  it('validates: it hooks only the drawing of prompts, and reads only its two variables (by their old names too)', () => {
+  it('validates: it hooks only the drawing of prompts, and reads only its one variable (by its old name too)', () => {
     const r = run('plugin', 'validate', VIEW);
     expect(r.status, r.stdout + r.stderr).toBe(0);
     // The old names too: a session launched before Kode was called Kode has them.
-    expect(r.stdout).toMatch(/env reads: AK_FIRST_PROMPT, AK_HIDDEN_PROMPT, KODE_FIRST_PROMPT, KODE_HIDDEN_PROMPT/);
+    expect(r.stdout).toMatch(/env reads: AK_FIRST_PROMPT, KODE_FIRST_PROMPT\n/);
   });
 
   it('passes its own tests (src/mod/agentk-view/tests)', (ctx) => {

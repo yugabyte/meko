@@ -23,7 +23,7 @@ import { checkStartItem, setItemSession } from './workqueue.js';
 import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId } from './meko.js';
 import {
   AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, firstLine, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
-  guideSystemLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
+  mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
 import { HttpError, projectConversationKey } from './projects.js';
@@ -528,8 +528,8 @@ export class SessionManager {
     if (!r) return;
     run(this.db, 'INSERT INTO session_events(session_id, project_id, kind, text, payload_json, at) VALUES (?, ?, ?, ?, ?, ?)',
       id, r.project_id, kind, text, payload === undefined ? null : JSON.stringify(payload), Date.now());
-    // A workshop's host hears what happens in its project's other sessions.
-    this.core.workshops.noted(r, kind, text, payload);
+    // A workshop's level session gets its code review once it's made (src/server/workshops.ts).
+    this.core.workshops.noted(r, kind);
   }
 
   setStage(id: string, stage: Stage, by: 'you' | 'auto', opts: { event?: boolean } = {}): void {
@@ -566,11 +566,9 @@ export class SessionManager {
    * session dialog can close and the session's tab show its startup steps. `done` does the slow
    * part (on a big repo, minutes): fetching a review's PR head, making the worktree and launching
    * Claude. When the worktree or the PR head can't be had there, the session is removed and kept
-   * as a failed start (`failedStarts()`) for the user to try again. `own.purpose` `guide` is for the
-   * server's own starts only (a workshop's host, src/server/workshops.ts): a task at Explore whose
-   * first prompt is its workshop's script.
+   * as a failed start (`failedStarts()`) for the user to try again.
    */
-  async begin(projectId: string, req: CreateSessionRequest, own: { purpose?: 'guide' } = {}): Promise<{ session: Session; done: Promise<Session> }> {
+  async begin(projectId: string, req: CreateSessionRequest): Promise<{ session: Session; done: Promise<Session> }> {
     const p = projectRow(this.db, projectId);
     if (!p) throw new HttpError(404, 'That project no longer exists.');
     for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch', 'model'] as const) {
@@ -606,8 +604,7 @@ export class SessionManager {
         throw new HttpError(400, "A learn session saves what it learns to the project's dedicated datapack, and this project has none. Add one on the project's home first.");
       }
     }
-    const guide = own.purpose === 'guide' && !learn && kind === 'task';
-    const start: StartStage = learn || guide ? 'explore' : req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
+    const start: StartStage = learn ? 'explore' : req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
     // Run to merge from the start is for a task at Code; at Design it's turned on beside Approve.
     const autoRun = !!req.autoRun;
     if (autoRun) checkOpensPr(this.db, { project_id: projectId });
@@ -704,7 +701,7 @@ export class SessionManager {
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug, harness: harness.id }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
-        push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : guide ? 'guide' : null, autoRun ? 1 : 0, projectId);
+        push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : null, autoRun ? 1 : 0, projectId);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       if (workItem) {
         this.relinks.set(id, { item: workItem, prev: get<{ session_id: string | null }>(this.db, 'SELECT session_id FROM work_items WHERE id = ?', workItem)?.session_id ?? null });
@@ -895,14 +892,11 @@ export class SessionManager {
   /**
    * A new session whose worktree (or PR head) couldn't be had: it's removed, <release> frees its
    * worktree, and it's kept as a failed start, with a notification, since the New session dialog
-   * has closed by now. Returns the error for the caller to throw. Not a workshop's host: Try again
-   * would start a plain task, so the notification sends the user back to the tour's own start.
+   * has closed by now. Returns the error for the caller to throw.
    */
   private failStart(id: string, request: CreateSessionRequest, message: string, release: () => void): HttpError {
     const row = sessionRow(this.db, id);
-    if (row?.purpose === 'guide') {
-      this.notifyUser(id, "Couldn't start", `${message} Start the Kode tour again to retry.`);
-    } else if (row) {
+    if (row) {
       this.notifyUser(id, "Couldn't start", message);
       this.failed.set(id, { id, projectId: row.project_id, name: row.name, error: message, at: Date.now(), request });
       // The oldest go first; nobody needs dozens.
@@ -1124,7 +1118,8 @@ export class SessionManager {
 
   /** The prompt a session's task starts with, for the stage it's in. */
   firstPrompt(row: SessionRow): PromptName {
-    if (row.stage === 'explore') return row.purpose === 'learn' ? 'seed' : row.purpose === 'guide' ? 'guide' : 'explore';
+    // A tour host from before Kode ran tours itself (`guide`) is archived at the start; one relaunched meanwhile explores.
+    if (row.stage === 'explore') return row.purpose === 'learn' ? 'seed' : 'explore';
     if (row.stage === 'reviewing-pr') return 'review-pr';
     if (row.stage !== 'design') return 'code';
     return row.plan_mode ? 'design-plan' : 'design';
@@ -1145,9 +1140,8 @@ export class SessionManager {
         notes: reviewNotes(row),
       }
       : {};
-    // A workshop's host starts on its bundled script, never a repo's or the owner's own version.
     // A PR's .kode/stages can't stand in for Kode's prompts until its code is known to be trusted.
-    const text = name === 'guide' ? this.core.workshops.guidePrompt(row) : render(loadPrompt(this.db, name, repoConfigTrusted(row) ? row.worktree_path : null), {
+    const text = render(loadPrompt(this.db, name, repoConfigTrusted(row) ? row.worktree_path : null), {
       // The images added in the New session dialog go with the task (a review's with its notes: its task is the PR).
       task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(taskWithName(row.name, row.initial_prompt ?? ''), startImages(row)),
       branch: row.branch,
@@ -1204,9 +1198,8 @@ export class SessionManager {
       KODE_HOOK_SOCK: claudePath(this.core.paths.hookSock),
       KODE_DESIGN_FILE: this.designFile(row),
       // For Kode's view mod (src/mod/agentk-view): the first line of the prompt the conversation
-      // started with, which Claude Code draws like typed text, and of a workshop host's hidden events.
+      // started with, which Claude Code draws like typed text.
       KODE_FIRST_PROMPT: row.first_prompt ?? '',
-      KODE_HIDDEN_PROMPT: row.purpose === 'guide' ? firstLine(this.prompt(row, 'guide-event', { events: '' })) : '',
       MEKO_AGENT_ID: launchedAgentId(row),
       MEKO_DATAPACK_ID: dedicated?.id ?? '',
       MEKO_DATAPACK_IDS: dps.map((d) => d.id).join(','),
@@ -1251,7 +1244,6 @@ export class SessionManager {
     }
     if (dedicated) lines.push(mekoSaveSystemLine(row.id));
     if (dps.length && row.kind === 'review-pr') lines.push(mekoQuestionSystemLine());
-    if (row.purpose === 'guide') lines.push(guideSystemLine(p?.name ?? row.project_id));
     return lines.join('\n');
   }
 
@@ -1418,10 +1410,8 @@ export class SessionManager {
    * is on (Claude takes it when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
    * that had to wait is refused if the one before it started a turn. `lost` runs if Claude goes
    * (exits, or is relaunched) after a prompt sent between turns counted as sent but before its turn started.
-   * For a `hidden` one (a workshop host's events) the mod draws a bare "OK" in its turn as nothing; Kode's
-   * view mod hides the prompt's own row by its first line (KODE_HIDDEN_PROMPT), not by this flag.
    */
-  submit(id: string, text: string, lost?: () => void, hidden = false): Promise<void> {
+  submit(id: string, text: string, lost?: () => void): Promise<void> {
     return this.inTurn(id, async (r, waited) => {
       if (waited && r.status === 'working') throw new HttpError(409, 'Kode is working on another prompt. Try again when the turn ends.');
       // Where the transcript ends before the prompt can reach it.
@@ -1431,7 +1421,7 @@ export class SessionManager {
         // turn ends, and its UserPromptSubmit says when it starts: the status stays as it is, so a
         // permission prompt still shows as Needs you.
         const midTurn = this.midTurn(id);
-        const prompt = await this.mod.send(id, text, hidden);
+        const prompt = await this.mod.send(id, text);
         if (midTurn) {
           this.mod.hold(id, prompt);
           this.core.changed();
@@ -1811,7 +1801,7 @@ export class SessionManager {
       await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
     } finally {
       await diff;
-      // After the diff's refresh, so a workshop's host hears whether the turn changed it.
+      // After the diff's refresh: the tour reads the turn's end, and a level's review and learn step follow it.
       this.core.workshops.turnEnded(id, how === 'interrupted');
     }
   }
@@ -1870,7 +1860,6 @@ export class SessionManager {
         this.update(id, { interrupted: 0 });
         this.setStatus(id, 'working');
         this.core.lifecycle.onTurnStart(id);
-        if (row.purpose === 'guide') this.core.workshops.hostPrompt(row, p.prompt);
         break;
       case 'PreToolUse': {
         const meko = this.harness(row).mekoTool?.(p);
@@ -1925,7 +1914,6 @@ export class SessionManager {
       case 'Stop':
         // OpenCode's plugin marks a turn the user interrupted (Claude Code's comes from the mod, /mod/turn).
         await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop', p.background_tasks);
-        if (row.purpose === 'guide') this.core.workshops.hostSaid(row, p.last_assistant_message);
         break;
       case 'BackgroundTasks':
         // OpenCode's plugin, when background work ends between turns.

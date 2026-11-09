@@ -25,10 +25,8 @@
 //   /mod/turn     a turn the person interrupted (Ctrl+C, Esc), which fires no Stop hook: Kode ends
 //                 the turn and sends what waited for its end
 //
-// A reply of just "OK" in the turn of a prompt Kode marks `hidden` (a workshop host's events) draws
-// as nothing; the full transcript (ctrl+o) shows it. The prompt's own row, and every other prompt of
-// Kode's, is drawn by Kode's view mod (src/mod/agentk-view): Claude Code never raises this
-// plugin's `ui.render` hook for the rows of prompts it submitted itself.
+// Kode's prompts' rows are drawn by Kode's view mod (src/mod/agentk-view): Claude Code never raises
+// this plugin's `ui.render` hook for the rows of prompts it submitted itself.
 //
 // It must never get in Claude's way: every failure is swallowed (a question is then left to the
 // terminal's dialog), and while the server doesn't hear from the mod it types prompts into the
@@ -63,8 +61,6 @@ interface Link {
 interface Prompt {
   id: string
   text: string
-  /** A workshop host's Kode events: a bare "OK" in its turn draws as nothing (the view mod hides the prompt). */
-  hidden?: boolean
 }
 
 /** A part of a learn step from the server: fork the session with `prompt` (extract), or run it on `model` (check). */
@@ -81,12 +77,6 @@ let link: Promise<Link | null> | null = null
 let polling = false
 /** The prompts submitted that Claude still holds (it runs each when it's next idle), by id. */
 const held = new Set<string>()
-/** A hidden prompt's turn is running: a reply of just "OK" (nothing to say) draws as nothing. */
-let quietTurn = false
-/** Those replies' rows, by row id, so a redraw after the turn keeps them hidden. */
-const quietRows = new Set<string>()
-/** What a quiet reply's row draws. */
-const NOTHING = { type: 'Box', props: { display: 'none' } } as const
 
 /** The server's socket and this session's token, or null outside a Kode session. */
 function linkOf($: EngineInterface): Promise<Link | null> {
@@ -125,7 +115,6 @@ async function take($: EngineInterface, l: Link, prompts: Prompt[]) {
     void $.prompt.submit({ text: p.text, asUser: true })
       .then((r) => {
         if (r.drop !== undefined) return refused($, l, p, r.drop)
-        if (p.hidden) quietTurn = true
       })
       .catch(() => undefined)
       .finally(() => {
@@ -336,7 +325,6 @@ export const register: Register = (on) => {
   // goes idle and runs a prompt it holds, so that prompt's turn never counts as the one that ended.
   // A subagent's turn, and every turn Stop covers, goes straight on.
   on('turn.complete', async ($, e, next) => {
-    if (!e.agentId) quietTurn = false
     if (!e.isAborted || e.agentId) return next(e)
     const l = await linkOf($).catch(() => null)
     if (l) await post($, l, '/mod/turn', { turnId: e.turnId, reason: 'aborted' }).catch(() => undefined)
@@ -396,18 +384,6 @@ export const register: Register = (on) => {
     const text = json(r?.text).text
     return { text: typeof text === 'string' ? text : "Kode didn't answer. Use Save learnings to Meko in the session's ⋯ menu in Kode instead." }
   }).catch(() => ({ text: "Kode didn't answer. Use Save learnings to Meko in the session's ⋯ menu in Kode instead." }))
-
-  // A quiet "OK" in a hidden prompt's turn draws as nothing; the full transcript (ctrl+o) shows it.
-  // Registered in a try: a Claude Code without the hook still runs the rest.
-  try {
-    on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
-      const p = e.props as { text?: unknown }
-      if (quietTurn && typeof p.text === 'string' && p.text.trim() === 'OK') quietRows.add(e.requestId)
-      return quietRows.has(e.requestId) ? NOTHING : next(e)
-    }).catch(($, e, next) => next(e))
-  } catch {
-    // The rows draw as Claude Code draws them
-  }
 
   on('tool.call', { tool: 'mcp__kode__design_questions' }, async ($, e) => {
     const l = await linkOf($).catch(() => null)

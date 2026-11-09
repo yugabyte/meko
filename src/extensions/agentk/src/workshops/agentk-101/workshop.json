@@ -2,7 +2,12 @@
   "id": "agentk-101",
   "title": "Kode tour",
   "summary": "A guided tour of Kode and what Meko adds, on a small Snake game with a teammate's fix to review.",
-  "guide": "GUIDE.md",
+  "welcome": {
+    "title": "Welcome to Kode and Meko",
+    "text": "This is a short, hands-on tutorial. On a small demo repo, you'll see how **Kode**, where your coding agents work, and **Meko**, your team's shared context, improve your agentic software development lifecycle (ADLC): higher code quality, with fewer tokens burned.\n\nIt has two levels:\n\n1. **Improve code review quality.** A review misses a bug that the code alone can't show. With the team's context stored in Meko, AI agents catch it.\n2. **Self-learning.** Meko learns the project, so AI agents answer from it instead of reading all the code again."
+  },
+  "end": "That's the tour. Kode reviewed a change without and with the team's gotchas, then learned a project, answered from Meko and taught Meko what it didn't know. Use Kode on your own repo next: Open project, and Kode offers to learn it.",
+  "play": "When you're done playing, go back to the Kode tab to continue the tour.",
   "repo": {
     "dir": "repo",
     "folder": "kode-demo",
@@ -19,20 +24,100 @@
   "codeReview": { "strategy": "sirius-1.0" },
   "reviewModels": { "claude": "sonnet" },
   "levels": [
-    { "id": "1-review", "title": "Improve code review quality with Meko", "prompt": "levels/1-review.md", "needs": ["meko"], "review": { "branch": "demo/score-fix", "gotchasAfterFirst": true } },
+    {
+      "id": "1-review",
+      "title": "Improve code review quality",
+      "teaches": "An AI code review only knows what's in the code. People who have been on the team long enough remember past incidents, so they catch nuanced bugs and behavior. Mining these gotchas and storing them in Meko gives your AI agents the same level of context. Your agent will review a teammate's fix twice, first with no context and then with the team's gotchas in Meko, and you'll compare what each review catches.",
+      "prompt": [{ "name": "Review the score fix", "file": "levels/1-review.md" }],
+      "needs": [],
+      "review": { "branch": "demo/score-fix", "gotchasAfterFirst": true },
+      "stages": [
+        {
+          "id": "repo", "kind": "repo", "title": "The repo",
+          "labels": { "next": "Move on to stage 2" },
+          "text": {
+            "done": "A small Snake game with a bug: score a few points, press **New game**, and the score carries over.\n\nPlay the game first to see the bug."
+          }
+        },
+        {
+          "id": "review-cold", "kind": "review-first-look", "title": "Review without context",
+          "labels": { "run": "Run the review", "next": "Move on to stage 3" },
+          "text": {
+            "ready": "A new teammate has put out a fix for the score bug, and we are going to review it. This review runs with no Meko context: it has only the code to go on, like a new teammate or an AI agent.",
+            "running": "The review is running on **{{session}}**. The magnifier beside its tab shows its progress.",
+            "done": "The review found {{cold.kept}}.\n\nBut it missed a bug. This repo hit the same trap before, in a similar change, and only a customer found it: the arcade cabinet's daily challenge, which lives in another repo, calls `newGame()` between its rounds, so resetting the score there wipes the challenge's running total. Nothing in the code says so. A new teammate, or an AI agent, doesn't know that, so they miss it again.",
+            "failed": "The review couldn't finish: {{failure}}"
+          }
+        },
+        {
+          "id": "teach", "kind": "teach", "title": "Mine and store context in Meko",
+          "labels": { "run": "Add the gotchas to Meko", "next": "Move on to stage 4" },
+          "text": {
+            "ready": "Now give Meko what the team knows. Kode adds the team's gotchas to a Meko datapack, `{{gotchasDatapack}}`. They're traps that earlier work on this game hit, mined from the repo's history (issues, commits, PR comments and Slack threads):\n\n{{gotchas.list}}",
+            "running": "Kode is adding gotchas.md to Meko as a single file. Meko processes and indexes it automatically.",
+            "done": "Done: gotchas.md is indexed in `{{gotchasDatapack}}`, with {{teach.gotchas}}.",
+            "failed": "The gotchas didn't make it into Meko: {{failure}} Retry to add them again."
+          }
+        },
+        {
+          "id": "review-context", "kind": "review-context", "title": "Review with context",
+          "labels": { "run": "Run the review again", "finish": "Move on to Level 2" },
+          "text": {
+            "ready": "Same code, same model, one change: The team's gotchas are now in Meko.",
+            "running": "The review is running again on **{{session}}**. The **m** in its magnifier lights up while it searches Meko.",
+            "done": "With the gotchas, the review found {{context.kept}}. It caught the trap from the team's gotcha ({{context.gotchas}}). The code alone couldn't show it, since the daily challenge lives in another repo.\n\nThat's what Meko adds to every review: the team's context, so known traps aren't missed again.",
+            "missed": "With the gotchas, the review found {{context.kept}}, but none of its findings credits a gotcha this time: a model can have a bad run. MG-2 says the score reset belongs where a run starts, never in `newGame()`.",
+            "failed": "The review couldn't finish: {{failure}}",
+            "blocked": "The level's session was closed, so there's nothing to review again. Take Level 1 again from its first stage."
+          }
+        }
+      ]
+    },
     {
       "id": "2-learn",
-      "title": "Save tokens and increase quality by continuously learning and improving the context in Meko",
+      "title": "Self-learning",
+      "teaches": "Every new agent session that has to rediscover a project burns tokens reading its code. You'll have Meko learn this project once, watch a new session answer from Meko instead of the code, and see Meko automatically learn what it didn't know, so the next session doesn't pay for it again.",
       "prompt": [
         { "name": "Ask about the game", "file": "levels/2-ask.md", "learn": true },
         { "name": "Ask again", "file": "levels/2-again.md" }
       ],
-      "needs": ["meko"],
+      "needs": ["datapack"],
       "learn": {
         "about": "A small Snake game that runs in a web page, the demo of the Kode tour. Its rules are plain functions in src/game.js, drawn by src/ui.js.",
         "where": "README.md, AGENTS.md, src/game.js and src/ui.js.",
         "months": 0
-      }
+      },
+      "stages": [
+        {
+          "id": "learn", "kind": "learn", "title": "Learn the project",
+          "labels": { "run": "Learn the project", "next": "Move on to stage 2" },
+          "text": {
+            "ready": "Meko hasn't learned this project yet. Learn the project reads the game's code and docs and saves what it finds to `{{datapack}}`.",
+            "running": "**{{session}}** is reading the game and saving what it learns. The **m** on its tab lights up during each Meko call. It closes itself when it's done.\n\nOpen the datapack in a new tab to watch Meko gain memories as it learns.",
+            "done": "Meko has learned the game from its code and docs. Next, a fresh session asks two questions about it.",
+            "failed": "Learn the project couldn't start: {{failure}}"
+          }
+        },
+        {
+          "id": "ask", "kind": "ask", "title": "Ask about the game",
+          "labels": { "run": "Ask about the game", "next": "Move on to stage 3" },
+          "text": {
+            "ready": "A new session asks two questions about the game:\n\n1. How is the game run and tested, and why are its scripts plain scripts rather than ES modules?\n2. Which of the game's rules have no test yet?\n\nKode gives it what Meko already knows when it starts, so it doesn't burn tokens reading all the code again.",
+            "running": "**{{session}}** is answering. The **m** on its tab lights up during each Meko call. When its turn ends, Kode saves what it worked out to Meko by itself.",
+            "done": "{{meko}}\n\nWhere Meko didn't know, the session read the files, and Kode's learn step saved what it found and marked the question taught on Meko's Context Gaps. Read its answer, then ask again: Kode closes this session when the next one starts.",
+            "failed": "{{meko}}\n\nKode couldn't save what the session learned: {{failure}} Save learnings to Meko in the session's menu does the same."
+          }
+        },
+        {
+          "id": "ask-again", "kind": "ask-again", "title": "Ask again",
+          "labels": { "run": "Ask again", "finish": "Finish level 2" },
+          "text": {
+            "ready": "A fresh session asks the question Meko couldn't answer before:\n\n> Which of the game's rules have no test yet?",
+            "running": "**{{session}}** is answering from Meko. The **m** on its tab lights up during each Meko call.",
+            "done": "{{meko}}\n\nThis time the answer came from Meko. On your own projects the same learn step runs at Merge & Close and Discard, and from Save learnings to Meko in a session's menu."
+          }
+        }
+      ]
     }
   ]
 }

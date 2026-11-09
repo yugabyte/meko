@@ -6,7 +6,7 @@ import { homedir, hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { HARNESS_CAPS, type HarnessId } from '../shared/harnesses.js';
 import { parseTermTheme, type TermTheme } from '../shared/termcolors.js';
-import type { AppState, GhState, HarnessStatus, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
+import type { AppState, GhState, HarnessStatus, MekoStatus, ServerEvent, TokenUsage, TourState, UpdateStatus } from '../shared/types.js';
 import * as github from './github.js';
 import { TranscriptCapture, mekoPluginKeys } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
@@ -33,6 +33,7 @@ import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
 import { KnowledgeService } from './knowledge.js';
+import { TourService } from './tour.js';
 import { WorkshopService } from './workshops.js';
 import { MekoClient } from './meko.js';
 import { MekoAgents, mekoMcpGaps, readMekoAgents, type MekoAgentsRead } from './mekoagents.js';
@@ -177,6 +178,8 @@ export class Core extends EventEmitter {
   readonly invites: InviteService;
   readonly knowledge: KnowledgeService;
   readonly workshops: WorkshopService;
+  /** Workshop projects' tours, which Kode runs itself (tour.ts). */
+  readonly tours: TourService;
   readonly mekoTools: MekoTools;
   /** Whether Meko's capture in Claude Code's sessions reaches Kode's Meko (MekoStatus.claude, with its MCP server from `mekoAgents`). */
   readonly claudeMeko: MekoClaudeWatch;
@@ -280,6 +283,7 @@ export class Core extends EventEmitter {
     this.worktrees = new WorktreePool(this);
     this.sessions = new SessionManager(this);
     this.workshops = new WorkshopService(this, o.workshopsRoot);
+    this.tours = new TourService(this);
     this.lifecycle = new Lifecycle(this);
     this.learn = new Learner(this);
     this.comments = new CommentService(this);
@@ -622,7 +626,7 @@ export class Core extends EventEmitter {
         for (const s of all<{ id: string; project_id: string }>(this.db, 'SELECT id, project_id FROM sessions')) {
           usage.set(s.project_id, addUsage(usage.get(s.project_id) ?? ZERO_USAGE, this.sessions.runtime(s.id).usage));
         }
-        return projects.map((p) => ({ ...p, usage: usage.get(p.id) ?? { ...ZERO_USAGE } }));
+        return projects.map((p) => ({ ...p, usage: usage.get(p.id) ?? { ...ZERO_USAGE }, ...(p.workshop ? { tour: this.tourState(p.id) } : {}) }));
       })(),
       meko: {
         ...this.mekoStatus, claude: this.claudeMekoStatus(), kiro: this.kiroMeko(), opencode: this.openCodeMeko(),
@@ -648,6 +652,16 @@ export class Core extends EventEmitter {
       workQueue: this.workQueue.list(),
       workSync: this.workQueue.syncState(),
     };
+  }
+
+  /** A workshop project's tour for the state push; one that can't be worked out is logged and left out, never failing the push. */
+  private tourState(projectId: string): TourState | null {
+    try {
+      return this.tours.state(projectId);
+    } catch (e) {
+      this.log.warn(`working out the tour of ${projectId} failed`, errMsg(e));
+      return null;
+    }
   }
 
   async start(): Promise<void> {
@@ -718,6 +732,8 @@ export class Core extends EventEmitter {
     await this.bindHooks();
     this.hooksOn = true;
     this.learn.recover();
+    // Before recovery would relaunch them: a tour's host from before Kode ran tours itself.
+    await this.tours.archiveOldHosts();
     await this.sessions.recover();
     await this.reviews.recover().catch((e: unknown) => this.log.warn('recovering code reviews failed', errMsg(e)));
     void this.sessions.refreshDiffStats().catch(() => undefined);
@@ -762,7 +778,6 @@ export class Core extends EventEmitter {
     this.sessions.mod.closeAll();
     this.learn.stop();
     this.knowledge.stop();
-    this.workshops.events.stop();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
     // and OpenCode's one-shot runs already going (the plan read, deleting a run's session) get as long

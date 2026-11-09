@@ -355,7 +355,7 @@ export function countsText(c: SeverityCounts): string {
 
 /**
  * `1 caught with Meko (MG-2)`: how many kept findings credit a Meko gotcha, and which gotchas, for
- * the review's done event (which a workshop's host reads too); '' when none do.
+ * the review's done event; '' when none do.
  */
 export function caughtWithMeko(findings: Pick<CodeReviewFinding, 'kept' | 'gotchas'>[]): string {
   const credited = findings.filter((f) => f.kept && f.gotchas.length);

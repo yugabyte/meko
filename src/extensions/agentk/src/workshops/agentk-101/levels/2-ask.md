@@ -8,5 +8,3 @@ Search Meko first, and answer from what it knows before you read any file. For e
 Don't change any files, and don't run anything that changes them. Don't save anything to Meko yourself, not even at the end: this replaces the save step below. When your turn ends, Kode's learn step saves what you found and tells Meko which question it has now learned to answer. If Kode then asks you to save what this session learned, do as it asks.
 
 Keep your reply short: the two answers, each with where it came from, then one line on what Meko didn't know.
-
-End your reply with this line, as it is, and nothing after it: "Go back to the Kode tour tab to continue." This replaces the summary and recommendation the end of these instructions asks for: don't recommend next steps, and don't say what you didn't change or save.

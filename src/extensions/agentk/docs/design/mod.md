@@ -126,9 +126,9 @@ row on with that text, for:
   set at each launch that starts a conversation, NULL when it starts with none) and passes it to
   every launch, a resume's too, as `KODE_FIRST_PROMPT`; a row whose first line is that one is folded.
 
-A prompt whose first line is `KODE_HIDDEN_PROMPT` (a workshop host's `Kode events:`, the first line
-of its `guide-event` prompt; empty for other sessions) draws as nothing
-([Workshops](workshops.md)). Prompts Kode types into the terminal (no live mod) draw in full.
+Prompts Kode types into the terminal (no live mod) draw in full. (Until Kode ran its tours itself,
+a workshop host's hidden `Kode events:` prompts drew as nothing here, by `KODE_HIDDEN_PROMPT`, and
+the mod drew a bare OK in their turn as nothing: [Workshops](workshops.md).)
 Both mods compare a prompt's first line as `firstLine()` in `prompts.ts` reads it: its first line
 with text, trimmed.
 

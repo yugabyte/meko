@@ -55,9 +55,23 @@ export function CloudContextGapsPage({ id }: { id: string }) {
   );
 }
 
-export function ContextGapsPage({ datapack, cloud = false }: { datapack: GapsDatapack; cloud?: boolean }) {
+const FILTERS: readonly Filter[] = ["open", "taught", "dismissed", "all"];
+
+// routeFilter is the filter in the address (/datapacks/<id>/gaps/<filter>), so a link can open
+// Taught directly; it sets the one the page starts on.
+export function ContextGapsPage({
+  datapack,
+  cloud = false,
+  routeFilter,
+}: {
+  datapack: GapsDatapack;
+  cloud?: boolean;
+  routeFilter?: string;
+}) {
   const id = datapack.datapack_id;
-  const [filter, setFilter] = useState<Filter>("open");
+  const [filter, setFilter] = useState<Filter>(() =>
+    FILTERS.includes(routeFilter as Filter) ? (routeFilter as Filter) : "open",
+  );
   const [page, setPage] = useState<GapPage>();
   const [gaps, setGaps] = useState<Gap[]>();
   const [error, setError] = useState<Error>();

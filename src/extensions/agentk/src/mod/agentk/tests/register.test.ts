@@ -167,31 +167,6 @@ test('tells Kode of a turn the person interrupted, and of no other turn', async 
   expect(calls).toEqual([{ path: '/mod/turn', body: { turnId: 't1', reason: 'aborted' }, socketPath: '/ak/hook.sock', token: 'tok' }])
 })
 
-test("draws a bare OK in a hidden prompt's turn as nothing, but in full with ctrl+o", async ($, on) => {
-  mock.env(on, ENV)
-  const clock = mock.clock(on)
-  const events = 'Kode events:\n- Review the score fix: First look done'
-  server(on, [[{ id: 'p1', text: events, hidden: true }]])
-  engine(on)
-  on('ui.render', () => ({ type: 'Text', children: ['drawn'] }))
-  on('turn.complete', () => ({ text: '' }))
-  const drawn = expect.objectContaining({ type: 'Text' })
-  await $.session.start(START)
-  await clock.advance(5)
-  const origin = { kind: 'plugin', name: 'kode', asUser: true } as const
-  const reply = (requestId: string, text: string) =>
-    $.ui.render({ surface: 'terminal', component: 'AssistantMessage', requestId, props: { text, isFirstOfReply: true } })
-  const hidden = expect.objectContaining({ type: 'Box', props: { display: 'none' } })
-  // The prompt's own row is the view mod's (src/mod/agentk-view): this mod leaves it alone.
-  expect(await $.ui.render({ surface: 'terminal', component: 'UserMessage', requestId: 'u1', props: { text: events, origin, isExpanded: false } })).toEqual(drawn)
-  expect(await reply('a1', 'OK')).toEqual(hidden)
-  expect(await reply('a2', 'The first look missed the trap.')).toEqual(drawn)
-  // After the turn, an OK is the model's own, and the hidden one stays hidden.
-  await $.turn.complete({ answer: 'OK', durationMs: 900, turnId: 't1', reason: 'answer', isAborted: false })
-  expect(await reply('a3', 'OK')).toEqual(drawn)
-  expect(await reply('a1', 'OK')).toEqual(hidden)
-})
-
 test('does nothing outside a Kode session', async ($, on) => {
   mock.env(on, {})
   const clock = mock.clock(on)

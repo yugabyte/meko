@@ -375,7 +375,7 @@ may search the others with `context_search`; a finding credits a gotcha (`MG-<n>
 sentence it instantiates, and Kode drops a credit without one. A credit keeps that sentence
 (`Finding.quotes`, `CodeReviewFinding.credits`; a review from before has ids only), and the review's
 done event counts the kept findings that credit one: `Code review done: 1 major, 1 caught with Meko
-(MG-2)` (`caughtWithMeko`), which a [workshop's host](workshops.md) reads too; each round's event
+(MG-2)` (`caughtWithMeko`); each round's event
 (`Code review, round 1: 1 major, 1 caught with Meko (MG-2)`) counts that round's the same way. With no `MEKO.md` the review runs
 without Meko. Retired gotchas aren't filtered: the cloud's roster of them isn't in Meko.
 

@@ -5,8 +5,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 const STAGE = 'You are in the Code stage of a Kode task.\n\nTask: Fix the score\n\nRun the tests.'
 const FIRST = 'You are in the Explore stage of a Kode task.\n\nTask: Explore\n\nRead the code.'
-const EVENTS = 'Kode events:\n- Review the score fix: First look done'
-const ENV = { KODE_FIRST_PROMPT: 'You are in the Explore stage of a Kode task.', KODE_HIDDEN_PROMPT: 'Kode events:' }
+const ENV = { KODE_FIRST_PROMPT: 'You are in the Explore stage of a Kode task.' }
 
 const AGENTK = { kind: 'plugin', name: 'kode', asUser: true } as const
 const TYPED = { kind: 'composer' } as const
@@ -23,7 +22,6 @@ function row($: EngineInterface, text: string, origin: Origin, isExpanded = fals
 }
 
 const text = (t: string) => expect.objectContaining({ type: 'Text', children: [t] })
-const hidden = expect.objectContaining({ type: 'Box', props: { display: 'none' } })
 
 test("draws Kode's prompts as their first line, and in full with ctrl+o", async ($, on) => {
   mock.env(on, ENV)
@@ -58,17 +56,7 @@ for (const [why, env] of [['empty', { KODE_FIRST_PROMPT: '' }], ['unset', {}]] a
     mock.env(on, env)
     drawn(on)
     expect(await row($, FIRST, TYPED)).toEqual(text(FIRST))
-    // Kode's mod's prompts still fold, and with no KODE_HIDDEN_PROMPT none is hidden.
+    // Kode's mod's prompts still fold.
     expect(await row($, STAGE, AGENTK)).toEqual(text('You are in the Code stage of a Kode task. … (+4 lines, ctrl+o to expand)'))
-    expect(await row($, EVENTS, AGENTK)).toEqual(text('Kode events: … (+1 line, ctrl+o to expand)'))
   })
 }
-
-test("draws a workshop host's hidden events as nothing, but in full with ctrl+o", async ($, on) => {
-  mock.env(on, ENV)
-  drawn(on)
-  expect(await row($, EVENTS, AGENTK)).toEqual(hidden)
-  expect(await row($, EVENTS, AGENTK, true)).toEqual(text(EVENTS))
-  // Typed by the person, the same words show.
-  expect(await row($, EVENTS, TYPED)).toEqual(text(EVENTS))
-})

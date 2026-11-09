@@ -125,10 +125,10 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(agentId).toMatch(/^claude_code:fix-the-thing-[0-9a-f]{8}$/);
     // CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: Kode's mod is on (the fake reports a Claude Code new enough).
     // CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: Claude Code keeps the conversation when it exits, not its background sessions.
-    // KODE_FIRST_PROMPT, KODE_HIDDEN_PROMPT: for Kode's view mod, which draws the first prompt folded (no workshop events here).
+    // KODE_FIRST_PROMPT: for Kode's view mod, which draws the first prompt folded.
     expect(first.env).toEqual({
       MEKO_AGENT_ID: agentId, MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1',
-      KODE_FIRST_PROMPT: 'Task: Fix the thing', KODE_HIDDEN_PROMPT: '',
+      KODE_FIRST_PROMPT: 'Task: Fix the thing',
     });
 
     // A terminal read line by line caps a line (1,024 bytes on macOS, 4,096 on Linux); Claude's TUI,
@@ -924,12 +924,6 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     env.core.sessions.dismissFailedStart('demo-repo--retry');
     env.core.sessions.dismissFailedStart('demo-repo--other');
     expect(env.core.state().failedStarts).toEqual([]);
-    // A workshop's host isn't kept for Try again, which would start a plain task: the tour starts it again.
-    block('ak/host/x');
-    const host = await env.core.sessions.begin(p.id, { name: 'Host', prompt: 'the script', start: 'explore' }, { purpose: 'guide' });
-    await expect(host.done).rejects.toMatchObject({ status: 400 });
-    expect(env.core.state().failedStarts).toEqual([]);
-    expect(notes.at(-1)).toMatchObject({ title: "Host: Couldn't start", body: expect.stringMatching(/Start the Kode tour again to retry\.$/) });
     // Its fake Claude writes its transcript into the test home until the turn ends: removing the home before then fails.
     await waitFor(() => env.core.sessions.get(again.id).status, (st) => st === 'idle', 10000, 'the started session\'s first turn');
   });

@@ -52,7 +52,7 @@ case $(uname -s) in
 esac
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-for p in "$repo/dist/server/cli.js" "$repo/dist/server/mcpmain.js" "$repo/dist/web/index.html" "$repo/dist/mod/agentk/hooks/register.ts" "$repo/dist/tools/skill/SKILL.md" "$repo/dist/workshops/agentk-101/GUIDE.md" "$repo/node_modules" "$node_dir/bin/node"; do
+for p in "$repo/dist/server/cli.js" "$repo/dist/server/mcpmain.js" "$repo/dist/web/index.html" "$repo/dist/mod/agentk/hooks/register.ts" "$repo/dist/tools/skill/SKILL.md" "$repo/dist/workshops/agentk-101/workshop.json" "$repo/node_modules" "$node_dir/bin/node"; do
   [ -e "$p" ] || { echo "missing $p (build first)" >&2; exit 1; }
 done
 

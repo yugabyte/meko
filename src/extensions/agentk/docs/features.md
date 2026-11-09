@@ -5,15 +5,20 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
 
 ## Getting started
 
-- **The Kode tour.** A new install opens on a tour: a small Snake game Kode ships, built as a
-  local demo project with no remote (nothing is fetched or pushed), and a host session that walks
-  you through. In Level 1 Kode runs its code review on a teammate's fix waiting on a branch,
-  and the demo's gotchas datapack in Meko catches a trap the code alone doesn't show, marked
-  **Caught with Meko** with the gotcha's sentence. In Level 2 Learn the project fills the demo's
-  empty datapack, a fresh session answers a question from Meko (the host says what Meko saved), and
-  what Meko couldn't answer shows on Meko's Context Gaps until Kode's learn step teaches it, so
-  the next session answers that from Meko too. Take it any time from **Take the Kode tour** on the
-  empty screen or **Start the Kode tour** in the command palette. More levels follow.
+- **The Kode tour.** A new install opens on a tour: a welcome card, then a small Snake game Kode
+  ships, built as a local demo project with no remote (nothing is fetched or pushed), with a guide
+  above its sessions that Kode runs itself: each level says what it teaches, each stage's card says
+  what you're looking at and what happens next, and its button starts it. In Level 1 (The repo,
+  Review without context, Mine and store context in Meko, Review with context) you play the game
+  (Kode serves it sandboxed), then Kode reviews a new teammate's fix twice: first with Meko's
+  gotchas datapack empty (made again each run), then once Kode has added the team's gotchas, when
+  it catches a trap the code alone doesn't show, marked **Caught with Meko** with the gotcha's
+  sentence. A scoreboard sets the two reviews side by side: issues found, and what Meko caught. In Level 2 Learn the project fills the demo's datapack
+  (emptied first) on Sonnet, with a link to watch its memories arrive in Meko, a fresh session
+  answers two questions from Meko, and what Meko couldn't answer is taught by Kode's learn step and
+  shows on Meko's Context Gaps under Taught, so the next session answers that from Meko too. Take it
+  any time from **Take the Kode tour** on the empty screen or **Start the Kode tour** in the command
+  palette. More levels follow.
 - **gh when you need it.** Kode installs without gh, GitHub's command-line tool (setup offers it,
   and installs it with `--install-deps`). The first time you do something that works on GitHub
   (Open PR, Run to merge, a move to Pull Request, Merge, Review a PR, a task on a PR, a GitHub

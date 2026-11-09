@@ -2,15 +2,16 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { all, get, kvGet } from '../../src/server/db.js';
+import { all, get, kvGet, run } from '../../src/server/db.js';
 import { NO_PR_IN_WORKSHOP } from '../../src/server/lifecycle.js';
+import { buildServer } from '../../src/server/server.js';
 import { parseMekoMd } from '../../src/shared/mekomd.js';
-import { AGENTK_TOUR } from '../../src/shared/types.js';
+import { AGENTK_TOUR, type TourActionId, type TourState } from '../../src/shared/types.js';
 import { fakeMekoQuestions, makeEnv, noMeko, readJsonl, useLocalMeko, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
 
 const gitIn = (dir: string, ...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 
-describe('the Kode tour (a bundled workshop; real session host + git, fake claude)', () => {
+describe('the Kode tour (a bundled workshop Kode runs itself; real session host + git, fake claude)', () => {
   let env: TestEnv;
   beforeEach(async () => {
     env = await makeEnv();
@@ -27,32 +28,46 @@ describe('the Kode tour (a bundled workshop; real session host + git, fake claud
     const conv = env.core.sessions.get(sessionId).claudeSessionId;
     return readJsonl<{ args: string[] }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes(conv))?.args.at(-1) ?? '';
   };
-  /**
-   * Like the user typing into the host, then the host's turn: sent while the host is idle, and
-   * again until it goes in. Kode sends the host its events too (GuideEvents): typed during their
-   * turn, the fake Claude would run both turns at once, and a prompt that waited for theirs to go
-   * in is refused (submit's 409).
-   */
-  const say = async (hostId: string, text: string) => {
-    // The idle check and the submit run in one tick, so no events prompt can go in between them.
-    await waitFor(() => env.core.sessions.get(hostId).status !== 'idle' ? false : env.core.sessions.submit(hostId, text).then(() => true, (e: unknown) => {
-      if ((e as { status?: number }).status === 409 && /another prompt/.test(String(e))) return false;
-      throw e;
-    }), (sent) => sent, 20000, `the host to take "${text}"`);
-    await waitFor(() => env.core.sessions.get(hostId).status, (s) => s === 'idle', 10000, "host's turn");
-  };
-  /** Meko's datapack ids are UUIDs, which MEKO.md's rows need. */
-  const GOTCHAS_ID = '0f6b1c1e-0000-4000-8000-00000000a001';
-  const DEDICATED_ID = '0f6b1c1e-0000-4000-8000-00000000a002';
+  const fake = (file: string, v: unknown) => writeFileSync(join(env.fakeDir, file), JSON.stringify(v));
+  /** Meko's datapack ids are UUIDs, which MEKO.md's rows need: the start makes the gotchas one, then the project's; each one made again gets the next. */
+  const GOTCHAS_ID = '0f6b1c1e-0000-4000-8000-000000000001';
+  const DEDICATED_ID = '0f6b1c1e-0000-4000-8000-000000000002';
   const uuids = () => {
-    env.meko.createDatapack = (async (name: string) => ({ id: name.endsWith('/gotchas') ? GOTCHAS_ID : DEDICATED_ID, name })) as typeof env.meko.createDatapack;
+    let made = 0;
+    env.meko.createDatapack = (async (name: string) => ({ id: `0f6b1c1e-0000-4000-8000-${String(++made).padStart(12, '0')}`, name })) as typeof env.meko.createDatapack;
   };
+  const deleted = () => env.meko.calls.filter((c) => c.name === 'deleteDatapack').map((c) => c.args[0]);
+  /** The datapack MEKO.md on <ref> lists under a name ending in <suffix>. */
+  const listed = (repo: string, ref: string, suffix: string) => parseMekoMd(gitIn(repo, 'show', `${ref}:MEKO.md`)).find((d) => d.name.endsWith(suffix))?.id;
   /** Meko already has the gotchas' bytes: the upload is indexed at once. */
   const gotchasKnown = () => env.mekoApi.handle((c: ApiCall) => c.path.endsWith('/upload-url')
     ? { body: { data: { url: 'https://storage.test/kb', fields: {}, key: 'dk-gotchas', already_uploaded: true } } }
     : undefined);
+  const tourOf = (projectId: string) => (): TourState => env.core.tours.state(projectId)!;
+  const act = (stage: string, action: TourActionId, level?: string) => env.core.tours.act(AGENTK_TOUR, { stage, action, ...(level ? { level } : {}) });
+  const ids = (t: TourState) => t.actions.map((a) => a.id);
+  const reviews = (taskId: string) => all<{ by: string; purpose: string; strategy: string; hand_off: number; state: string }>(env.core.db,
+    'SELECT by, purpose, strategy, hand_off, state FROM code_reviews WHERE task_id = ? ORDER BY created_at, rowid', taskId);
+  /** The review with the gotchas finds the trap, crediting MG-2, on the fix's line. */
+  const MG2_FINDING = {
+    all: { summary: 'The reset is in the wrong place.', findings: [{ file: 'src/game.js', line: 40, severity: 'blocker', comment: "Zeroes the daily challenge's running total.", gotchas: [{ id: 'MG-2', quote: 'newGame() must keep state.score' }] }] },
+  };
+  /** Level 1 from Start the tour to the review with context, done; the task. */
+  const toReviewWithContext = async (tour: () => TourState) => {
+    await act('repo', 'begin');
+    await act('repo', 'next');
+    const out = await act('review-cold', 'run');
+    await waitFor(tour, (t) => t.phase === 'done', 30000, 'the first look');
+    await act('review-cold', 'next');
+    await act('teach', 'run');
+    await waitFor(tour, (t) => t.phase === 'done', 10000, 'the gotchas indexed');
+    await act('teach', 'next');
+    await act('review-context', 'run');
+    await waitFor(tour, (t) => t.phase === 'done', 30000, 'the review with the gotchas');
+    return env.core.sessions.get(out.sessionId!);
+  };
 
-  it('builds the demo with no remote, opens it as the workshop\'s project with its datapacks in MEKO.md, and begins its host on GUIDE.md', async () => {
+  it('builds the demo with no remote and opens it as the workshop\'s project, its datapacks in MEKO.md, on the welcome card; no session is begun', async () => {
     uuids();
     gotchasKnown();
     const r = await env.core.workshops.start(AGENTK_TOUR);
@@ -64,134 +79,174 @@ describe('the Kode tour (a bundled workshop; real session host + git, fake claud
     expect(gitIn(repo, 'log', '--format=%an <%ae>', 'main')).toBe('Kode Demo <demo@example.com>');
     expect(gitIn(repo, 'log', '--format=%an <%ae>', '-1', 'demo/score-fix')).toBe('Alice <alice@example.com>');
     // The review finds the gotchas datapack through MEKO.md (on both branches and without the gotchas: the unit test's).
-    const mekoMd = readFileSync(join(repo, 'MEKO.md'), 'utf8');
-    expect(parseMekoMd(mekoMd)).toEqual([
+    expect(parseMekoMd(readFileSync(join(repo, 'MEKO.md'), 'utf8'))).toEqual([
       { name: 'adlc/repo/kode-demo/gotchas', id: GOTCHAS_ID, about: expect.any(String) },
       { name: p.datapacks[0].name, id: DEDICATED_ID, about: expect.any(String) },
     ]);
     // The gotchas datapack isn't the project's: only the review reads it.
     expect(p.datapacks.map((d) => d.role)).toEqual(['dedicated']);
-    // The gotchas datapack starts empty: Level 1's first look reviews before they're added.
+    // It starts empty: Level 1's first look reviews before Teach it adds the gotchas.
     expect(env.mekoApi.calls.some((c) => c.path.endsWith('/upload-url'))).toBe(false);
+    // No host: the tour is Kode's own, on its welcome card, in the state the page gets.
+    expect(env.core.sessions.listForProject(p.id)).toEqual([]);
+    const welcome = env.core.state().projects.find((x) => x.id === p.id)?.tour;
+    expect(welcome).toMatchObject({ workshop: AGENTK_TOUR, stage: 'repo', welcome: true, title: 'Welcome to Kode and Meko', score: null, sessionId: null, finished: false });
+    expect(welcome?.text).toContain('agentic software development lifecycle');
+    expect(welcome?.actions).toEqual([{ id: 'begin', label: 'Start the tour', primary: true }]);
+    await expect(act('repo', 'next')).rejects.toMatchObject({ status: 409 });
 
-    const host = env.core.sessions.get(r.sessionId);
-    expect(host).toMatchObject({ stage: 'explore', purpose: 'guide', projectId: p.id });
-    await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "host's first turn");
-    const first = firstPrompt(host.id);
-    expect(first).toContain('host of the Kode tour');
-    expect(first).toContain(`projectId ${p.id}`);
-    expect(first).toContain(`${repo}/index.html`);
-    expect(first).toContain('adlc/repo/kode-demo/gotchas');
-    // Kode's view mod hides the host's events prompts by their first line.
-    const conv = env.core.sessions.get(host.id).claudeSessionId;
-    const launch = readJsonl<{ args: string[]; env: Record<string, string> }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes(conv));
-    expect(launch?.env.KODE_HIDDEN_PROMPT).toBe('Kode events:');
+    // Start the tour: Level 1's first stage, with what the level teaches over it, and Play the game first.
+    await act('repo', 'begin');
+    const tour = tourOf(p.id);
+    expect(tour()).toMatchObject({ level: '1-review', stage: 'repo', kind: 'repo', phase: 'done', welcome: false });
+    expect(tour().lead).toContain("An AI code review only knows what's in the code");
+    expect(tour().levels.map((l) => [l.id, l.stages.map((s) => s.status)])).toEqual([
+      ['1-review', ['current', 'todo', 'todo', 'todo']],
+      ['2-learn', ['todo', 'todo', 'todo']],
+    ]);
+    expect(ids(tour())).toEqual(['next']);
+    expect(tour().links).toEqual([{ label: 'Play the game', href: `api/workshops/${AGENTK_TOUR}/play/main/index.html`, kind: 'play', first: true }]);
+    expect(tour().score).toEqual({ cold: null, context: null, difference: null });
+    expect(tour().text).toContain('New game');
+    await expect(act('repo', 'begin')).rejects.toMatchObject({ status: 409 });
+    // Other projects have none.
+    const other = await env.core.projects.create({ repoPath: env.repo, name: 'Other', datapack: { mode: 'none' } });
+    expect(env.core.state().projects.find((x) => x.id === other.id)).not.toHaveProperty('tour');
 
-    // Starting it again goes to the same project and host.
+    // Starting it again goes to the same project.
     expect(await env.core.workshops.start(AGENTK_TOUR)).toEqual(r);
-    expect(env.core.workshops.list()).toEqual([expect.objectContaining({ id: AGENTK_TOUR, projectId: p.id, hostId: host.id })]);
+    expect(env.core.workshops.list()).toEqual([expect.objectContaining({ id: AGENTK_TOUR, projectId: p.id })]);
   });
 
-  it("sends the host's events again when Claude goes before their turn starts", async () => {
+  it('runs Level 1 from its buttons: the gotchas datapack made again, the look without context, the gotchas, the review with them and the level finished; no PR', async () => {
     uuids();
     gotchasKnown();
-    const r = await env.core.workshops.start(AGENTK_TOUR);
-    const host = env.core.sessions.get(r.sessionId);
-    await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "host's first turn");
-    // As when Claude exits after the prompt counted as sent but before its turn started.
-    const submit = env.core.sessions.submit.bind(env.core.sessions);
-    let dropped = 0;
-    vi.spyOn(env.core.sessions, 'submit').mockImplementation(async (id, text, lost, hidden) => {
-      if (text.startsWith('Kode events:') && !dropped++) return lost?.();
-      return submit(id, text, lost, hidden);
+    // As on an install: a round's findings wait for the user (tests turn that off).
+    env.core.updateConfig((c) => {
+      c.codeReview.check = true;
     });
-    env.core.workshops.events.tell(r.projectId, 'The demo is ready.');
-    const told = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('Kode events:') && t.includes('The demo is ready.'));
-    await waitFor(told, (t) => t.length === 1, 20000, 'the events sent again');
-    expect(dropped).toBe(2);
-  });
-
-  it("reviews the level first with the gotchas datapack empty, then on the user's go adds the gotchas and reviews again; tells the host, and opens no PR there", async () => {
-    uuids();
-    gotchasKnown();
     const r = await env.core.workshops.start(AGENTK_TOUR);
-    const host = env.core.sessions.get(r.sessionId);
-    await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "host's first turn");
+    const repo = env.core.projects.get(r.projectId).repoPath;
+    const tour = tourOf(r.projectId);
+    // A button pressed on a stage the tour has left is refused, and so is one the card doesn't offer.
+    await expect(act('review-cold', 'run')).rejects.toMatchObject({ status: 409 });
+    await act('repo', 'begin');
+    await expect(act('repo', 'finish')).rejects.toMatchObject({ status: 409 });
+    expect(await act('repo', 'next')).toEqual({ sessionId: null });
+    expect(tour()).toMatchObject({ stage: 'review-cold', phase: 'ready', lead: null });
+    expect(ids(tour())).toEqual(['run']);
 
-    // The host starts the level on the teammate's branch, as its script says.
-    const out = await env.core.tools.call(env.core.sessions.row(host.id), {
-      tool: 'start_sessions',
-      input: { sessions: [{ name: 'Review the score fix', prompt: 'Read the change.', stage: 'code', branch: 'demo/score-fix' }] },
-    });
-    expect((out.body as { text: string }).text).toContain('on demo/score-fix');
-    const task = env.core.sessions.listForProject(r.projectId).find((s) => s.name === 'Review the score fix')!;
-    expect(task).toMatchObject({ stage: 'code', branch: 'demo/score-fix' });
-    await waitFor(() => env.core.sessions.get(task.id).status, (s) => s === 'idle', 10000, "task's first turn");
-    // Kode reviews the level by itself on the tour's Sirius 1.0, with no PR description first: a first
-    // look that keeps its findings, then, on the user's go, once the gotchas are uploaded and indexed, the review proper.
-    const reviews = () => all<{ by: string; purpose: string; strategy: string; hand_off: number; state: string }>(env.core.db,
-      'SELECT by, purpose, strategy, hand_off, state FROM code_reviews WHERE task_id = ? ORDER BY created_at, rowid', task.id);
-    const events = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('Kode events:')).join('\n');
-    await waitFor(events, (t) => t.includes("Kode waits for the user's go"), 20000, 'the pause');
-    expect(reviews()).toEqual([{ by: 'auto', purpose: 'demand', strategy: 'sirius-1.0', hand_off: 0, state: 'done' }]);
+    // Review without context: Kode drops the gotchas datapack and makes it again, empty, with MEKO.md on
+    // main and the teammate's branch naming the new one (the branch's own diff stays the fix); then it
+    // begins the level's task on that branch, whose first look runs by itself.
+    const out = await act('review-cold', 'run');
+    expect(deleted()).toEqual([GOTCHAS_ID]);
+    const gotchas = listed(repo, 'main', '/gotchas')!;
+    expect(gotchas).not.toBe(GOTCHAS_ID);
+    expect(listed(repo, 'demo/score-fix', '/gotchas')).toBe(gotchas);
+    expect(gitIn(repo, 'diff', '--name-only', 'main...demo/score-fix')).not.toContain('MEKO.md');
+    const task = env.core.sessions.get(out.sessionId!);
+    expect(task).toMatchObject({ name: 'Review the score fix', stage: 'code', branch: 'demo/score-fix', purpose: null });
+    expect(await waitFor(() => firstPrompt(task.id), (t) => !!t, 10000, "the task's launch")).toContain("Kode's code review is checking this change right now");
+    await waitFor(tour, (t) => t.phase === 'done', 30000, 'the first look');
+    expect(reviews(task.id)).toEqual([{ by: 'auto', purpose: 'demand', strategy: 'sirius-1.0', hand_off: 0, state: 'done' }]);
     // The review session starts on the workshop's model for its agent; the task keeps its own.
     expect(get<{ model: string | null }>(env.core.db, 'SELECT s.model FROM code_reviews c JOIN sessions s ON s.id = c.session_id WHERE c.task_id = ?', task.id)?.model).toBe('sonnet');
     expect(env.core.sessions.row(task.id).model).toBeNull();
+    expect(tour().score).toMatchObject({ cold: { kept: 0, caught: 0, gotchas: [] }, context: null, difference: null });
+    expect(tour().text).toContain('The review found 0 issues');
+    expect(tour().sessionId).toBe(task.id);
     expect(env.mekoApi.calls.some((c) => c.path.endsWith('/upload-url'))).toBe(false);
-    // Anything but a go leaves it waiting.
-    await say(host.id, 'What happens next?');
-    expect(reviews()).toHaveLength(1);
 
-    await say(host.id, 'go');
-    await waitFor(reviews, (rs) => rs.length === 2, 20000, 'the review with the gotchas');
-    expect(reviews()[1]).toMatchObject({ by: 'auto', purpose: 'demand', strategy: 'sirius-1.0', hand_off: 1 });
-    expect(env.mekoApi.calls.find((c) => c.path.endsWith('/upload-url'))?.path).toBe(`/datapacks/${GOTCHAS_ID}/knowledge-bases/upload-url`);
-    // Nothing waits for a go now.
+    // Mine and store context in Meko: the card lists the gotchas, which go into Meko, with a receipt naming them.
+    expect((await act('review-cold', 'next')).sessionId).toBe(task.id);
+    expect(tour()).toMatchObject({ stage: 'teach', phase: 'ready' });
+    expect(tour().text).toContain('- **MG-2:** The daily challenge carries the score through `newGame()`');
+    expect(ids(tour())).toEqual(['run']);
+    await act('teach', 'run');
+    await waitFor(tour, (t) => t.phase === 'done', 10000, 'the gotchas indexed');
+    expect(tour().text).toContain('MG-1, MG-2 and MG-3');
+    expect(env.mekoApi.calls.find((c) => c.path.endsWith('/upload-url'))?.path).toBe(`/datapacks/${gotchas}/knowledge-bases/upload-url`);
+
+    // Review with context: the review proper, which this time credits MG-2; its findings wait on the user.
+    fake('review-reports.json', MG2_FINDING);
+    await act('teach', 'next');
+    expect(tour()).toMatchObject({ stage: 'review-context', phase: 'ready' });
+    await act('review-context', 'run');
+    await waitFor(tour, (t) => t.phase === 'done', 30000, 'the review with the gotchas');
+    expect(reviews(task.id)[1]).toMatchObject({ by: 'auto', purpose: 'demand', strategy: 'sirius-1.0', hand_off: 1, state: 'triage' });
+    expect(tour().score).toMatchObject({ cold: { kept: 0, caught: 0 }, context: { kept: 1, caught: 1, gotchas: ['MG-2'] } });
+    expect(tour().score?.difference).toMatch(/^Caught with Meko: MG-2/);
+    expect(tour().text).toContain("It caught the trap from the team's gotcha (MG-2)");
+    expect(tour().actions).toEqual([{ id: 'finish', label: 'Move on to Level 2', primary: true }]);
+    // /go has nothing left to do.
     await expect(env.core.workshops.go(AGENTK_TOUR)).rejects.toMatchObject({ status: 409 });
     expect(env.core.projects.get(r.projectId).settings.codeReview).toEqual({ strategy: 'sirius-1.0' });
-    expect(prompts(env.core.sessions.get(task.id).claudeSessionId).some((t) => t.includes("write the PR's title and description"))).toBe(false);
-    await waitFor(events,
-      (t) => ["Review the score fix: Kode's turn ended", 'Review the score fix: Kode ran a first look', 'Review the score fix: First look done',
-        'Review the score fix: Kode ran the code review'].every((x) => t.includes(x)), 20000, 'events');
-
-    // A session in another project tells this host nothing.
-    const other = await env.core.projects.create({ repoPath: env.repo, name: 'Other', datapack: { mode: 'none' } });
-    const elsewhere = await env.core.sessions.create(other.id, { name: 'Elsewhere', prompt: 'hi', start: 'explore' });
-    await waitFor(() => env.core.sessions.get(elsewhere.id).status, (s) => s === 'idle', 10000, 'other turn');
-    expect(prompts(host.claudeSessionId).some((t) => t.includes('Elsewhere'))).toBe(false);
+    // Neither review asked the task for a PR description: the demo opens no PR.
+    expect(prompts(task.claudeSessionId).some((t) => t.includes("write the PR's title and description"))).toBe(false);
 
     // The demo has no GitHub repo: Open PR, Run to merge and a move to Pull Request are refused.
     const row = env.core.sessions.row(task.id);
     await expect(env.core.lifecycle.openPr(row)).rejects.toMatchObject({ status: 409, message: NO_PR_IN_WORKSHOP });
     await expect(env.core.lifecycle.setAutoRun(row, true)).rejects.toMatchObject({ status: 409 });
     await expect(env.core.lifecycle.move(row, { stage: 'review' })).rejects.toMatchObject({ status: 409 });
-    expect(env.core.sessions.get(task.id).stage).toBe('code');
 
-    // A last line of "That's the end of Level 1" archives the level's session; the phrase anywhere else leaves it.
-    const fix = join(env.core.sessions.row(task.id).worktree_path, 'src', 'fix.js');
-    writeFileSync(fix, '// the level\'s fix, not committed\n');
-    await say(host.id, "SAY:I'll say That's the end of Level 1 once you've played the fix.\\nPlay it now.");
-    expect(env.core.sessions.row(task.id).desired).toBe('running');
-    await say(host.id, "SAY:Meko caught the trap.\\nThat's the end of Level 1.");
-    await waitFor(() => env.core.sessions.row(task.id).desired, (d) => d === 'archived', 10000, 'the level closed');
-    expect(env.core.sessions.row(host.id).desired).toBe('running');
-    expect(env.core.sessions.row(elsewhere.id).desired).toBe('running');
-    // Archived, not discarded: the uncommitted fix is still there.
-    expect(readFileSync(fix, 'utf8')).toContain("the level's fix");
+    // While the level's task is open on the branch, making the datapack again is refused before
+    // anything is dropped.
+    const dropped = deleted().length;
+    await expect(env.core.workshops.freshGotchas(r.projectId)).rejects.toMatchObject({ status: 409 });
+    expect(deleted()).toHaveLength(dropped);
 
-    // A replay of the level, once that worktree is gone, gets its review by itself: the gotchas are
-    // in, so no first look. Run code review there writes no PR description either.
-    gitIn(env.core.projects.get(r.projectId).repoPath, 'worktree', 'remove', '--force', env.core.sessions.row(task.id).worktree_path);
-    const replay = await env.core.sessions.create(r.projectId, { name: 'Replay', prompt: 'Read the change.', start: 'code', branch: 'demo/score-fix', existingBranch: true });
-    const replayed = () => all<{ by: string; hand_off: number; state: string }>(env.core.db, 'SELECT by, hand_off, state FROM code_reviews WHERE task_id = ? ORDER BY created_at, rowid', replay.id);
-    await waitFor(replayed, (rs) => rs[0]?.state === 'done', 20000, "the replay's review");
-    expect(replayed()).toEqual([{ by: 'auto', hand_off: 1, state: 'done' }]);
-    await env.core.sessions.action(replay.id, 'review-run');
-    await waitFor(replayed, (rs) => rs.length === 2 && rs[1].state === 'done', 20000, 'Run code review');
-    expect(prompts(env.core.sessions.get(replay.id).claudeSessionId).some((t) => t.includes("write the PR's title and description"))).toBe(false);
+    // Fixes left uncommitted (as after Send to Kode): Archive keeps that worktree, on the branch.
+    const wt = row.worktree_path;
+    writeFileSync(join(wt, 'README.md'), 'a fix in progress\n');
+
+    // Move on to Level 2 archives the level's sessions (done before it answers) and finishes the level.
+    await act('review-context', 'finish');
+    expect(env.core.sessions.row(task.id).desired).toBe('archived');
+    expect(gitIn(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('demo/score-fix');
+    expect(tour()).toMatchObject({ level: '2-learn', stage: 'learn', phase: 'ready' });
+    expect(tour().lead).toContain('Every new agent session that has to rediscover a project burns tokens');
+    expect(tour().levels[0]).toMatchObject({ finished: true });
+    expect(tour().levels[0].stages.every((s) => s.status === 'done')).toBe(true);
+    // The scoreboard is Level 1's: Level 2 has none.
+    expect(tour().score).toBeNull();
+    expect(get(env.core.db, "SELECT COUNT(*) AS n FROM sessions WHERE purpose = 'guide'")).toEqual({ n: 0 });
+
+    // Taking Level 1 again: the gotchas datapack is made again, so its review looks without them first.
+    // The kept worktree lets go of the branch, its fix still there, and the branch is made again on
+    // the new MEKO.md.
+    await act('learn', 'goto', '1-review');
+    expect(tour()).toMatchObject({ level: '1-review', stage: 'repo' });
+    expect(tour().levels[0].finished).toBe(false);
+    await act('repo', 'next');
+    const again = await act('review-cold', 'run');
+    expect(deleted()).toEqual([GOTCHAS_ID, gotchas]);
+    expect(listed(repo, 'demo/score-fix', '/gotchas')).toBe(listed(repo, 'main', '/gotchas'));
+    expect(gitIn(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('HEAD');
+    expect(readFileSync(join(wt, 'README.md'), 'utf8')).toBe('a fix in progress\n');
+    await waitFor(tour, (t) => t.phase === 'done', 30000, "the replay's first look");
+    expect(reviews(again.sessionId!)).toEqual([expect.objectContaining({ hand_off: 0, state: 'done' })]);
+    expect(tour().text).toContain('The review found');
+    await act('review-cold', 'next');
+    expect(tour()).toMatchObject({ stage: 'teach', phase: 'ready' });
   });
 
-  it("Level 2: offers Learn the project with the tour's brief, runs the learn step after the question session's turn, and gives the host the Meko line and Context Gaps links", async () => {
+  it('a review with context that credits no gotcha says so, and Run the review again runs another', async () => {
+    uuids();
+    gotchasKnown();
+    const r = await env.core.workshops.start(AGENTK_TOUR);
+    const tour = tourOf(r.projectId);
+    const task = await toReviewWithContext(tour);
+    expect(tour().text).toContain('none of its findings credits a gotcha this time');
+    expect(tour().actions).toEqual([{ id: 'run', label: 'Run the review again' }, { id: 'finish', label: 'Move on to Level 2', primary: true }]);
+    fake('review-reports.json', MG2_FINDING);
+    await act('review-context', 'run');
+    await waitFor(tour, (t) => t.phase === 'done' && t.text.includes('It caught the trap'), 30000, 'the second review with the gotchas');
+    expect(reviews(task.id).map((x) => x.hand_off)).toEqual([0, 1, 1]);
+  });
+
+  it('Level 2 from its buttons: Learn the project on a datapack made again and on Sonnet, the question session and its learn step, the question asked again, and the tour\'s end', async () => {
     uuids();
     const gaps = await fakeMekoQuestions();
     try {
@@ -200,69 +255,84 @@ describe('the Kode tour (a bundled workshop; real session host + git, fake claud
       await env.core.refreshMeko();
       Object.assign(env.meko, { ensureConversation: async (_agent: string, _dp: string, key: string) => `conv-${key}` });
       const r = await env.core.workshops.start(AGENTK_TOUR);
-      const host = env.core.sessions.get(r.sessionId);
-      await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "host's first turn");
-      const events = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('Kode events:')).join('\n');
-
-      // The dialog opens with the tour's brief; the home offers it, though Level 1 may have saved a memory there (3 in the fake).
+      const repo = env.core.projects.get(r.projectId).repoPath;
+      const tour = tourOf(r.projectId);
+      // The home's Learn the project opens with the tour's brief, and is offered though Level 1 may have saved a memory there.
       expect(env.core.workshops.list()[0].learn).toMatchObject({ about: expect.stringContaining('Snake'), months: 0 });
       expect((await env.core.projects.home(r.projectId)).learnOffered).toBe(true);
-      // The host's script names the project's own datapack, which Learn fills.
-      expect(firstPrompt(host.id)).toContain(env.core.projects.get(r.projectId).datapacks[0].name);
 
-      // The question session: Meko can't answer one of its questions, which Context Gaps lists for its conversation.
-      const out = await env.core.tools.call(env.core.sessions.row(host.id), {
-        tool: 'start_sessions', input: { sessions: [{ name: 'Ask about the game', prompt: 'MEKO_SEARCH Answer the two questions.', stage: 'explore' }] },
-      });
-      expect((out.body as { text: string }).text).toContain('Ask about the game');
-      const ask = env.core.sessions.listForProject(r.projectId).find((s) => s.name === 'Ask about the game')!;
-      gaps.datapacks.set(DEDICATED_ID, [{ key: 'untested rules', query: 'Which rules have no test', askedBy: [`conv-${ask.claudeSessionId}`] }]);
-      // Its first turn ends: the host hears the Meko line and where the question is, and Kode runs the learn step by itself, once.
-      const link = `http://meko.test/datapacks/${DEDICATED_ID}/gaps`;
-      await waitFor(events, (t) => t.includes("Ask about the game: Kode's turn ended. Meko: 1 lookup"), 20000, 'the Meko line');
-      expect(events()).toContain(`1 question it asked Meko couldn't answer is on Meko's Context Gaps: ${link}`);
-      await waitFor(events, (t) => t.includes('Kode is saving what Ask about the game learned to Meko'), 20000, 'the learn step');
+      await act('repo', 'goto', '2-learn');
+      expect(tour()).toMatchObject({ level: '2-learn', stage: 'learn', phase: 'ready' });
+      const name = env.core.projects.get(r.projectId).datapacks[0].name;
+      expect(tour().text).toContain(name);
+      // Learn the project drops the project's datapack and makes it again, empty, under its name, which the
+      // project keeps as its own and MEKO.md names; it starts with the level's brief, on the tour's model.
+      const learnOut = await act('learn', 'run');
+      expect(deleted()).toEqual([DEDICATED_ID]);
+      const dp = env.core.projects.get(r.projectId).datapacks;
+      expect(dp).toEqual([expect.objectContaining({ name, role: 'dedicated' })]);
+      expect(dp[0].id).not.toBe(DEDICATED_ID);
+      expect(listed(repo, 'main', name)).toBe(dp[0].id);
+      expect(env.core.sessions.get(learnOut.sessionId!)).toMatchObject({ purpose: 'learn', stage: 'explore' });
+      expect(env.core.sessions.row(learnOut.sessionId!).model).toBe('sonnet');
+      expect(tour().phase).toBe('running');
+      expect(tour().links).toEqual([{ label: `Open ${name} in Meko`, href: `http://meko.test/datapacks/${dp[0].id}/memories`, kind: 'meko' }]);
+      await waitFor(() => env.core.sessions.get(learnOut.sessionId!).status, (st) => st === 'idle', 10000, "the learn session's turn");
+      // A learn session closes itself once it's done.
+      await env.core.sessions.archive(env.core.sessions.row(learnOut.sessionId!), { keepBranch: true });
+      expect(tour().phase).toBe('done');
+
+      // Ask about the game: its first turn ends, and Kode runs the learn step on it by itself, once.
+      await act('learn', 'next');
+      expect(tour().text).toContain('2. Which of the game\'s rules have no test yet?');
+      const askOut = await act('ask', 'run');
+      const ask = env.core.sessions.get(askOut.sessionId!);
+      expect(ask).toMatchObject({ name: 'Ask about the game', stage: 'explore' });
+      expect(await waitFor(() => firstPrompt(ask.id), (t) => !!t, 10000, 'its launch')).toContain('Which of the game\'s rules have no test yet');
       const learns = () => all<{ trigger: string }>(env.core.db, 'SELECT trigger FROM meko_learns WHERE session_id = ?', ask.id);
-      await waitFor(learns, (l) => l.length === 1, 10000, 'learn row');
+      await waitFor(learns, (l) => l.length === 1, 20000, 'the learn step');
       expect(learns()).toEqual([{ trigger: 'manual' }]);
-      await waitFor(() => prompts(ask.claudeSessionId).join('\n'), (t) => t.includes('Save what this session learned to Meko'), 10000, 'the learn prompt');
-      await waitFor(() => env.core.sessions.get(ask.id).status, (s) => s === 'idle', 10000, "the learn step's turn");
+      await waitFor(tour, (t) => t.phase === 'done', 30000, 'the learn step done');
       expect(learns()).toHaveLength(1);
+      expect(tour().links).toEqual([{ label: "Meko's Context Gaps", href: `http://meko.test/datapacks/${dp[0].id}/gaps/taught`, kind: 'meko' }]);
 
-      // A learn step that taught the question: the host gets the link again, to see it under Taught.
-      env.core.sessions.event(ask.id, 'learned', "Saved 1 memory and corrected 0 in the demo; taught Meko 1 question it couldn't answer", { saves: 1, taught: 1 });
-      await waitFor(events, (t) => t.includes(`that question is now under Taught on Meko's Context Gaps: ${link}`), 20000, 'the taught link');
-
-      // "Ask again" has no learn step after its turn.
-      await env.core.tools.call(env.core.sessions.row(host.id), {
-        tool: 'start_sessions', input: { sessions: [{ name: 'Ask again', prompt: 'Answer again.', stage: 'explore' }] },
-      });
-      const again = env.core.sessions.listForProject(r.projectId).find((s) => s.name === 'Ask again')!;
-      // It replaces the level's earlier session: the host starts it on the user's go, and Kode closes that one.
+      // Ask again replaces it: Kode closes "Ask about the game" as it starts, and runs no learn step on it.
+      await act('ask', 'next');
+      const againOut = await act('ask-again', 'run');
       await waitFor(() => env.core.sessions.row(ask.id).desired, (d) => d === 'archived', 10000, '"Ask about the game" closed');
-      await waitFor(events, (t) => t.includes("Ask again: Kode's turn ended"), 20000, "the second session's turn");
-      expect(all(env.core.db, 'SELECT 1 FROM meko_learns WHERE session_id = ?', again.id)).toEqual([]);
+      await waitFor(tour, (t) => t.phase === 'done', 30000, "the second session's turn");
+      expect(all(env.core.db, 'SELECT 1 FROM meko_learns WHERE session_id = ?', againOut.sessionId)).toEqual([]);
+      expect(ids(tour())).toEqual(['finish']);
 
-      // Once a learn session ran on the datapack, the home stops offering it.
-      const learn = await env.core.sessions.create(r.projectId, { name: 'Learn the game', prompt: '', learn: { about: 'A game', where: '', months: 0 } });
-      expect((await env.core.projects.home(r.projectId)).learnOffered).toBe(false);
-
-      // The end of Level 2 archives every open session in the project but the host.
       // A session still saving what it learned stays open at the level's end: Archive would cut the save short.
       const running = env.core.learn.running.bind(env.core.learn);
-      const saving = vi.spyOn(env.core.learn, 'running').mockImplementation((id) => id === again.id || running(id));
-      await say(host.id, "SAY:Meko learned it.\\nThat's the end of Level 2.");
-      await waitFor(() => env.core.sessions.row(learn.id).desired, (d) => d === 'archived', 10000, 'the level closed');
-      expect(env.core.sessions.row(again.id).desired).toBe('running');
-      expect(env.core.sessions.row(host.id).desired).toBe('running');
+      const saving = vi.spyOn(env.core.learn, 'running').mockImplementation((id) => id === againOut.sessionId || running(id));
+      await act('ask-again', 'finish');
       saving.mockRestore();
-      // Once a learn session has run, the offer stays off while the datapack has memories, and comes back on an empty one.
-      expect((await env.core.projects.home(r.projectId)).learnOffered).toBe(false);
-      env.meko.describeDatapack = (async () => ({ memoryCount: 0, knowledgeCount: 0, grant: 'owner', ownerName: 'Test', ownerEmail: 'test@example.com' })) as typeof env.meko.describeDatapack;
-      expect((await env.core.projects.home(r.projectId)).learnOffered).toBe(true);
+      expect(env.core.sessions.row(againOut.sessionId!).desired).toBe('running');
+      // Level 1 isn't finished: the tour goes there.
+      expect(tour()).toMatchObject({ level: '1-review', stage: 'repo', finished: false });
+      expect(tour().levels[1].finished).toBe(true);
     } finally {
       await gaps.close();
     }
+  });
+
+  it('ends the tour once every level is finished, with Use Kode on your own repo', async () => {
+    uuids();
+    const r = await env.core.workshops.start(AGENTK_TOUR);
+    const tour = tourOf(r.projectId);
+    // Skip this level is offered only where a level can't run; Finish passes it here too.
+    run(env.core.db, `INSERT INTO workshop_tours (project_id, level, stage, level_at, skipped_json, finished_json, updated_at)
+      VALUES (?, '2-learn', 'ask-again', 0, '[]', '["1-review"]', 0)`, r.projectId);
+    const s = await env.core.sessions.create(r.projectId, { name: 'Ask again', prompt: 'Answer again.', start: 'explore' });
+    await waitFor(tour, (t) => t.phase === 'done', 20000, 'its turn');
+    await act('ask-again', 'finish');
+    await waitFor(() => env.core.sessions.row(s.id).desired, (d) => d === 'archived', 10000, 'the level closed');
+    expect(tour()).toMatchObject({ finished: true, phase: 'done', sessionId: null });
+    expect(tour().text).toContain('Use Kode on your own repo next');
+    expect(tour().actions).toEqual([{ id: 'own-repo', label: 'Use Kode on your own repo', primary: true }, { id: 'close', label: 'Close tour', danger: true }]);
+    await expect(act(tour().stage, 'next')).rejects.toMatchObject({ status: 409 });
   });
 
   it("deletes the datapacks it made when the demo can't be built, and opens no project", async () => {
@@ -277,15 +347,67 @@ describe('the Kode tour (a bundled workshop; real session host + git, fake claud
     expect(env.core.workshops.list()[0].projectId).toBeNull();
   });
 
-  it("starts without Meko: no datapacks and no MEKO.md, and the host's script says Meko is off", async () => {
+  it("opens without Meko, with no datapacks and no MEKO.md: Run the review says to start the tour again, and Level 2 says why it can't run", async () => {
     await noMeko(env);
     const r = await env.core.workshops.start(AGENTK_TOUR);
     const p = env.core.projects.get(r.projectId);
     expect(p.datapacks).toEqual([]);
     expect(existsSync(join(p.repoPath, 'MEKO.md'))).toBe(false);
     expect(env.meko.calls.filter((c) => c.name === 'createDatapack')).toEqual([]);
-    await waitFor(() => env.core.sessions.get(r.sessionId).status, (s) => s === 'idle', 10000, "host's first turn");
-    expect(firstPrompt(r.sessionId)).toMatch(/Meko[^\n]*\boff\b/);
+    const tour = tourOf(r.projectId);
+    expect(tour().levels[1].blocked).toMatch(/datapack of the project's own/);
+    await act('repo', 'begin');
+    await act('repo', 'next');
+    await expect(act('review-cold', 'run')).rejects.toMatchObject({ status: 409, message: expect.stringContaining("Meko wasn't running when it started") });
+    expect(env.core.sessions.listForProject(p.id)).toEqual([]);
+    // Level 2 can't run: its card says why and offers to skip it.
+    await act('review-cold', 'goto', '2-learn');
+    expect(tour()).toMatchObject({ level: '2-learn', phase: 'blocked' });
+    expect(tour().text).toMatch(/datapack of the project's own/);
+    expect(ids(tour())).toEqual(['finish', 'own-repo']);
+  });
+
+  it("archives a tour host from before Kode ran tours itself, and the tour goes on from its records", async () => {
+    uuids();
+    const r = await env.core.workshops.start(AGENTK_TOUR);
+    const host = await env.core.sessions.create(r.projectId, { name: 'Kode tour', prompt: 'Host the Kode tour.', start: 'explore' });
+    run(env.core.db, "UPDATE sessions SET purpose = 'guide' WHERE id = ?", host.id);
+    await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "the host's turn");
+    await env.core.tours.archiveOldHosts();
+    expect(env.core.sessions.row(host.id).desired).toBe('archived');
+    expect(env.core.tours.state(r.projectId)).toMatchObject({ stage: 'repo' });
+  });
+
+  it('serves the demo to play, read-only and sandboxed, with its scripts and stylesheet inline', async () => {
+    uuids();
+    const r = await env.core.workshops.start(AGENTK_TOUR);
+    const page = env.core.tours.playFile(AGENTK_TOUR, 'main', 'index.html');
+    expect(page.type).toMatch(/^text\/html/);
+    expect(String(page.body)).toContain('var Game');
+    expect(String(page.body)).not.toMatch(/<script src=|rel="stylesheet"/);
+    // With the workshop's line in a bar on top: the page opens in a tab of its own.
+    expect(String(page.body)).toContain("When you're done playing, go back to the Kode tab to continue the tour.");
+    expect(env.core.tours.playFile(AGENTK_TOUR, 'main', '').type).toMatch(/^text\/html/);
+    expect(String(env.core.tours.playFile(AGENTK_TOUR, 'main', 'src/game.js').body)).toContain('newGame');
+    // Nothing outside the demo, no dot-file, no session of another project.
+    for (const [where, path] of [['main', '../x'], ['main', '.git/config'], ['main', 'nope.html'], ['main', 'README.md'], ['nope', 'index.html']]) {
+      expect(() => env.core.tours.playFile(AGENTK_TOUR, where, path), `${where}/${path}`).toThrow(expect.objectContaining({ status: 404 }));
+    }
+    const other = await env.core.projects.create({ repoPath: env.repo, name: 'Other', datapack: { mode: 'none' } });
+    const elsewhere = await env.core.sessions.create(other.id, { name: 'Elsewhere', prompt: 'hi', start: 'explore' });
+    expect(() => env.core.tours.playFile(AGENTK_TOUR, elsewhere.id, 'index.html')).toThrow(expect.objectContaining({ status: 404 }));
+    await waitFor(() => env.core.sessions.get(elsewhere.id).status, (s) => s === 'idle', 10000, 'its turn');
+    expect(r.projectId).toBeTruthy();
+
+    const app = await buildServer(env.core, { webDir: null, updates: null });
+    try {
+      const res = await app.inject({ method: 'GET', url: `/api/workshops/${AGENTK_TOUR}/play/main/index.html` });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-security-policy']).toMatch(/^sandbox allow-scripts;/);
+      expect((await app.inject({ method: 'GET', url: `/api/workshops/${AGENTK_TOUR}/play/main/.git/HEAD` })).statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
   });
 });
 
@@ -305,7 +427,7 @@ describe("a fresh install's tour ([welcome] tour)", () => {
   it('starts once at the server\'s start while there are no projects, then the key goes', async () => {
     welcome();
     await env.core.start();
-    await waitFor(() => env.core.workshops.list()[0]?.hostId ?? null, (id) => !!id, 15000, 'tour host');
+    await waitFor(() => env.core.workshops.list()[0]?.projectId ?? null, (id) => !!id, 15000, 'the tour\'s project');
     await waitFor(() => env.core.config.welcome.tour, (t) => t === '', 5000, 'key removed');
     expect(kvGet(env.core.db, 'tour-started')).toBe(AGENTK_TOUR);
     expect(get(env.core.db, 'SELECT COUNT(*) AS n FROM projects WHERE workshop IS NOT NULL')).toEqual({ n: 1 });

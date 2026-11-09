@@ -161,10 +161,10 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
-    // Back to schema 16: undo 50 (workshop projects), 49 (a session's model), 48 (agents stopped for sitting idle), 43 (code reviews), 42 (the work queue), 41 (Run to merge), 40 (a session's purpose), 39 (positions), 38 (untrusted PR heads), 37 (harnesses and Kiro's credits), 36 (held reviews), 34 (What Meko doesn't know, which 45 dropped again), 33 (share contacts), 32 (Ask Kode's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
+    // Back to schema 16: undo 52 (workshop tours), 50 (workshop projects), 49 (a session's model), 48 (agents stopped for sitting idle), 43 (code reviews), 42 (the work queue), 41 (Run to merge), 40 (a session's purpose), 39 (positions), 38 (untrusted PR heads), 37 (harnesses and Kiro's credits), 36 (held reviews), 34 (What Meko doesn't know, which 45 dropped again), 33 (share contacts), 32 (Ask Kode's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
     // (sessions.meko_agent_id, project_events), 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*)
     // and 17 (Meko calls), then upgrade again.
-    db.exec('DROP TABLE code_review_steps; DROP TABLE code_reviews; DROP TABLE work_item_links; DROP TABLE work_items; DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs; DROP TABLE agentk_asks; DROP TABLE share_contacts; DROP TABLE held_reviews');
+    db.exec('DROP TABLE workshop_tours; DROP TABLE code_review_steps; DROP TABLE code_reviews; DROP TABLE work_item_links; DROP TABLE work_items; DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs; DROP TABLE agentk_asks; DROP TABLE share_contacts; DROP TABLE held_reviews');
     db.exec('ALTER TABLE usage_messages DROP COLUMN credits; ALTER TABLE projects DROP COLUMN workshop');
     for (const c of ['first_prompt', 'model', 'idle_stopped_at', 'parent_id', 'review_json', 'auto_run', 'queued_auto', 'purpose', 'position', 'untrusted', 'harness', 'agent_session_id', 'queued_instructions', 'discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
     for (const c of ['md_hash', 'html_hash', 'source', 'source_told', 'questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
@@ -234,7 +234,7 @@ describe('what Meko saved', () => {
     expect(o.cost).toEqual(pu.cost);
   });
 
-  it("gives a workshop's host one session's Meko line, with the saving the Usage page counts, and none without Meko", () => {
+  it("gives a tour's card one session's Meko line, with the saving the Usage page counts, and none without Meko", () => {
     const { dir, db } = setup();
     expect(sessionMekoLine(db, 's1')).toBe('');
     expect(sessionMekoLine(db, 'gone')).toBe('');

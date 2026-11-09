@@ -5,5 +5,3 @@ Search Meko first, and answer from what it knows before you read any file. Say w
 Don't change any files, and don't save anything to Meko in this session, not even at the end: this replaces the save step below.
 
 Keep your reply short.
-
-End your reply with this line, as it is, and nothing after it: "Go back to the Kode tour tab to continue." This replaces the summary and recommendation the end of these instructions asks for: don't recommend next steps, and don't say what you didn't change or save.
