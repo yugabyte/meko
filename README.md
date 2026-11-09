@@ -33,7 +33,8 @@ a single binary that has the command line, the server, the MCP tools and the RES
 
 ## Install
 
-On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
+On any Apple Silicon Mac (M1, M2, M3, M4 or later) with macOS 14 or newer, or Linux on x64 or arm64.
+Windows and older Intel-based Macs aren't supported.
 
 ```sh
 curl -fsSL https://mekodata.ai/install.sh | sh
@@ -129,6 +130,16 @@ meko kode ui                      # opens Kode in your browser
   results reranked by a cross-encoder), memory extraction from conversations, and automatic text
   extraction, chunking and embedding of uploaded files. Your local datapacks embedding and reranking
   run locally.
+
+## Usage stats
+
+Meko sends anonymous usage stats to YugabyteDB, so we can see how it's used and fix what gets in
+people's way. They never include your data: no datapack, memory, conversation or file, and no query,
+path or token.
+
+To turn them off, use Settings › Anonymous usage stats in Meko's web UI, or set `enabled = false`
+under `[call_home]` in `~/.meko/config.toml`. Kode, if you use it, has its own checkbox in its
+Settings › General.
 
 ## Build from source
 
