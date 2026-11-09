@@ -34,7 +34,7 @@ a single binary that has the command line, the server, the MCP tools and the RES
 ## Install
 
 On any Apple Silicon Mac (M1, M2, M3, M4 or later) with macOS 14 or newer, or Linux on x64 or arm64.
-Windows and older Intel-based Macs aren't supported yet.
+Windows and older Intel-based Macs aren't supported.
 
 ```sh
 curl -fsSL https://mekodata.ai/install.sh | sh
