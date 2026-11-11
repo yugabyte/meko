@@ -2728,6 +2728,8 @@ export class Lifecycle {
       await git(repo, 'fetch', '--prune', '--quiet', 'origin').catch(() => undefined);
     }
     if (keep) this.core.log.info(`kept branch ${row.branch} of ${row.id}: it has commits PR #${st.number} doesn't have`);
+    const item = this.core.workQueue.closeForSession(row.id);
+    if (item) this.sessions.event(row.id, 'work-item', `Work item dismissed: ${item}`);
     this.sessions.setStage(row.id, 'done', 'auto');
     const wt = worktree === 'idle' ? 'worktree kept for the next session' : worktree === 'removed' ? 'worktree removed' : '';
     this.sessions.event(row.id, 'cleanup', !worktreeFreed

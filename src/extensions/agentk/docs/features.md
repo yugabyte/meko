@@ -266,7 +266,8 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   **Sync** in Settings › Work queue (it's off until you do) and it pulls in, when you press it and
   every 15 minutes, the PRs waiting for your review and, through your agent's Slack connector, the
   messages on a Slack list of yours, marked **New** until you give them their place. Each item has one session,
-  whose status shows on it; **Start session** opens New session with the item filled in. Paste a
+  whose status shows on it; **Start session** opens New session with the item filled in, and the
+  item is dismissed by itself once that session's PR merges. Paste a
   GitHub, Jira or Slack link into `⌘K` to jump to the session working on it.
 
 ## In the browser and on a phone

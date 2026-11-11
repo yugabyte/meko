@@ -255,6 +255,15 @@ export class WorkQueue {
     return closed;
   }
 
+  /** Closes the open item a session is on, once its PR merged: the item's title, or null when it has none open. */
+  closeForSession(sessionId: string): string | null {
+    const r = get<{ id: string; title: string }>(this.db, "SELECT id, title FROM work_items WHERE session_id = ? AND status = 'open'", sessionId);
+    if (!r) return null;
+    run(this.db, "UPDATE work_items SET status = 'closed', closed_at = ?, unplaced = 0 WHERE id = ?", Date.now(), r.id);
+    this.deps.changed();
+    return r.title;
+  }
+
   reorder(req: ReorderWorkItemsRequest): void {
     const ids = req?.ids;
     if (!Array.isArray(ids) || !ids.every((x) => typeof x === 'string')) throw new HttpError(400, "Give the queue's order as a list of item ids.");
