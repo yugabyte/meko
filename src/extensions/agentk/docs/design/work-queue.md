@@ -59,6 +59,10 @@ replaces the item's own. `Session.workItemId` is read back from it.
   (`soleItemFor()`).
 - **By hand:** Link a session… on an item, or Link to a work item / Change its work item from the
   session's ⋯ menu (the ⋯ sheet on a phone) and the palette (`LinkWorkItemDialog.tsx`), which says when a pick moves a link.
+- **A merged session dismisses its item.** When Merge & Close finishes (`Lifecycle.cleanup()`, also
+  for a PR merged on GitHub), the open item the session is on is closed as Dismiss closes it
+  (`WorkQueue.closeForSession()`), with a `work-item` event on the session. The link stays, so the
+  Dismissed list shows which session finished it. Discard and Close review leave the item open.
 - **A closed session** keeps its link: the item says its session is closed and offers Start session
   again, which replaces the link.
 
