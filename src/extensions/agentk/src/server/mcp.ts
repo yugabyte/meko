@@ -22,6 +22,17 @@ export interface ToolsLink {
   /** The hook socket (KODE_HOOK_SOCK) and the session's hook token (KODE_HOOK_TOKEN). */
   sock: string | undefined;
   token: string | undefined;
+  /**
+   * The only tools listed and taken (KODE_TOOLS, comma-separated), or undefined for all of them:
+   * `meko kode review`'s steps get only the review's report tools.
+   */
+  only?: string[];
+}
+
+/** KODE_TOOLS read: the tool names it lists, or undefined when it's unset or empty. */
+export function onlyTools(v: string | undefined): string[] | undefined {
+  const names = (v ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  return names.length ? names : undefined;
 }
 
 /** A tool call's result, as MCP has it. */
@@ -93,13 +104,14 @@ export async function handle(link: ToolsLink, msg: Message, version = '1'): Prom
     case 'ping':
       return reply({ result: {} });
     case 'tools/list':
-      return reply({ result: { tools: TOOL_DEFS.map((t) => ({
+      return reply({ result: { tools: TOOL_DEFS.filter((t) => !link.only || link.only.includes(t.name)).map((t) => ({
         name: t.name, description: t.description, inputSchema: t.inputSchema,
         annotations: { readOnlyHint: !!t.readOnly, destructiveHint: false, openWorldHint: false },
       })) } });
     case 'tools/call': {
       const name = msg.params?.name;
       if (typeof name !== 'string') return reply({ error: { code: -32602, message: 'tools/call needs a tool name.' } });
+      if (link.only && !link.only.includes(name)) return reply({ result: fail(`${name} isn't one of the tools here.`) });
       return reply({ result: await callServer(link, name, msg.params?.arguments) });
     }
     default:
@@ -110,7 +122,9 @@ export async function handle(link: ToolsLink, msg: Message, version = '1'): Prom
 /** Runs the server on stdio until the session's CLI closes it: a message per line in, one per line out. */
 export async function runMcp(version: string): Promise<void> {
   // AK_*: their names in a session launched before Kode was called Kode.
-  const link = { sock: process.env.KODE_HOOK_SOCK ?? process.env.AK_HOOK_SOCK, token: process.env.KODE_HOOK_TOKEN ?? process.env.AK_HOOK_TOKEN };
+  const link = {
+    sock: process.env.KODE_HOOK_SOCK ?? process.env.AK_HOOK_SOCK, token: process.env.KODE_HOOK_TOKEN ?? process.env.AK_HOOK_TOKEN, only: onlyTools(process.env.KODE_TOOLS),
+  };
   const send = (m: unknown) => process.stdout.write(`${JSON.stringify(m)}\n`);
   for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
     if (!line.trim()) continue;

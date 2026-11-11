@@ -300,7 +300,7 @@
     "codeReview": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Local code reviews on a day: those started then, by their state now, and the tokens their sessions spent then; left out of a day with neither.",
+      "description": "Local code reviews on a day: those started then (a task's, and runs of meko kode review), by their state now, and the tokens their sessions spent then (and the runs of meko kode review started then); left out of a day with neither.",
       "required": ["runs", "byOutcome", "lgtm", "prs", "rounds", "candidates", "findings", "fixed", "declined", "tokens", "usdCents"],
       "properties": {
         "runs": { "$ref": "#/$defs/count" },
@@ -331,6 +331,7 @@
         },
         "fixed": { "$ref": "#/$defs/count" },
         "declined": { "$ref": "#/$defs/count" },
+        "cli": { "$ref": "#/$defs/count", "description": "Of runs, those of meko kode review (from the command line): they only report, so they add no PR, fix or decline. Optional, as every field added after the report first shipped: an earlier release doesn't send it." },
         "tokens": { "$ref": "#/$defs/tokens" },
         "usdCents": { "$ref": "#/$defs/count" },
         "credits": { "type": "number", "minimum": 0, "maximum": 1000000000 }

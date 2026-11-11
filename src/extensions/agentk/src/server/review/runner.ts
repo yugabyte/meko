@@ -1,21 +1,18 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import {
-  DEFAULT_STRATEGY, DESCRIBE_INTERRUPTED, DESCRIBE_LOST, DISMISSED_BY_YOU, MAX_FINDING_NOTE, MIN_SWEEPS, REVIEW_LEFT_CODE, REVIEW_LEFT_REVIEW, YOU_CANCELLED, caughtWithMeko, countsText, meAkReviewLine, noCounts,
+  DEFAULT_STRATEGY, DESCRIBE_INTERRUPTED, DESCRIBE_LOST, DISMISSED_BY_YOU, MAX_FINDING_NOTE, REVIEW_LEFT_CODE, REVIEW_LEFT_REVIEW, YOU_CANCELLED, caughtWithMeko, countsText, meAkReviewLine, noCounts,
   resolveReview, reviewHolds, reviewRunning, strategyName, totalCount,
-  type CodeReviewDetail, type CodeReviewFinding, type CodeReviewState, type CodeReviewSummary, type FindingChoice, type FindingOutcome, type GotchaCredit,
+  type CodeReviewDetail, type CodeReviewFinding, type CodeReviewState, type CodeReviewSummary, type FindingChoice, type FindingOutcome,
   type ReviewSettings, type ReviewStrategyId, type SeverityCounts,
 } from '../../shared/codereview.js';
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses.js';
-import { isGotchasDatapack, parseMekoMd } from '../../shared/mekomd.js';
 import { parseGithubRef } from '../../shared/github-refs.js';
-import { shortRemote } from '../../shared/datapacks.js';
 import type { OpenPrReview } from '../../shared/types.js';
 import { globalReview } from '../config.js';
 import type { Core } from '../core.js';
 import { all, get, run, tx } from '../db.js';
-import { git, readRemotes } from '../git.js';
 import * as github from '../github.js';
 import { repoConfigTrusted } from '../headtrust.js';
 import { errMsg } from '../log.js';
@@ -24,19 +21,12 @@ import { HttpError } from '../projects.js';
 import type { FixAfter } from '../prompts.js';
 import { parseSettings, projectRow, sessionRepo, sessionReview, sessionRow, type SessionRow } from '../store.js';
 import { TOOLS_SERVER } from '../tooldefs.js';
-import { readDiff } from './diff.js';
-import { findGuides, findMekoMds } from './guides.js';
-import { readCommits, readHistory } from './history.js';
-import { MIN_CONFIDENCE, applyScore, countsOf, keepScored, mergeNotes, mergeSweep, validate } from './merge.js';
+import { baseRefIn, readChange } from './context.js';
+import { ASK_AGAIN, SCORE_BATCH, SCORER_TIER, countsOf, findingCredits, judgeRound, mergeNotes, mergeSweep, moreSweeps } from './merge.js';
 import { basePrompt, passPrompt, scoreBase, scorePrompt, stepList, sweepContext } from './prompt.js';
 import { checkOutcomes, checkReport, checkScore } from './schemas.js';
 import { strategyFor } from './strategies.js';
 import type { Candidate, Diff, PassReport, PriorRound, ReviewContext, ReviewDatapack, ReviewIssue, ScoreReport, Tier } from './types.js';
-
-/** A candidate's credits, with the quote each was given (`Finding.quotes`). */
-function findingCredits(f: Candidate['finding']): GotchaCredit[] {
-  return f.gotchas.map((id) => ({ id, quote: f.quotes?.[id] ?? '' }));
-}
 
 /** The review tools' names, as Kode's MCP server (`kode_sessions`) has them. */
 export const REVIEW_TOOLS = ['review_report', 'review_score', 'review_outcome'] as const;
@@ -48,18 +38,6 @@ export const REVIEW_AGENTS: Record<Tier, string> = {
   mid: 'kode-review-mid',
   small: 'kode-review-small',
 };
-
-/** The subagent each scorer runs on: the cloud's scorers run on the small model. */
-const SCORER_TIER: Tier = 'small';
-
-/**
- * The most scorers started at once: a round can have dozens of candidates, so they run in batches
- * of this many, each batch once the one before has finished (a sweep's passes all start at once).
- */
-const SCORE_BATCH = 5;
-
-/** How many times Kode asks again for the steps a turn left unreported, before it goes on without them. */
-const ASK_AGAIN = 1;
 
 /** One step of a sweep or of scoring: its name, the tier it runs on, and the prompt file it reads. */
 interface ReviewStep {
@@ -597,80 +575,25 @@ export class CodeReviews {
     await this.sendSweep(id);
   }
 
-  /** What the passes read: the diff from the merge-base to the working tree, and everything around it. */
+  /** What the passes read: the task's change from where it left its base to its worktree, and everything around it. */
   private async readChange(r: ReviewRow, task: SessionRow, dir: string): Promise<{ ctx: ReviewContext; diff: Diff }> {
     const wt = task.worktree_path;
-    const base = await this.baseRef(task);
-    const diff = await readDiff(wt, base, dir);
-    // The passes read each patch too large to inline by its path: as Claude is told every path.
-    for (const f of diff.files) if (f.patchPath) f.patchPath = claudePath(f.patchPath);
-    const mergeBase = (await git(wt, 'merge-base', base, 'HEAD')).trim();
-    const head = (await git(wt, 'rev-parse', 'HEAD')).trim();
-    const dirty = !!(await git(wt, 'status', '--porcelain')).trim();
-    const paths = diff.files.map((f) => f.path);
-    const trusted = repoConfigTrusted(task);
-    const datapacks = trusted && this.core.mekoStatus.configured ? this.datapacks(wt, paths) : [];
-    const repo = sessionRepo(this.db, task);
     // In Pull Request, the open PR's own title and description.
     const prDescription = r.stage === 'review' ? await this.core.lifecycle.prText(task) : this.readDescription(task);
-    return {
-      diff,
-      ctx: {
-        repo: await this.repoName(repo ?? wt),
-        branch: task.branch,
-        baseRef: base,
-        baseSha: mergeBase,
-        headSha: head,
-        dirty,
-        title: task.name,
-        prDescription,
-        description: task.initial_prompt ?? '',
-        design: this.design(task),
-        commits: await readCommits(wt, mergeBase),
-        guides: findGuides(wt, paths),
-        history: await readHistory(wt, mergeBase, diff),
-        issues: await this.issues(task, dir),
-        datapacks,
-        prior: this.prior(r),
-        // As Claude is told every path: Claude Code asks before reading through /net.
-        worktree: claudePath(wt),
-        runDir: claudePath(dir),
-      },
-    };
-  }
-
-  /** The repo's GitHub `owner/name` from its origin, else its folder's name. */
-  private async repoName(repo: string): Promise<string> {
-    const origin = (await readRemotes(repo).catch(() => null))?.origin;
-    return origin ? shortRemote(origin).split('/').slice(-2).join('/') : basename(repo);
-  }
-
-  /** The base the change is read against: origin's copy of the base branch when there is one, else the local branch. */
-  private async baseRef(task: SessionRow): Promise<string> {
-    for (const ref of [`origin/${task.base_branch}`, task.base_branch]) {
-      try {
-        await git(task.worktree_path, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
-        return ref;
-      } catch {
-        /* not this one */
-      }
-    }
-    return task.base_branch;
-  }
-
-  /** The datapacks the MEKO.md files over the change list, each once, the gotchas ones marked. */
-  private datapacks(wt: string, paths: string[]): ReviewDatapack[] {
-    const seen = new Map<string, ReviewDatapack>();
-    for (const rel of findMekoMds(wt, paths)) {
-      let text: string;
-      try {
-        text = readFileSync(join(wt, rel), 'utf8');
-      } catch {
-        continue;
-      }
-      for (const d of parseMekoMd(text)) if (!seen.has(d.id)) seen.set(d.id, { ...d, gotchas: isGotchasDatapack(d.name) });
-    }
-    return [...seen.values()];
+    return readChange({
+      folder: wt,
+      repo: sessionRepo(this.db, task) ?? wt,
+      base: await baseRefIn(wt, task.base_branch),
+      dir,
+      branch: task.branch,
+      title: task.name,
+      prDescription,
+      description: task.initial_prompt ?? '',
+      design: this.design(task),
+      meko: repoConfigTrusted(task) && this.core.mekoStatus.configured,
+      issues: () => this.issues(task, dir),
+      prior: this.prior(r),
+    });
   }
 
   /** Where the task's design is: its Artifact's link, else its file; null without one. */
@@ -1022,8 +945,7 @@ export class CodeReviews {
     const { candidates, added } = mergeSweep(before, reports, r.sweep);
     this.set(id, { candidates_json: JSON.stringify(candidates), asked: 0 });
     this.addNotes(id, r.round, mergeNotes(reports));
-    const minSweeps = Math.min(MIN_SWEEPS, r.depth);
-    if (r.sweep < r.depth && (r.sweep < minSweeps || added > 0)) {
+    if (moreSweeps(r.depth, r.sweep, added)) {
       this.set(id, { sweep: r.sweep + 1 });
       await this.sendSweep(id);
       return;
@@ -1059,33 +981,12 @@ export class CodeReviews {
   private async finishRound(id: string): Promise<void> {
     const r = this.mustReview(id);
     const cands = json<Candidate[]>(r.candidates_json, []);
-    const strategy = strategyFor(r.strategy);
-    const scores = new Map(this.steps(id, `r${r.round}c`).map((s) => [s.step, s.report as ScoreReport]));
-    cands.forEach((c, i) => {
-      const s = scores.get(`r${r.round}c${i + 1}`);
-      if (s) applyScore(c, s);
-    });
-    const kept = strategy.scored ? keepScored(cands, MIN_CONFIDENCE) : cands;
+    const prefix = `r${r.round}c`;
+    const scores = new Map(this.steps(id, prefix).map((s) => [Number(s.step.slice(prefix.length)), s.report as ScoreReport]));
     const { diff } = this.loadRound(r);
-    // validate gives back copies of what it posts, and the candidates themselves for what it withholds.
-    const { withheld } = validate(kept, diff);
-    const out = new Set(withheld.map((w) => w.candidate));
-    const post = kept.filter((c) => !out.has(c));
-    const keyOf = new Map(cands.map((c, i) => [c, `${r.round}:${i + 1}`]));
-    const dropReason = new Map<Candidate, string>(withheld.map((w) => [w.candidate, w.reason]));
-    for (const c of cands) {
-      if (post.includes(c) || dropReason.has(c)) continue;
-      dropReason.set(c, c.refuted ? 'refuted' : `confidence below ${MIN_CONFIDENCE}`);
-    }
-    const findings = json<CodeReviewFinding[]>(r.findings_json, []).filter((f) => f.round !== r.round);
-    for (const c of cands) {
-      const s = scores.get(`r${r.round}c${keyOf.get(c)!.split(':')[1]}`);
-      findings.push({
-        key: keyOf.get(c)!, round: r.round, sweep: c.sweep, file: c.finding.file, line: c.finding.line, severity: c.finding.severity, comment: c.finding.comment,
-        passes: c.passes, gotchas: c.finding.gotchas, credits: findingCredits(c.finding), verdict: c.verdict, confidence: c.scored ? c.score : null,
-        reason: s ? (s.verdict === 'refuted' ? s.refutation : s.reason) : null, kept: post.includes(c), dropped: post.includes(c) ? null : dropReason.get(c) ?? null, outcome: null,
-      });
-    }
+    const judged = judgeRound({ round: r.round, cands, scores, diff, scored: strategyFor(r.strategy).scored });
+    const post = judged.post;
+    const findings = json<CodeReviewFinding[]>(r.findings_json, []).filter((f) => f.round !== r.round).concat(judged.findings);
     this.set(id, { findings_json: JSON.stringify(findings), counts_json: JSON.stringify(keptCounts(findings)), last_kept: post.length });
     const task = this.core.sessions.row(r.task_id);
     const roundCounts = countsOf(post);

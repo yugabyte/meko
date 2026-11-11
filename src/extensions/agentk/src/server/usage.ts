@@ -396,6 +396,8 @@ export interface ReviewRun {
   candidates: number;
   fixed: number;
   declined: number;
+  /** A run of `meko kode review` (`cli_reviews`). */
+  cli?: boolean;
 }
 
 const parsed = <T>(s: string | null, fallback: T): T => {
@@ -406,8 +408,26 @@ const parsed = <T>(s: string | null, fallback: T): T => {
   }
 };
 
-/** Every code review, or one project's (its task's project), oldest first. A row that doesn't parse counts as finding nothing. */
+/**
+ * Every code review, or one project's (its task's project), oldest first: a task's (`code_reviews`)
+ * and a run of `meko kode review` (`cli_reviews`, its project the one on its repo). A row that
+ * doesn't parse counts as finding nothing.
+ */
 export function reviewRuns(db: Db, projectId?: string): ReviewRun[] {
+  return [...taskReviewRuns(db, projectId), ...cliReviewRuns(db, projectId)].sort((a, b) => a.at - b.at);
+}
+
+/** The runs of `meko kode review`: one round when its passes ran, nothing sent, nothing fixed (it only reports). */
+function cliReviewRuns(db: Db, projectId?: string): ReviewRun[] {
+  return all<{ created_at: number; state: string; sweeps: number; candidates: number; counts_json: string }>(db,
+    `SELECT created_at, state, sweeps, candidates, counts_json FROM cli_reviews ${projectId ? 'WHERE project_id = ?' : ''}`, ...(projectId ? [projectId] : []))
+    .map((r) => ({
+      at: r.created_at, state: r.state, round: r.sweeps > 0 ? 1 : 0, sent: false, counts: { ...noCounts(), ...parsed<Partial<SeverityCounts>>(r.counts_json, {}) },
+      candidates: r.candidates, fixed: 0, declined: 0, cli: true,
+    }));
+}
+
+function taskReviewRuns(db: Db, projectId?: string): ReviewRun[] {
   // `reported`: a step of the review's current round (r<round>s…, r<round>c…) has reported.
   return all<{
     created_at: number; state: string; round: number; finished_at: number | null; counts_json: string; findings_json: string; candidates_json: string; reported: number;
@@ -442,7 +462,7 @@ export function reviewRuns(db: Db, projectId?: string): ReviewRun[] {
 export function countReviews(runs: ReviewRun[]): CodeReviewCounts {
   const c: CodeReviewCounts = {
     runs: runs.length, byOutcome: { done: 0, failed: 0, cancelled: 0, running: 0 }, lgtm: 0, prs: 0, rounds: 0, candidates: 0,
-    findings: noCounts(), fixed: 0, declined: 0,
+    findings: noCounts(), fixed: 0, declined: 0, cli: 0,
   };
   for (const r of runs) {
     c.byOutcome[r.state === 'done' || r.state === 'failed' || r.state === 'cancelled' ? r.state : 'running']++;
@@ -453,21 +473,32 @@ export function countReviews(runs: ReviewRun[]): CodeReviewCounts {
     c.findings = addCounts(c.findings, r.counts);
     c.fixed += r.fixed;
     c.declined += r.declined;
+    if (r.cli) c.cli++;
   }
   return c;
 }
 
-/** Code reviews' counts, and their sessions' tokens, for every project or one. */
+/** What runs of `meko kode review` spent, as their steps' Claude Code reported it. */
+const CLI_SUMS = `COALESCE(SUM(input), 0) AS input, COALESCE(SUM(output), 0) AS output, COALESCE(SUM(cache_read), 0) AS cache_read,
+  COALESCE(SUM(cache_write), 0) AS cache_write, COALESCE(SUM(cost_usd), 0) AS cost_usd`;
+type CliSumRow = { input: number; output: number; cache_read: number; cache_write: number; cost_usd: number };
+const cliUsage = (r: CliSumRow | undefined): TokenUsage => ({
+  input: r?.input ?? 0, output: r?.output ?? 0, cacheRead: r?.cache_read ?? 0, cacheWrite: r?.cache_write ?? 0, messages: 0,
+});
+
+/**
+ * Code reviews' counts, and their tokens, for every project or one: their sessions' (a task's
+ * review), and what runs of `meko kode review` reported (which have no session).
+ */
 export function reviewUsage(db: Db, projectId?: string): CodeReviewUsage {
   const where = `s.kind = 'code-review'${projectId ? ' AND s.project_id = ?' : ''}`;
   const args = projectId ? [projectId] : [];
-  return {
-    ...countReviews(reviewRuns(db, projectId)),
-    usage: toUsage(get<SumRow>(db, `SELECT ${SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE ${where}`, ...args)),
-  };
+  const sessions = toUsage(get<SumRow>(db, `SELECT ${SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE ${where}`, ...args));
+  const cli = cliUsage(get<CliSumRow>(db, `SELECT ${CLI_SUMS} FROM cli_reviews ${projectId ? 'WHERE project_id = ?' : ''}`, ...args));
+  return { ...countReviews(reviewRuns(db, projectId)), usage: addUsage(sessions, cli) };
 }
 
-/** Code reviews' sessions' tokens and cost per UTC day from `since`, for the usage report. Days with none are left out. */
+/** Code reviews' tokens and cost per UTC day from `since` (their sessions', and runs of `meko kode review`), for the usage report. Days with none are left out. */
 export function reviewSpendByDay(db: Db, since: number): Map<string, { usage: TokenUsage; cost: UsageCost }> {
   const day = "strftime('%Y-%m-%d', u.at / 1000, 'unixepoch')";
   const from = `FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE s.kind = 'code-review' AND u.at >= ?`;
@@ -482,6 +513,12 @@ export function reviewSpendByDay(db: Db, since: number): Map<string, { usage: To
   for (const [d, rows] of costs) {
     const o = out.get(d);
     if (o) o.cost = toCost(rows);
+  }
+  // Runs of `meko kode review`, on the day each started, at the cost Claude Code reported.
+  const cliDay = "strftime('%Y-%m-%d', created_at / 1000, 'unixepoch')";
+  for (const r of all<CliSumRow & { day: string }>(db, `SELECT ${cliDay} AS day, ${CLI_SUMS} FROM cli_reviews WHERE created_at >= ? GROUP BY day`, since)) {
+    const o = out.get(r.day) ?? { usage: { ...ZERO_USAGE }, cost: { usd: 0, unpricedMessages: 0 } };
+    out.set(r.day, { usage: addUsage(o.usage, cliUsage(r)), cost: { ...o.cost, usd: o.cost.usd + r.cost_usd } });
   }
   return out;
 }

@@ -125,6 +125,11 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   **Run code review** in the session's ⋯ menu (the ⋯ sheet on a phone), from the command palette,
   or with **Review again** on its findings (which also has Cancel and Retry for it). One run in Code is the one Open PR uses, so the PR
   opens without reviewing again.
+  Or run it from a terminal, on any checkout, without a session: `meko kode review` reviews the
+  change in the folder it runs in against its base, on Claude Code, prints what it kept and exits
+  (`--pr <number>` or `--description <text>` gives it the author's account to check the change
+  against, `--json` for scripts and agents). It only reports: you, or the agent that ran it, fix
+  what it found. Its runs count in Usage's **Code Reviews**.
   The Code gate says what its press does: **Review Changes** when it starts the code review first,
   **Open PR** when it doesn't (the review is off, or one already ran). The stage bar's **Code Review**
   step, between Code and Pull Request, shows the review as it runs, and – in a dashed circle when
@@ -300,8 +305,8 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   plugin); Kiro sessions count the credits Kiro billed,
   beside the cost and never added to it, with a Credits column by session and model and a credits
   bar beside each day's tokens. Each day's bar stacks the tokens code reviews spent, and a
-  **Code Reviews** section counts the reviews, the issues they found, the ones fixed and the PRs opened
-  after them. **Usage** in the left panel adds it up across every project, closed ones
+  **Code Reviews** section counts the reviews (`meko kode review`'s runs too), the issues they found,
+  the ones fixed and the PRs opened after them. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Usage stats:** once a day (hourly in its first day) Kode sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, which file types changed, and

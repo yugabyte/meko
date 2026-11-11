@@ -193,14 +193,27 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       sign-in part of the user's settings (`signInSettings()`: no allow rules or default mode),
       hooks off, only `[work_queue] slack_tools` allowed and the Slack connector's writes denied; its
       prompt calls the list's rows data. What it returns only adds items to the queue.
+- [ ] A `meko kode review` step (`reviewStepArgs` in `claude.ts`, `claudeSteps` in
+      `review/headless.ts`) is a `claude -p` that reads a diff someone else may have written (a
+      PR's, with `--pr`), so it keeps `--tools Read,Grep,Glob`, `--strict-mcp-config` with only the
+      run's own `mcp.json` (the review's tools socket, and Meko only when the change's `MEKO.md` lists
+      datapacks), `--permission-mode default` with only the two report tools and Meko's
+      `knowledgebase_search` and `context_search` allowed, `--setting-sources ''` with only the
+      sign-in part of the user's settings (`signInSettings()`) and hooks off, its working folder and
+      every path in the spelling Claude is given (`claudePath()`), and an environment without any
+      session's markers or `KODE_*`, `AK_*` and `MEKO_*` variables (`stepEnv`). With `--pr` on a
+      public repo (or one whose visibility gh can't read) it runs without the repo's `MEKO.md`
+      datapacks (`untrustedPr`). The CLI never opens `state.db`: its runs reach `cli_reviews` only
+      through the records the server takes in (`review/clirecords.ts`).
 - [ ] Kode's session tools (`actions.ts`, `mcp.ts`) act only through `runActions()`, the same core
       calls the UI's routes make, after `checkActions()`: the hook socket's `/tools` names the caller
       by its token, refuses a PR head `repoConfigTrusted()` doesn't trust (not checked yet included)
       and the tools turned off, never opens the caller's own PR, holds the caller's own move for its
       turn's end, answers calls still running when the hook socket closes (`SessionTools.pause`), and
       leaves a `tools` event on both sessions. Only read-only tools (`readOnly` in `tooldefs.ts`) are
-      pre-allowed, and never in the user's Kiro agent; `me_kode mcp` checks nothing itself and loads
-      nothing of the server's.
+      pre-allowed, and never in the user's Kiro agent; `me_kode mcp` checks nothing itself beyond
+      `KODE_TOOLS` (which limits the tools it lists and takes, for `meko kode review`'s steps) and
+      loads nothing of the server's.
 - [ ] Every path Kode hands Claude (launcher arguments, `HOME`, `KODE_HOOK_SOCK`, allow rules,
       file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make
       Claude Code ask before every file or refuse the mod's socket; what Kode stores keeps its

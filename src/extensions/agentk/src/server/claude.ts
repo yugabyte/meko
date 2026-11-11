@@ -459,3 +459,55 @@ export function transcriptPathFor(cwd: string, claudeSessionId: string): string 
   const stored = at(cwd);
   return local === stored || existsSync(local) || !existsSync(stored) ? local : stored;
 }
+
+/** The MCP server `meko kode review` gives its steps for Meko, in the step's `--mcp-config`. */
+export const REVIEW_MEKO_SERVER = 'meko';
+
+/**
+ * The tools a `meko kode review` step may call without asking, beyond Read, Grep and Glob: the
+ * review's report tools and Meko's two searches. In `-p` anything else that asks is denied.
+ */
+export const REVIEW_STEP_ALLOWED = [
+  'mcp__kode_sessions__review_report', 'mcp__kode_sessions__review_score',
+  `mcp__${REVIEW_MEKO_SERVER}__knowledgebase_search`, `mcp__${REVIEW_MEKO_SERVER}__context_search`,
+];
+
+/**
+ * What a headless run takes from the user's Claude Code settings: only what signing in and the
+ * provider need (`env`, `apiKeyHelper`). Their allow rules, default mode and plugins stay out, so
+ * nothing they pre-allowed (an MCP server's writes, `bypassPermissions`) can run while it reads
+ * text someone else may have written (Slack messages, a PR's diff).
+ */
+export function signInSettings(dir = claudeUserDir()): Record<string, unknown> {
+  try {
+    const s = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(s).filter(([k]) => k === 'env' || k === 'apiKeyHelper'));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The arguments for one step of `meko kode review` (a pass or a scorer), its prompt on stdin: one
+ * run of Claude Code in print mode on the step's model, with only Read, Grep and Glob of its own
+ * tools, only the MCP servers in `mcpConfig` (Kode's report tools and Meko), the review's run
+ * folder readable beside the reviewed folder, and the result as JSON (with its tokens and cost). No
+ * settings file is read, the user's or the repo's (`--setting-sources ''`): only the sign-in part of
+ * the user's (`signIn`, from `signInSettings`), with every hook off, in the default permission mode.
+ */
+export function reviewStepArgs(o: { model: string; mcpConfig: string; runDir: string; signIn?: Record<string, unknown> }): string[] {
+  return [
+    '-p',
+    ...(o.model ? ['--model', o.model] : []),
+    '--output-format', 'json',
+    '--tools', 'Read,Grep,Glob',
+    '--mcp-config', claudePath(o.mcpConfig),
+    '--strict-mcp-config',
+    '--permission-mode', 'default',
+    '--allowedTools', REVIEW_STEP_ALLOWED.join(','),
+    '--setting-sources', '',
+    '--settings', JSON.stringify({ ...(o.signIn ?? {}), disableAllHooks: true }),
+    '--no-session-persistence',
+    '--add-dir', claudePath(o.runDir),
+  ];
+}
