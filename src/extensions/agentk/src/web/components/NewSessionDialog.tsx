@@ -28,6 +28,20 @@ export function reviewSummary(global: ReviewSettings | null, project: ReviewOver
 /** A review's default name, from its PR. */
 const reviewName = (pr: ReviewablePr) => `Review #${pr.number} ${pr.title}`.slice(0, 100).trim();
 
+/**
+ * The Name field: a typed name, else Learn the project while the start is a learn one, else the
+ * name a picked PR gave (or none). Shown, never stored, so it follows `learn` as it changes, and
+ * the PR's name comes back after a turn through Learn the project.
+ */
+export function startName(name: string, edited: boolean, learn: boolean): string {
+  return learn && !edited ? LEARN_LABEL : name;
+}
+
+/** The name a failed start asked for, as typed: a learn start's own name was filled in, not typed. */
+export function typedName(initial: CreateSessionRequest | undefined): string {
+  return initial?.learn && initial.name === LEARN_LABEL ? '' : (initial?.name ?? '');
+}
+
 /** How long the learn brief must stay unchanged before its estimate is asked for. */
 const SCOPE_WAIT_MS = 400;
 
@@ -89,8 +103,6 @@ export function NewSessionDialog({
 }) {
   // On touch, the keyboard comes up only when a field is tapped.
   const touch = useTouch();
-  const [name, setName] = useState(initial?.name ?? '');
-  const [nameEdited, setNameEdited] = useState(!!initial?.name);
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
   // Run to merge, offered for a start at Code (at Design it's picked beside Approve).
   const [autoRun, setAutoRun] = useState(!!initial?.autoRun);
@@ -112,6 +124,10 @@ export function NewSessionDialog({
   const startPicked = useRef(!!initial?.start || !!initial?.learn);
   const review = start === 'review-pr';
   const learn = start === 'learn' && learnOffered;
+  // The name typed, or given by a picked PR; `name` is what the field shows.
+  const [ownName, setName] = useState(() => typedName(initial));
+  const [nameEdited, setNameEdited] = useState(() => !!typedName(initial));
+  const name = startName(ownName, nameEdited, learn);
   // A learn session's brief (CreateSessionRequest.learn).
   const [about, setAbout] = useState(initial?.learn?.about ?? '');
   const [where, setWhere] = useState(initial?.learn?.where ?? '');
