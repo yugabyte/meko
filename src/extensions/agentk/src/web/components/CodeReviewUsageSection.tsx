@@ -2,7 +2,10 @@ import { countsText, totalCount } from '../../shared/codereview';
 import type { CodeReviewUsage } from '../../shared/types';
 import { CreditsStat } from './UsagePanel';
 
-/** The rounds the reviews ran, and those that haven't ended done, in words: "5 rounds · 1 failed · 1 running". */
+/**
+ * The rounds the reviews ran, those that haven't ended done, and those run from the command line
+ * (`meko kode review`), in words: "5 rounds · 1 failed · 1 running · 2 from the command line".
+ */
 export function reviewOutcomeNote(r: CodeReviewUsage): string {
   const { failed, cancelled, running } = r.byOutcome;
   return [
@@ -10,14 +13,16 @@ export function reviewOutcomeNote(r: CodeReviewUsage): string {
     failed && `${failed.toLocaleString()} failed`,
     cancelled && `${cancelled.toLocaleString()} cancelled`,
     running && `${running.toLocaleString()} running`,
+    r.cli && `${r.cli.toLocaleString()} from the command line`,
   ].filter(Boolean).join(' · ');
 }
 
 /**
  * Code reviews (docs/design/code-review.md), under the Meko section on the project home and the
  * Usage page: the reviews, the issues they found, what the task fixed, the PRs opened after them, and
- * the Kiro credits their sessions billed. Their tokens are in the Token usage chart, stacked on each
- * day's bar. Shown only once a review has run.
+ * the Kiro credits their sessions billed. Their sessions' tokens are in the Token usage chart, stacked
+ * on each day's bar (runs of `meko kode review` have no session, so theirs aren't). Shown only once a
+ * review has run.
  */
 export function CodeReviewUsageSection({ reviews }: { reviews: CodeReviewUsage }) {
   const issues = totalCount(reviews.findings);

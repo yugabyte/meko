@@ -1,9 +1,8 @@
 // The user's Slack list for the work queue, read by one `claude -p` through the user's own Slack connector.
-import { mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
 import { oneLine } from './actions.js';
 import { runClaudeOnce, type AskRun, type AskRunner } from './askagentk.js';
-import { claudeUserDir } from './claude.js';
+import { signInSettings } from './claude.js';
 import type { Config } from './config.js';
 
 /** A message on the user's Slack list. */
@@ -78,19 +77,10 @@ For each row give its "${LIST_COLUMNS.message}" link exactly as the list has it 
 const DENIED = ['send_message', 'send_message_draft', 'schedule_message', 'create_canvas', 'update_canvas', 'add_reaction']
   .map((t) => `mcp__claude_ai_Slack__slack_${t}`);
 
-/**
- * What the run takes from the user's Claude Code settings: only what signing in and the provider need
- * (`env`, `apiKeyHelper`). Their allow rules and default mode stay out, so nothing they pre-allowed
- * (another connector's writes, `bypassPermissions`) can run while it reads other people's messages.
- */
-export function signInSettings(dir = claudeUserDir()): Record<string, unknown> {
-  try {
-    const s = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')) as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(s).filter(([k]) => k === 'env' || k === 'apiKeyHelper'));
-  } catch {
-    return {};
-  }
-}
+// The run takes only the sign-in part of the user's Claude Code settings (`signInSettings`, in
+// claude.ts): nothing they pre-allowed (another connector's writes, `bypassPermissions`) can run while
+// it reads other people's messages.
+export { signInSettings };
 
 /**
  * The arguments for one Slack read, run in Kode's empty folder: no built-in tools but ToolSearch

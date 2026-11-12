@@ -495,6 +495,8 @@ Usage: meko kode <command>
   restart       Restart the server, not the session host: sessions keep running (Meko runs it after an
                 update, and waits for the new version to answer)
   attach [name] Show a session's terminal here (Ctrl+\\ detaches; Claude keeps running); no name lists them
+  review        Review the change in this folder against its base with Kode's code review, on Claude
+                Code, and print what it found (--help for its options)
   host          Run the session host that holds every Claude (the background service runs this for you);
                 host restart ends every session and resumes them; host stop ends them (with the server stopped)
   logs [-f]     Print the server log (-f to follow, -n <lines>)
@@ -516,6 +518,9 @@ async function main(): Promise<void> {
     case 'start': return start();
     case 'restart': return restart();
     case 'attach': return (await import('./attachcli.js')).runAttach(getPaths(), args);
+    case 'review':
+      process.exitCode = await (await import('./reviewcli.js')).runReview(getPaths(), args);
+      return;
     case 'host': return host(args);
     case 'logs': return logs(args);
     // Kode's session tools as a stdio MCP server; sessions start it as mcpmain.js (tools.ts).

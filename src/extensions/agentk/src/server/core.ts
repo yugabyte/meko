@@ -1,4 +1,5 @@
 import { CodeReviews } from './review/runner.js';
+import { ingestCliRecords } from './review/clirecords.js';
 import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -113,6 +114,8 @@ const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
 const PIN_PRUNE_MS = 6 * 60 * 60 * 1000;
 /** How often images staged in the New session dialog that no session started with are looked for. */
 const STAGED_SWEEP_MS = 60 * 60 * 1000;
+/** How often the records `meko kode review` leaves are taken in (review/clirecords.ts). */
+const CLI_REVIEWS_EVERY_MS = 60_000;
 /** How long a read of Kiro's agent (for `MekoStatus.kiro`) and OpenCode's own config (`MekoStatus.opencode`) is reused (the state is pushed often). */
 const AGENT_MEKO_TTL_MS = 10_000;
 /** How often the Meko on this computer is looked for while there's no Meko, or no `meko` on this computer (`lookForLocalMeko`). */
@@ -742,6 +745,7 @@ export class Core extends EventEmitter {
     pruneSessionEvents(this.db);
     this.prunePins();
     this.sweepStaged();
+    this.takeCliReviews();
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());
       this.every(60_000, () => this.sessions.stopIdle());
@@ -753,6 +757,7 @@ export class Core extends EventEmitter {
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
       this.every(60_000, () => this.workQueue.tick());
+      this.every(CLI_REVIEWS_EVERY_MS, () => this.takeCliReviews());
       // Meko normally starts first (it starts Kode); this covers a boot where it didn't, and an
       // install of Meko while the banner asks for one.
       this.every(LOCAL_MEKO_EVERY_MS, () => (lookForLocalMeko(mekoConfigured(), localMeko().state) ? this.refreshMeko() : undefined));
@@ -867,6 +872,15 @@ export class Core extends EventEmitter {
       this.projects.prunePins();
     } catch (e) {
       this.log.warn('removing old Meko datapack pins failed', errMsg(e));
+    }
+  }
+
+  /** The runs of `meko kode review` the CLI left records of, into `cli_reviews` for the usage counts. */
+  takeCliReviews(): void {
+    try {
+      if (ingestCliRecords(this.db, this.paths, (m, d) => this.log.warn(m, d))) this.changed();
+    } catch (e) {
+      this.log.warn("couldn't take in the code review runs from the command line; trying again in a minute", errMsg(e));
     }
   }
 

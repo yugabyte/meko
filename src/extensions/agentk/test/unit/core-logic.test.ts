@@ -645,6 +645,10 @@ function dropV52(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE workshop_tours');
 }
 
+function dropV53(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE cli_reviews');
+}
+
 /** Undoes migration 45 (What Meko doesn't know moved into Meko): puts back what 34 and 35 added, for tests that rewind the schema. */
 function dropV45(db: ReturnType<typeof openDb>) {
   for (const c of ['query TEXT', 'query_key TEXT', 'top_score REAL', 'top_raw REAL', 'quality TEXT']) db.exec(`ALTER TABLE meko_calls ADD COLUMN ${c}`);
@@ -810,8 +814,8 @@ const V11_COLUMNS = ['kind'];
  * changed no schema, and 44's and 46's columns go with 43's table).
  */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40, dropV41, dropV42, dropV43, () => {}, dropV45, () => {}, () => {}, dropV48, dropV49, dropV50, dropV51, dropV52];
-  for (let v = 52; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40, dropV41, dropV42, dropV43, () => {}, dropV45, () => {}, () => {}, dropV48, dropV49, dropV50, dropV51, dropV52, dropV53];
+  for (let v = 53; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {

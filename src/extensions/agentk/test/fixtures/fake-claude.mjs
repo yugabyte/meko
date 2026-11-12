@@ -48,11 +48,36 @@ if (args[0] === 'update') {
 }
 // Like `claude -p` (Ask Kode): writes what it got (argv, cwd, stdin) to `ask-input.json` in the
 // fake's dir and prints `ask-reply.json` from there; with an `ask-hang` file it never answers.
+// A step of `meko kode review` (its stdin says "Read <file> and do what it says." and it has an
+// --mcp-config) reports instead, as a code-review subagent does (`reviewSteps` below), through the
+// tools socket its MCP config names, and prints a result with what it spent; each run is logged to
+// `review-steps.jsonl` (argv, cwd, its step file's text, the session variables it got). A `review-step-hang` file makes it
+// never end; a `review-step-signed-out` file makes it fail as Claude Code does when signed out.
 if (args[0] === '-p') {
   const fake = process.env.FAKE_CLAUDE_DIR ?? '';
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
   mkdirSync(fake, { recursive: true });
+  const mcp = args.indexOf('--mcp-config');
+  if (mcp >= 0 && /^Read \S+ and do what it says\.$/.test(input.trim())) {
+    const stepFile = /^Read (\S+) and/.exec(input.trim())[1];
+    appendFileSync(join(fake, 'review-steps.jsonl'), JSON.stringify({
+      args, cwd: process.cwd(), pid: process.pid, input, file: readFileSync(stepFile, 'utf8'), env: { KODE_HOOK_SOCK: process.env.KODE_HOOK_SOCK ?? null, CLAUDECODE: process.env.CLAUDECODE ?? null, MEKO_AGENT_ID: process.env.MEKO_AGENT_ID ?? null },
+    }) + '\n');
+    if (existsSync(join(fake, 'review-step-hang'))) {
+      setInterval(() => undefined, 1000);
+      await new Promise(() => undefined);
+    }
+    if (existsSync(join(fake, 'review-step-signed-out'))) {
+      process.stdout.write(JSON.stringify({ type: 'result', is_error: true, result: 'Not logged in · Please run /login' }), () => process.exit(1));
+      await new Promise(() => undefined);
+    }
+    const server = JSON.parse(readFileSync(args[mcp + 1], 'utf8')).mcpServers.kode_sessions;
+    await reviewStepsVia(fake, input, (body) => postTools(server.env.KODE_HOOK_SOCK, server.env.KODE_HOOK_TOKEN, body));
+    const usage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 40 };
+    process.stdout.write(JSON.stringify({ type: 'result', is_error: false, result: 'Reported.', total_cost_usd: 0.25, usage }), () => process.exit(0));
+    await new Promise(() => undefined);
+  }
   writeFileSync(join(fake, 'ask-input.json'), JSON.stringify({ args, cwd: process.cwd(), input }));
   if (existsSync(join(fake, 'ask-hang'))) {
     setInterval(() => undefined, 1000);
@@ -124,6 +149,20 @@ let planWaiting = false;
 // a `learn-delay` file holds each answer that many milliseconds.
 const pluginDir = opt('--plugin-dir');
 const modOn = !!pluginDir && existsSync(join(pluginDir, 'hooks', 'register.ts')) && existsSync(join(dir, 'mod'));
+
+/** A call to a tools socket other than the session's (`meko kode review`'s), as `me_kode mcp` makes it. */
+function postTools(socketPath, token, body) {
+  return new Promise((resolve, reject) => {
+    const req = request({ socketPath, path: '/tools', method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AK-Token': token } }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => (text += c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text }));
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(body));
+  });
+}
 
 function modPost(path, body) {
   return new Promise((resolve, reject) => {
@@ -388,6 +427,10 @@ async function turn(text) {
 // steps to leave unreported, and `review-skip-once` steps to leave unreported only the first time
 // they're asked for. Every call and its answer go to `review-calls.jsonl`.
 async function reviewSteps(text) {
+  return reviewStepsVia(dir, text, (body) => modPost('/tools', body));
+}
+
+async function reviewStepsVia(dir, text, post) {
   const read = (f, d) => {
     try {
       return JSON.parse(readFileSync(join(dir, f), 'utf8'));
@@ -409,7 +452,7 @@ async function reviewSteps(text) {
     const input = tool === 'review_score'
       ? { step, score: read('review-scores.json', {})[step] ?? { read: ['src/a.ts:1-5'], refutation: '', verdict: 'confirmed', confidence: 90, reason: 'Read it; it holds.' } }
       : { step, report: read('review-reports.json', {})[step.split(':')[1]] ?? { summary: 'LGTM', findings: [] } };
-    const r = await modPost('/tools', { v: 1, tool, input }).catch((e) => ({ status: 0, text: String(e) }));
+    const r = await post({ v: 1, tool, input }).catch((e) => ({ status: 0, text: String(e) }));
     appendFileSync(join(dir, 'review-calls.jsonl'), JSON.stringify({ step, tool, status: r.status, text: r.text }) + '\n');
   }
 }

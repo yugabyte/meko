@@ -519,6 +519,8 @@ export interface CodeReviewCounts {
   /** What the task said it did with kept findings (`review_outcome`). */
   fixed: number;
   declined: number;
+  /** Of `runs`, those of `meko kode review` (`cli_reviews`): they only report, so they add no PR, fix or decline. */
+  cli: number;
 }
 
 /** Code reviews for the Code Reviews section: their counts, and their sessions' tokens. */

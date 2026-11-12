@@ -100,6 +100,7 @@ your phone can connect.
 | `meko kode logs -f` | Follow the server log (`logs/server.log` in Kode's home) |
 | `meko kode uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes Kode's home (in Meko's data folder) except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
 | `meko kode attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
+| `meko kode review [--base <branch>] [--pr <pr> \| --description <text>] [--depth 1-5] [--strategy <id>] [--json]` | Review the change in this folder (from where it left its base to the working tree, uncommitted files included) with Kode's code review, on Claude Code, without a session or the server; print the kept findings and exit 0, or 1 when it couldn't review. See [From the command line](design/code-review.md#from-the-command-line) |
 | `meko kode host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
 
 Kode has no command of its own: `meko kode <command>` runs it for the Meko it belongs to. Its

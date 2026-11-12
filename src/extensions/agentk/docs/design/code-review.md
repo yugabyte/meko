@@ -343,6 +343,97 @@ unpushed-commits blockers wait too, as they do mid-turn. Only while Claude is th
 prompts: once it has exited, they're blockers only the user clears, and a queued merge is dropped
 with a notice. Cancelling or leaving the review drops its prompt, queued or out.
 
+## From the command line
+
+`meko kode review` runs the review on the change in the folder it's run in, from a terminal, with
+no task, session or server: a person, a plain Claude Code session or a script can run it on any
+checkout (`src/server/reviewcli.ts`). It reads the change from where it left its base to the working
+tree, uncommitted and untracked files included, as a task's review does, prints what it kept and
+exits 0; it exits 1 when it couldn't review (bad options, not a git folder, no Claude Code, no base,
+a `--pr` gh can't read, no pass reporting, or Ctrl+C). It only reports: one round, no fix prompt,
+no triage, no PR, no line. Whoever ran it fixes what it found and runs it again.
+
+```
+meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--depth 1-5] [--strategy <id>] [--json]
+```
+
+- **What it reviews against.** `--base`, origin's copy of the branch first (as `baseRefIn` reads a
+  task's), else `--pr`'s base branch, else the branch `origin/HEAD` names, else `main`, then
+  `master` (`pickBase`).
+- **The author's account.** `--pr` (a number, `owner/name#n` or a link) reads that PR's title and
+  description with gh; `--description` takes text. One or the other: with neither, the passes
+  have the diff alone. Either reaches them as the PR description does in Pull Request, quoted and
+  clipped as data, never instructions. The folder is still what's reviewed: when its HEAD isn't
+  the PR's head commit, it says so on stderr and goes on, since a branch ahead of its PR is the
+  usual case before a push.
+- **Whose work it is.** Without `--pr` the folder is taken as the user's own work, as a task on
+  its own branch is, and its `MEKO.md` datapacks go to the passes. With `--pr` on a public repo (or
+  one whose visibility gh can't say), anyone can have written it, so its `MEKO.md` could point the
+  passes, with the user's Meko token, at datapacks of its author's choosing: the review runs
+  without them and says so (`untrustedPr`), as Kode runs a session on such a PR's head without the
+  repo's config ([Code from public repos](security.md#code-from-public-repos)).
+- **Settings.** Strategy and depth are `[code_review]`'s, or `--strategy` and `--depth`; strategy
+  Off runs the default, as **Run code review** does. Re-review rounds and the check don't apply.
+- **Output.** stdout gets the kept findings, worst first, each with its comment (and **Caught with
+  Meko** with the gotchas it credits), the passes' notes, then one line: the counts or `LGTM`, how
+  long it took and what Claude Code says it cost. `--json` gives `{ repo, branch, base, head,
+  strategy, depth, files, counts, findings: [{ key, file, line, severity, comment, confidence,
+  passes, credits }], notes, seconds, costUsd }` instead (with `files: 0` and no findings when
+  nothing changed). stderr gets what it's reviewing and its
+  progress (one line redrawn on a terminal, a line per phase elsewhere) and any error.
+
+**How it runs** (`src/server/review/headless.ts`, `HeadlessReview`). It runs headless in the CLI's
+own process, not through the server, whose runner is keyed on a task row and its stages, and which
+may not be running. Both drivers share the algorithm: `review/context.ts` reads the change and
+its context (`readChange`), and `merge.ts` has the sweep rule (`moreSweeps`), merging, scoring and
+keeping (`judgeRound`), so the CLI's review is the task's review, one round long. Each pass and
+each scorer is its own `claude -p` on its tier's model (`[code_review.models.claude]`), its prompt
+on stdin ("Read {file} and do what it says.", the same step files a task's review writes): a
+process is a fresh context and its exit is the step's end, so none of the subagent and turn-end
+machinery above is needed. A sweep's passes start at once, the scorers 5 at a time (`SCORE_BATCH`),
+and the steps that didn't report run once more (`ASK_AGAIN`), then the review goes on without them;
+no pass reporting in the first sweep fails it. A step gets 20 minutes. Claude Code missing or signed
+out stops the review at once (`StepOutcome.fatal`, read only from Claude Code's own sign-in
+messages, never from a step's text): the rest of that step's batch is stopped and waited for, so
+the run's record counts what they spent. Claude Code only for now: OpenCode and Kiro
+need a headless launch and tool wiring of their own.
+
+A step's launch (`reviewStepArgs` in `src/server/claude.ts`): print mode, `--output-format json`
+(its tokens and cost), only Read, Grep and Glob of its own tools, `--strict-mcp-config` with the run's
+`mcp.json`, `--allowedTools` the two report tools and Meko's `knowledgebase_search` and
+`context_search` in the default permission mode (in `-p` anything else that asks is denied, so a
+step never hangs on a prompt), the run folder by `--add-dir`, and no session kept. It reads no
+settings file, the user's or the repo's (`--setting-sources ''`): only the sign-in part of the
+user's (`signInSettings`: `env`, `apiKeyHelper`, as the work queue's Slack read takes), with every
+hook off, so nothing the user pre-allowed (an MCP server's writes, `bypassPermissions`) runs while a
+step reads a diff someone else may have written. Its working folder is the reviewed folder in the
+spelling Claude is given every other path in (`claudePath()`). Its environment is the caller's
+without any session's markers or any `KODE_*`, `AK_*` or `MEKO_*` variable (`stepEnv`), so a
+review run from inside a Kode session never reports into it.
+
+Steps report through the same `review_report` and `review_score` tools, checked against the same
+schemas: the run's `mcp.json` (owner-only) starts `me_kode mcp` pointed at a private socket the CLI
+answers (`serveTools`, `KODE_HOOK_SOCK` and a one-time token), listing only those two tools
+(`KODE_TOOLS`). It names Meko's server (its URL and token from `meko token --json`, the way Kode
+reads them) only when the change's `MEKO.md` files list datapacks and Meko is running. The run's
+folder (`run/cli-reviews/<id>/`: the base prompt, step files, patches, `mcp.json`) is removed when
+it ends, however it ends; one a killed run left behind is removed by the next run once it's a day
+old.
+
+**Counted with the other reviews** (`src/server/review/clirecords.ts`). Every run that got as far as
+reading the change leaves one owner-only JSON record in `run/cli-reviews/` (counts, sweeps and
+candidates so far, tokens and cost; never a finding's text or a description: its repo's checkout
+path, branch and why it failed stay on this computer, and the usage report sends only counts), and the server
+takes the records into `cli_reviews` at its start and every minute, deleting each file once its
+row is in (by id, so a record read twice is one row). The CLI never opens `state.db`: it could
+migrate it under a server still on an older version, skip the copy kept before migrating, and be a
+second writer on a home shared over NFS. A run's project is the open project on its repo (its main
+checkout's real path), else the open one whose sessions worked there last, else the closed one on it
+closed last (the Usage page still lists it); none for a repo no project, open or closed, has used. Records nobody took in for 30 days are deleted by the next run. The Usage page's and project
+home's **Code Reviews** count them (`reviewRuns`, `CodeReviewCounts.cli`), as does the usage report's
+`codeReview`, with their tokens; they're not in the token chart or the totals, which come from
+transcripts.
+
 ## Context the passes get
 
 The base prompt follows the cloud's `BuildPrompt`, for a change rather than a PR: the branch
