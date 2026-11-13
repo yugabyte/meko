@@ -144,7 +144,7 @@ const SAGITTARIUS: Pass[] = [
   { name: 'claims', tier: 'large', mandate: CLAIMS, schema: CLAIMS_SCHEMA },
 ];
 
-const SIRIUS: Pass[] = [{ name: 'all', tier: 'mid', mandate: ALL, schema: REVIEW_SCHEMA, alone: true }];
+const SIRIUS: Pass[] = [{ name: 'all', tier: 'large', mandate: ALL, schema: REVIEW_SCHEMA, alone: true }];
 
 const PASSES: Record<ReviewStrategyId, Pass[]> = {
   'sagittarius-3.0': SAGITTARIUS,

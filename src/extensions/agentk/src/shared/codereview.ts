@@ -31,7 +31,7 @@ export const STRATEGIES: ReviewStrategyInfo[] = [
   {
     id: 'sirius-1.0',
     name: 'Sirius 1.0',
-    summary: 'One Sonnet-level pass that covers all five mandates. No scorers: cheaper and faster.',
+    summary: 'One Opus-level pass that covers all five mandates. No scorers: cheaper and faster.',
     passes: 1,
     scored: false,
   },
