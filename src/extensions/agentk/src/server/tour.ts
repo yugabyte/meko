@@ -206,7 +206,7 @@ export class TourService {
         if (c.stage.kind === 'ask') actions.push({ ...onward(), primary: false });
         break;
       case 'blocked':
-        actions.push(onward(last ? undefined : 'Skip this stage'));
+        actions.push(onward(last ? undefined : 'Skip this step'));
         break;
       case 'running':
         break;
@@ -402,7 +402,7 @@ export class TourService {
   async act(workshopId: string, req: TourActRequest): Promise<TourActResult> {
     const projectId = this.w.projectOf(workshopId);
     if (!projectId) throw new HttpError(404, `The ${workshopId} workshop isn't open.`);
-    if (!req || typeof req.stage !== 'string' || !TOUR_SERVER_ACTIONS.includes(req.action)) throw new HttpError(400, 'Name the stage and one of the tour\'s actions.');
+    if (!req || typeof req.stage !== 'string' || !TOUR_SERVER_ACTIONS.includes(req.action)) throw new HttpError(400, 'Name the step and one of the tour\'s actions.');
     if (this.acting.has(projectId)) throw new HttpError(409, 'The tour is already doing that.');
     this.acting.add(projectId);
     try {
@@ -423,7 +423,7 @@ export class TourService {
       this.save(c.row);
       return;
     }
-    if (req.stage !== st.stage || st.finished) throw new HttpError(409, 'The tour has moved on from that stage. Reload to see where it is.');
+    if (req.stage !== st.stage || st.finished) throw new HttpError(409, 'The tour has moved on from that step. Reload to see where it is.');
     if (!st.actions.some((a) => a.id === req.action)) throw new HttpError(409, "That button isn't on the tour's card now.");
     const at = c.level.stages.indexOf(c.stage);
     const skipped = json<string[]>(c.row.skipped_json, []);
@@ -485,7 +485,7 @@ export class TourService {
       case 'ask-again': {
         const learn = c.stage.kind === 'ask';
         const p = levelPrompts(c.b, c.level.id).find((x) => x.learn === learn && x.name);
-        if (!p) throw new HttpError(409, 'This stage has no prompt.');
+        if (!p) throw new HttpError(409, 'This step has no prompt.');
         if (retry) {
           const s = this.named(c, learn);
           if (s) {

@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
-import { hostname, userInfo } from 'node:os';
+import { homedir, hostname, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
@@ -17,7 +17,7 @@ import {
   MekoSetupError, ensureMekoSetup, latestMekoSetup, mekoClaudeGaps, readClaudeMeko, runMekoSetup,
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
-import { expandHome, getPaths, isFullPath, oldHome, tildify, type Paths } from './paths.js';
+import { expandHome, getPaths, isFullPath, oldHome, tildify, withUsualBins, type Paths } from './paths.js';
 import { dropOldNames, hostServices, removeServiceLauncher, renderServiceFiles, samePath, ServiceError, SERVICES, writeServiceLauncher, type ServiceManager } from './service.js';
 import { SessionHost } from './hostclient.js';
 import { COMMAND, commandLinks } from './cmdlink.js';
@@ -252,11 +252,26 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
     throw new InstallError(
       `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later `
         + `(https://opencode.ai; from an older one, ${HARNESS_CAPS.opencode.upgrade}) `
-        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run meko extension install kode again.`,
+        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run \`meko extension install kode\` again.`,
     );
   }
   if (!found.includes(cfg.agents.default)) cfg.agents.default = found[0];
   return found;
+}
+
+/**
+ * The installer's agents check, before `settleAgents`: each agent's `--version` (`cliVersion`), in
+ * HARNESS_IDS order. It first adds ~/.local/bin and Homebrew's folders to this process's PATH
+ * (`withUsualBins`), and leaves them there for the rest of the install: the terminal's PATH may not
+ * have them yet (Claude Code's and Kiro's installers put them in ~/.local/bin, and only edit the
+ * shell's profile), and deps.sh, which looks there in its own shell, has already said they're
+ * installed.
+ */
+export async function agentVersions(cfg: Config, home = homedir()): Promise<Partial<Record<HarnessId, string | null>>> {
+  process.env.PATH = withUsualBins(process.env.PATH ?? '', home);
+  const versions: Partial<Record<HarnessId, string | null>> = {};
+  for (const id of HARNESS_IDS) versions[id] = await cliVersion(harnessCommand(cfg, id));
+  return versions;
 }
 
 /** Runs the prerequisites check on this terminal; a check that fails has said why. */
@@ -364,12 +379,11 @@ export async function runInstall(args: string[]): Promise<void> {
     // with its own sign-in; with no Meko here, nothing could.
     if ((await probeLocalMeko(cfg.meko.home || null)).state === 'none') {
       throw new InstallError('Kode runs behind the Meko on this computer, which serves it to your browser, and there is ' +
-        `no meko command here. Install Meko first (${MEKO_INSTALL_COMMAND}), then run: meko extension install kode`);
+        `no meko command here. Install Meko first (${MEKO_INSTALL_COMMAND}), then run \`meko extension install kode\`.`);
     }
 
     // 3. The coding agents: at least one, or nothing can run.
-    const versions: Partial<Record<HarnessId, string | null>> = {};
-    for (const id of HARNESS_IDS) versions[id] = await cliVersion(harnessCommand(cfg, id));
+    const versions = await agentVersions(cfg);
     const agents = settleAgents(cfg, versions);
 
     // 4. Meko and 5. Meko in each agent

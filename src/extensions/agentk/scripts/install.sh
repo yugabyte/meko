@@ -4,5 +4,5 @@
 # Kode's setup go after --, e.g. -- --agent kiro). An older Meko runs the newest release's
 # install.sh with --meko-url and --meko-key, and refuses one that doesn't mention --meko-url; this
 # one only says what to do.
-echo "Kode is installed by Meko now. Update Meko first (meko update), then run: meko extension install kode" >&2
+echo "Kode is installed by Meko now. Update Meko first (meko update), then run \`meko extension install kode\`." >&2
 exit 1

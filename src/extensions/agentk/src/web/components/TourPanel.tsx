@@ -153,7 +153,7 @@ export function TourPanel({
                 </button>
               ))}
             </div>
-            <ol className="tour-rail" aria-label={`${level?.title ?? 'Level'} stages`}>
+            <ol className="tour-rail" aria-label={`${level?.title ?? 'Level'} steps`}>
               {level?.stages.map((s, i) => (
                 <li key={s.id} ref={s.status === 'current' ? current : undefined} className={cx('tour-stage', s.status)} aria-current={s.status === 'current' ? 'step' : undefined}>
                   {i + 1} · {s.title}
@@ -184,7 +184,7 @@ export function TourPanel({
         <div className="tour-switch" role="status">
           <span>
             {tour.levels.find((l) => l.id === switchTo)?.finished ? `Take Level ${target} again?` : `Switch to Level ${target}?`} Kode archives this level's open
-            sessions and starts Level {target} from its first stage.
+            sessions and starts Level {target} from its first step.
           </span>
           <button className="btn small primary" disabled={!!busy} onClick={() => void act({ id: 'goto', label: 'Switch' }, switchTo)}>
             {busy === 'goto' ? <Busy label="Switching" /> : 'Switch'}

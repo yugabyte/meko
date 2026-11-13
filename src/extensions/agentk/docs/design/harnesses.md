@@ -180,7 +180,11 @@ hands `meko kode install` the terminal as `/dev/tty`. The checks themselves, `gh
 read no terminal (`</dev/null`): with a terminal for input, Claude Code's status check reopens it
 to read keys, so with `/dev/tty` it stopped the same way on macOS, and a signed-in Claude Code was
 asked to sign in on every first install. `meko kode install` then reads each
-agent's version (`settleAgents`): with none it stops, saying what to install (and, for OpenCode,
+agent's version (`agentVersions`, then `settleAgents`), with `~/.local/bin` and Homebrew's folders
+added to its PATH as `deps.sh` adds them to its own: Claude Code's and Kiro's installers put them in
+`~/.local/bin` and only edit the shell's profile, so the terminal's PATH may not have them yet, and
+without that the install stopped on "no coding agent found" just after the checks found Claude Code.
+With none it stops, saying what to install (and, for OpenCode,
 `opencode upgrade --major` from 1.x); a default that isn't
 installed becomes the first agent that is; and Meko's setup is offered for each agent found whose
 capture isn't set up (Claude Code's plugin and its settings' URL and key, Kiro's agent loading its MCP
@@ -218,8 +222,10 @@ Everything specific to one CLI sits behind one interface, `Harness` in `src/serv
 with an adapter per CLI (`claude.ts`, `opencode.ts`, `kiro.ts`) and the registry (`Harnesses` in `index.ts`). The
 session manager, projects and Ask Kode call a session's adapter rather than ask which harness it
 runs on. The adapter says how to prepare its files and settle what a launch needs first
-(`prepare`, `beforeLaunch`: Claude Code's folder trust, Kiro's agent file), which folders to trust
-and what its trust dialog looks like (`trustFolder`, `trustPrompt`, Claude Code only), its command line
+(`prepare`, `beforeLaunch`: Claude Code's folder trust and its first-run setup marked done, Kiro's
+agent file), which folders to trust and what its trust dialog and its first-run setup look like
+(`trustFolder`, `trustPrompt`, `setupPrompt`, Claude Code only: a session that shows either, before
+any hook, is marked as waiting on you, which takes the Starting panel off its terminal), its command line
 (`launcher`, which also takes `LaunchInput.tools`: launch with [Kode's session tools](tools.md), and `LaunchInput.review`: a [code review](code-review.md)'s read-only subagents, one per model tier, as Claude Code's `--agents` and OpenCode's `agent` config; Kiro, whose `HARNESS_CAPS.reviewSteps` is `turns`, runs each step as a turn of its own, after `/clear` once the one before ends), its hooks (`normalize`, `deny`, `context`, `editedPaths`, and `mekoTool` for a CLI without the mod: which events open and close a Meko call for the dot's m), its conversation on disk
 (`canResume`, and `findConversation` for a CLI that picks its own id), the files a session's
 progress shows in (`activityFiles`, for the hookless fallback), whether a prompt sent between turns

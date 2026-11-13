@@ -98,7 +98,7 @@ describe('deps.sh: installing missing tools', () => {
     expect(r.err).toContain('sudo -n dnf install -y git curl');
     // gh is optional: not in the plan without --install-deps.
     expect(r.err).not.toContain('download gh');
-    expect(r.err).toContain('Run meko extension install kode -- --install-deps to install them');
+    expect(r.err).toContain('Run `meko extension install kode -- --install-deps` to install them');
     expect(r.calls).toEqual([]); // nothing was installed
   });
 
@@ -207,7 +207,7 @@ describe('deps.sh: installing missing tools', () => {
     stub(bin, 'dnf', `echo "dnf $*" >> "${log}"; shift; ${installs(repo, bin).replace(/exit 0$/, 'exit 1')}`);
     const r = run(['--non-interactive', '--install-deps']);
     expect(r.code).toBe(1);
-    expect(r.err).toContain('installing git curl failed (see the output above). Install them yourself and run meko extension install kode again.');
+    expect(r.err).toContain('installing git curl failed (see the output above). Install them yourself and run `meko extension install kode` again.');
     expect(r.err).not.toContain('going on');
   });
 
@@ -342,7 +342,7 @@ describe('deps.sh: installing missing tools', () => {
     const r = await runInTerminal('n');
     expect(r.code).toBe(1);
     expect(r.calls).toEqual([]);
-    expect(r.out).toMatch(/Install them and run meko extension install kode again/);
+    expect(r.out).toMatch(/Install them and run `meko extension install kode` again/);
   });
 
   it('offers to sign gh in to GitHub', async () => {
@@ -391,7 +391,7 @@ describe('install.sh', () => {
   it("only says Meko installs Kode now, and fails, for the Mekos and instructions that run it", () => {
     const r = run(['--meko-url', 'http://127.0.0.1:7778/mcp', '--meko-key', 'k'], {}, STUB);
     expect(r.code).toBe(1);
-    expect(r.err).toContain('Update Meko first (meko update), then run: meko extension install kode');
+    expect(r.err).toContain('Update Meko first (meko update), then run `meko extension install kode`.');
     expect(r.calls).toEqual([]);
     // An older Meko refuses an installer that doesn't mention --meko-url, with a less clear message.
     expect(readFileSync(STUB, 'utf8')).toContain('--meko-url');

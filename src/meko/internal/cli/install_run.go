@@ -124,12 +124,13 @@ func pathLine(bin, home string) string {
 
 // installRow is install's row for the meko command, linked in bin: on the PATH, or not, when it asks
 // (on a terminal, for zsh and bash, when it may ask) to add bin to the shell's profile, or says the
-// line to add.
-func installRow(r report, bin, home string, ask bool) {
+// line to add. It returns whether it added bin to the profile, so meko runs by its name only in a
+// new terminal (the one install runs in keeps its PATH).
+func installRow(r report, bin, home string, ask bool) bool {
 	what := "meko in " + homeRel(bin, home)
 	if onPath(bin) {
 		r.step(stepOK, "Install", spin.Note(what, "on your PATH", r.color))
-		return
+		return false
 	}
 	line := pathLine(bin, home)
 	profile := pathProfile(home)
@@ -140,7 +141,7 @@ func installRow(r report, bin, home string, ask bool) {
 	if tty == nil {
 		r.step(stepWarn, "Install", what+spin.Dim(" · not on your PATH: add ", r.color)+spin.Blue(line, r.color)+
 			spin.Dim(" to your shell's profile", r.color))
-		return
+		return false
 	}
 	defer func() { _ = tty.Close() }()
 	r.step(stepWarn, "Install", spin.Note(what, "not on your PATH", r.color))
@@ -153,14 +154,15 @@ func installRow(r report, bin, home string, ask bool) {
 	}
 	if a := strings.ToLower(strings.TrimSpace(answer)); a != "" && a != "y" && a != "yes" {
 		fmt.Fprintf(r.w, "    Add %s to your shell's profile to run meko by its name\n", spin.Blue(line, r.color))
-		return
+		return false
 	}
 	if err := addPathLine(profile, line); err != nil {
 		r.step(stepWarn, "PATH", fmt.Sprintf("can't add it to %s: %v", homeRel(profile, home), err))
-		return
+		return false
 	}
 	r.step(stepOK, "PATH", "added to "+homeRel(profile, home)+spin.Dim(" · open a new terminal, or run ", r.color)+
 		spin.Blue(". "+homeRel(profile, home), r.color))
+	return true
 }
 
 // addPathLine adds line to the profile, after pathMark, unless the profile has them already.

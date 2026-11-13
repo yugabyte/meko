@@ -571,6 +571,7 @@ export function ProjectView({
           acting={acting}
           updating={updating}
           noPr={!!project.workshop}
+          tourRuns={!!project.tour && !project.tour.finished}
           actions={child ? (
             <>
               {parent && (
@@ -722,6 +723,7 @@ export function ProjectView({
               acting={acting}
               updating={updating}
               noPr={!!project.workshop}
+              tourRuns={!!project.tour && !project.tour.finished}
               actions={null}
               reasons
             />
@@ -939,6 +941,7 @@ function StageBar({
   acting = false,
   updating = false,
   noPr = false,
+  tourRuns = false,
   actions,
   reasons = false,
 }: {
@@ -959,6 +962,12 @@ function StageBar({
   updating?: boolean;
   /** The project opens no PR (a workshop's demo): the Code gate runs the code review instead, and there's no Run to merge. */
   noPr?: boolean;
+  /**
+   * The Kode tour runs in this project: its guide card has the next step's button (a review's on its
+   * review steps), so for the whole tour the Code gate offers no Run code review beside it; the ⋯
+   * menu and the palette still have it.
+   */
+  tourRuns?: boolean;
   actions: ReactNode;
   /** Say under the stages why a disabled gate can't be passed (the phone's sheet, where there are no tooltips). */
   reasons?: boolean;
@@ -1035,7 +1044,11 @@ function StageBar({
         break;
       }
       if (noPr) {
-        const run = demoReviewGate(session);
+        // Offered means no review is under way. While the tour runs, its card says what to do next
+        // (with the review's own button on its review steps), so the gate offers none for the whole
+        // tour; the ⋯ menu and the palette still have Run code review.
+        const offered = demoReviewGate(session);
+        const run = tourRuns ? null : offered;
         const r = session.codeReview;
         reason = run?.reason ?? null;
         // Findings that wait on the user, or a review waiting in its terminal, show as they do before a
@@ -1049,11 +1062,11 @@ function StageBar({
               <button className="gate" disabled={blocked || !!run.reason} title={run.title} onClick={() => onAct('review-run')}>
                 {run.label}
               </button>
-            ) : review ?? (
+            ) : review ?? (offered ? null : (
               <span className="gate-pill">
                 <Busy label={r?.state === 'fixing' ? `Fixing round ${r.round}'s findings` : 'Reviewing'} />
               </span>
-            )}
+            ))}
           </span>
         );
         break;

@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
-import { installMeko, settleAgents, type InstallMekoDeps } from '../../src/server/install.js';
+import { agentVersions, installMeko, settleAgents, type InstallMekoDeps } from '../../src/server/install.js';
 import type { MekoCloudLink } from '../../src/server/mekolocal.js';
 import { MekoSetupError } from '../../src/server/mekosetup.js';
+import { tempDir } from '../helpers.js';
 
 const LOCAL = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
 const UNLINKED: MekoCloudLink = { account: '', webUrl: '' };
@@ -102,5 +105,19 @@ describe('installer: the coding agents', () => {
     const c = cfg();
     c.kiro.enabled = false;
     expect(() => settleAgents(c, { claude: null, kiro: '2.32.0' })).toThrow(/^no coding agent found\. Install Claude Code .* or Kiro CLI 2\.32\.0 or later/);
+  });
+
+  it("finds Claude Code in ~/.local/bin, where its installer puts it, when the terminal's PATH doesn't have it yet", async () => {
+    const home = tempDir('ak-install-home-');
+    const bin = join(home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "2.1.319 (Claude Code)"\n');
+    chmodSync(join(bin, 'claude'), 0o755);
+    vi.stubEnv('PATH', '/usr/bin:/bin');
+    try {
+      expect((await agentVersions(cfg(), home)).claude).toBe('2.1.319');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
