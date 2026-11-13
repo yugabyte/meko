@@ -115,6 +115,11 @@ export interface CallFilter {
 }
 
 // GET /settings/call-contents: whether calls' contents are kept, for how long, and what's kept now.
+// GET /settings/cloud-sync: whether datapacks can be synced to Meko Cloud; off until it's turned on.
+export interface CloudSyncSetting {
+  enabled: boolean;
+}
+
 export interface CallContents {
   keep: boolean;
   retention_days: number;
@@ -676,4 +681,43 @@ export interface GapPage {
   open: Record<GapQuality, number>;
   searches: number;
   since: string | null;
+}
+
+// Moving one of this Meko's datapacks to the linked Meko Cloud: each of the plan's limits it was
+// checked against (limit -1 is none), and the sync as it stands.
+export interface SyncCheck {
+  check: string; // datapacks, memory_adds, kb_storage, kb_file_size or searchable_turns
+  used: number;
+  adding: number;
+  limit: number;
+  ok: boolean;
+  message?: string;
+}
+
+export interface SyncPrecheck {
+  ok: boolean;
+  plan: string;
+  checks: SyncCheck[];
+}
+
+export interface SyncRun {
+  datapack_id: string;
+  datapack_name: string;
+  state: "syncing" | "done" | "failed";
+  step: "" | "exporting" | "uploading" | "importing";
+  error?: string;
+  precheck?: SyncPrecheck;
+  web_url?: string;
+  started_at?: string;
+  ended_at?: string;
+  /** The sync's timeline in order; the last one is open while it runs, and a failed run failed in it. */
+  phases?: SyncPhase[] | null;
+  /** The export's bytes sent so far, once uploading starts. */
+  upload?: { done: number; total: number };
+}
+
+export interface SyncPhase {
+  name: string;
+  started_at: string;
+  ended_at?: string;
 }

@@ -174,6 +174,8 @@ func serviceError(err error) error {
 		return fail("bad_request", strings.TrimPrefix(err.Error(), memory.ErrBadRequest.Error()+": "))
 	case errors.Is(err, memory.ErrStorageFull):
 		return fail("storage_limit_exceeded", err.Error())
+	case errors.Is(err, memory.ErrDatapackSyncing):
+		return fail("datapack_syncing", err.Error())
 	}
 	return err
 }

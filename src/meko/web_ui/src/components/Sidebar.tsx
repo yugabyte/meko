@@ -6,7 +6,7 @@
 // names that hold what's typed, like Meko Cloud's.
 
 import { useState } from "react";
-import { Database, ExternalLink, Moon, Plus, RefreshCw, Search, Sun, Users, X } from "lucide-react";
+import { Cloud, Database, Moon, Plus, RefreshCw, Search, Sun, Users, X } from "lucide-react";
 import { ApiError } from "../lib/api";
 import { isShared, matchesName, ROWS_SHOWN, rowLink, useCloudLinked } from "../lib/cloud";
 import { href, navigate, type Route } from "../lib/route";
@@ -226,8 +226,8 @@ function DatapackRow({ d, active }: { d: Datapack; active: boolean }) {
       )}
       {link.kind === "web" && (
         <>
-          <ExternalLink className="size-3.5 shrink-0" aria-hidden />
-          <span className="sr-only">, opens in a new tab</span>
+          <Cloud className="size-3.5 shrink-0 text-primary" aria-hidden />
+          <span className="sr-only">, in Meko Cloud: opens in a new tab</span>
         </>
       )}
     </>
@@ -251,7 +251,7 @@ function DatapackRow({ d, active }: { d: Datapack; active: boolean }) {
         href={link.url}
         target="_blank"
         rel="noopener noreferrer"
-        title="Opens in a new tab"
+        title="Opens in Meko Cloud"
         className={cx(ROW, "text-muted-foreground hover:bg-accent")}
       >
         {body}

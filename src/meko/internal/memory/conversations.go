@@ -103,6 +103,11 @@ type CreateConversation struct {
 // The id comes from the session id alone, as in prod, so a session id another agent already used in
 // the datapack is ErrAgentMismatch: that conversation isn't the caller's to add to.
 func (s *Service) CreateConversation(ctx context.Context, r CreateConversation) (store.Conversation, error) {
+	done, werr := s.writing(r.DatapackID)
+	if werr != nil {
+		return store.Conversation{}, werr
+	}
+	defer done()
 	if strings.TrimSpace(r.Title) == "" {
 		return store.Conversation{}, fmt.Errorf("%w: a conversation needs a title", ErrBadRequest)
 	}
@@ -164,6 +169,11 @@ func (s *Service) AddMessage(ctx context.Context, r AddMessage) (AddedMessage, e
 	if err != nil {
 		return AddedMessage{}, err
 	}
+	done, werr := s.writing(c.DatapackID)
+	if werr != nil {
+		return AddedMessage{}, werr
+	}
+	defer done()
 	out := AddedMessage{Status: "accepted", ConversationID: c.ID}
 	var chunks []string
 	if isSubstantive(r.Input, r.Output) {
@@ -268,6 +278,11 @@ func (s *Service) ListConversations(ctx context.Context, datapack, agentID strin
 // UpdateConversation sets a conversation's title or metadata (at least one).
 func (s *Service) UpdateConversation(ctx context.Context, datapack, id, agentID string, title *string,
 	metadata map[string]any) (store.Conversation, error) {
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return store.Conversation{}, werr
+	}
+	defer done()
 	if title == nil && metadata == nil {
 		return store.Conversation{}, fmt.Errorf("%w: give a title or metadata to change", ErrBadRequest)
 	}
@@ -283,6 +298,11 @@ func (s *Service) UpdateConversation(ctx context.Context, datapack, id, agentID 
 
 // DeleteConversation deletes a conversation and its turns. Memories that name it stay, as in prod.
 func (s *Service) DeleteConversation(ctx context.Context, datapack, id, agentID string) error {
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return werr
+	}
+	defer done()
 	c, err := s.conversation(ctx, datapack, id, agentID)
 	if err != nil {
 		return err
@@ -294,6 +314,17 @@ func (s *Service) DeleteConversation(ctx context.Context, datapack, id, agentID 
 // its new turns aren't embedded, nor are earlier ones still waiting for their vectors (the store
 // drops them when they come); turns already embedded stay searchable.
 func (s *Service) SetConversationSearchOptOut(ctx context.Context, datapack string, optOut bool) error {
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return werr
+	}
+	defer done()
+	return s.setConversationSearchOptOut(ctx, datapack, optOut)
+}
+
+// setConversationSearchOptOut is SetConversationSearchOptOut for a caller that holds the datapack's
+// write gate already (UpdateDatapack).
+func (s *Service) setConversationSearchOptOut(ctx context.Context, datapack string, optOut bool) error {
 	err := s.st.SetConversationSearchOptOut(ctx, datapack, optOut)
 	if errors.Is(err, store.ErrNoDatapack) {
 		return ErrNoDatapack

@@ -249,6 +249,8 @@ func datapackError(err error) error {
 		return fail("CONFLICT", "A datapack with that name already exists.")
 	case errors.Is(err, memory.ErrBadRequest):
 		return fail("VALIDATION_ERROR", strings.TrimPrefix(err.Error(), memory.ErrBadRequest.Error()+": "))
+	case errors.Is(err, memory.ErrDatapackSyncing):
+		return fail("datapack_syncing", err.Error())
 	}
 	return err
 }

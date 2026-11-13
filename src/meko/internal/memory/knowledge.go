@@ -239,6 +239,11 @@ type UploadOffer struct {
 // fields first and the file last), good once for 5 minutes. When the datapack already has these
 // bytes there's nothing to upload: it says so, and queues them again if they FAILED.
 func (s *Service) UploadURL(ctx context.Context, r UploadRequest) (UploadOffer, error) {
+	done, werr := s.writing(r.DatapackID)
+	if werr != nil {
+		return UploadOffer{}, werr
+	}
+	defer done()
 	if err := s.needDatapack(ctx, r.DatapackID); err != nil {
 		return UploadOffer{}, err
 	}
@@ -315,6 +320,12 @@ func (s *Service) ReceiveUpload(ctx context.Context, token string, r io.Reader) 
 	if !ok {
 		return ErrTicket
 	}
+	done, werr := s.writing(tk.datapack)
+	if werr != nil {
+		s.tickets.received(tk)
+		return werr
+	}
+	defer done()
 	// Its size stays held until the document's row counts it, or the file is refused.
 	defer s.tickets.received(tk)
 	rec, err := s.files.Receive(tk.datapack, r, tk.size)
@@ -416,6 +427,11 @@ func (s *Service) DocumentStatus(ctx context.Context, datapack, key string) (Doc
 // ConfirmUpload is upload-complete: the key must be the datapack's and its file stored. Files are
 // registered as they arrive, so there's nothing more to do.
 func (s *Service) ConfirmUpload(ctx context.Context, datapack, key string) error {
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return werr
+	}
+	defer done()
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return err
 	}
@@ -433,6 +449,11 @@ func (s *Service) ConfirmUpload(ctx context.Context, datapack, key string) error
 // CreateKnowledgeBase is create: it marks the datapack as having a knowledge base. Files are
 // registered and queued as they arrive, so nothing is left to register.
 func (s *Service) CreateKnowledgeBase(ctx context.Context, datapack string) error {
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return werr
+	}
+	defer done()
 	err := s.st.MarkKnowledgeBase(ctx, datapack)
 	if errors.Is(err, store.ErrNoDatapack) {
 		return ErrNoDatapack
@@ -572,6 +593,11 @@ func (s *Service) OpenDownload(token string) (Download, error) {
 // DeleteDocument deletes a datapack's file, its chunks and its bytes, and says how many chunks
 // went, or returns ErrNotFound or ErrDocumentProcessing.
 func (s *Service) DeleteDocument(ctx context.Context, datapack, id string) (int, error) {
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return 0, werr
+	}
+	defer done()
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return 0, err
 	}

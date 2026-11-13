@@ -77,6 +77,9 @@ export const project = (projectId: string): Route => ({ tab: "overview", view: "
 // The Settings page, which the sidebar and the "it's off" notes link to.
 export const SETTINGS: Route = { tab: "overview", view: "settings" };
 
+// Settings › Meko Cloud, where the API key goes: Settings and the sync dialog link to it.
+export const MEKO_CLOUD: Route = { tab: "overview", view: "meko-cloud" };
+
 // The Calls page, which Settings links to; its filters are in the address (/calls?agent=<agent id>).
 export const CALLS: Route = { tab: "overview", view: "calls" };
 
