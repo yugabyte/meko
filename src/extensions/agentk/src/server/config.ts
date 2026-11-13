@@ -112,8 +112,8 @@ export interface Config {
    * a project's settings and a session's own go over these. strategy: `off`, `sirius-1.0` or `sagittarius-3.0`. rounds:
    * re-reviews after the first (0 to MAX_ROUNDS). depth: sweeps in each review (1 to MAX_DEPTH). check: a round's findings
    * wait for the user to note or dismiss them before they go to the task (Run to merge never waits). models: the model each
-   * tier of review step runs on, per harness (`[code_review.models.<harness>]`: large, mid, small); empty runs it on the
-   * session's own model.
+   * tier of review step runs on, per harness (`[code_review.models.<harness>]`: large, mid, small; no strategy uses
+   * mid now); empty runs it on the session's own model.
    */
   codeReview: { strategy: string; rounds: number; depth: number; check: boolean; models: Record<HarnessId, ReviewModels> };
   /**

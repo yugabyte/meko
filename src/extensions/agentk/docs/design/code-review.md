@@ -33,16 +33,20 @@ instructions, and the `review` argument of the `start_sessions` tool, so "start 
 `[code_review.models.<harness>]` sets the model each tier of step runs on (`large`, `mid`,
 `small`): Claude Code's are `opus`, `sonnet` and `haiku`; OpenCode's and Kiro's are empty, which
 runs a step on the session's own model, since their model ids depend on the user's providers and
-plans.
+plans. No strategy runs a step on `mid` now (Sirius 1.0's pass moved to `large`), so a `mid`
+model is kept but unused.
 
 ## Strategies
 
-A strategy is a named, versioned bundle of what a review does, stamped on each review and never
-reused (the cloud's `Strategy`); an unknown id resolves to the default.
+A strategy is a named, versioned bundle of what a review does (the cloud's `Strategy`): its passes,
+their mandates and report schemas, and its scoring. Its id is stamped on each review and never
+reused for another bundle, but the tier a pass runs on, and the model each tier names, can change
+under the same id: Sirius 1.0's pass ran on `mid` until it moved to `large`. An unknown id
+resolves to the default.
 
 | Id | Passes | Scoring |
 |---|---|---|
-| `sirius-1.0` | One mid-tier pass whose mandate covers all five | None: every candidate goes to Validate |
+| `sirius-1.0` | One large-tier pass whose mandate covers all five | None: every candidate goes to Validate |
 | `sagittarius-3.0` | guide (large), diff (small), dependents (large, with its state ledger), history (large), claims (large, with its claims ledger): the cloud's mandates word for word | A small-tier scorer for each candidate |
 
 The cloud Kode isn't changed: its strategy keeps its own name, and only this registry calls the
