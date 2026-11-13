@@ -38,7 +38,15 @@ export function claudeAccount(): string | null {
 
 interface ClaudeJson {
   projects?: Record<string, { hasTrustDialogAccepted?: boolean } & Record<string, unknown>>;
+  hasCompletedOnboarding?: boolean;
   [k: string]: unknown;
+}
+
+/** Writes Claude Code's config whole, by renaming a temp file over it, keeping its mode. */
+function writeClaudeJson(file: string, cfg: ClaudeJson): void {
+  const tmp = `${file}.agent-k-local.tmp`;
+  writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: statSync(file).mode & 0o777 });
+  renameSync(tmp, file);
 }
 
 /**
@@ -82,9 +90,30 @@ export function ensureWorkspaceTrust(dir: string): 'already' | 'added' | 'no-con
   const fresh = JSON.parse(readFileSync(file, 'utf8')) as ClaudeJson;
   fresh.projects ??= {};
   for (const d of dirs) fresh.projects[d] = { ...(fresh.projects[d] ?? {}), hasTrustDialogAccepted: true };
-  const tmp = `${file}.agent-k-local.tmp`;
-  writeFileSync(tmp, JSON.stringify(fresh, null, 2), { mode: statSync(file).mode & 0o777 });
-  renameSync(tmp, file);
+  writeClaudeJson(file, fresh);
+  return 'added';
+}
+
+/**
+ * Claude Code opens on its first-run setup (the text style, then how to sign in) until its config
+ * says `hasCompletedOnboarding`, which signing in with `claude auth login` doesn't set. It fires no
+ * hooks meanwhile, so a session Kode starts would wait there behind the Starting panel: before a
+ * launch, Kode marks it done. Claude then keeps its default text style. Only once the config shows
+ * a sign-in (`oauthAccount`, as `claudeAccount` reads it): the file can exist without one (Meko's
+ * `claude mcp add`, an install that went on with Claude Code signed out), and then the setup's
+ * sign-in screen is what shows the session as waiting on you (`SETUP_PROMPT_RE`). Nothing is written
+ * without a config either.
+ */
+export function ensureOnboarded(): 'already' | 'added' | 'signed-out' | 'no-config' {
+  const file = claudeConfigPath();
+  if (!existsSync(file)) return 'no-config';
+  const cfg = JSON.parse(readFileSync(file, 'utf8')) as ClaudeJson;
+  if (cfg.hasCompletedOnboarding === true) return 'already';
+  if (!cfg.oauthAccount || typeof cfg.oauthAccount !== 'object') return 'signed-out';
+  // Re-read right before writing, as ensureWorkspaceTrust does.
+  const fresh = JSON.parse(readFileSync(file, 'utf8')) as ClaudeJson;
+  fresh.hasCompletedOnboarding = true;
+  writeClaudeJson(file, fresh);
   return 'added';
 }
 
@@ -107,28 +136,40 @@ export function copyClaudeProjects(map: (dir: string) => string | null): number 
     added++;
   }
   if (!added) return 0;
-  const tmp = `${file}.agent-k-local.tmp`;
-  writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: statSync(file).mode & 0o777 });
-  renameSync(tmp, file);
+  writeClaudeJson(file, cfg);
   return added;
 }
 
 /** Text Claude Code shows in its folder-trust dialog. */
 export const TRUST_PROMPT_RE = /trust this folder|do you trust the files|Is this a project you created or one you trust/i;
 
+/** Text Claude Code shows in its first-run setup (measured on 2.1.319): its text style, then how to sign in. */
+export const SETUP_PROMPT_RE = /Choose the text style that looks best with your terminal|Select login method/i;
+
 /**
- * Makes sure Claude Code trusts `dir` (`ensureWorkspaceTrust`). Other Claude processes rewrite
- * ~/.claude.json with their own copy when they start, which can drop a fresh entry, so a new entry
- * is checked again after a moment. Never throws.
+ * Runs a write to ~/.claude.json until it sticks. Other Claude processes rewrite the file with
+ * their own copy when they start, which can drop a fresh entry, so a write that added something is
+ * checked again after a moment. `done` is logged once. Never throws.
  */
-export async function trustFolder(dir: string, log: Logger): Promise<void> {
+async function keepWritten(write: () => string, done: string, failed: string, log: Logger): Promise<void> {
   try {
     for (let i = 0; i < 3; i++) {
-      if (ensureWorkspaceTrust(dir) !== 'added') return;
-      if (i === 0) log.info(`trusted ${dir} in Claude Code, so sessions there skip its folder-trust prompt`);
+      if (write() !== 'added') return;
+      if (i === 0) log.info(done);
       await new Promise((r) => setTimeout(r, 400));
     }
   } catch (e) {
-    log.warn(`could not mark ${dir} as trusted in Claude Code`, errMsg(e));
+    log.warn(failed, errMsg(e));
   }
+}
+
+/** Makes sure Claude Code trusts `dir` (`ensureWorkspaceTrust`). Never throws. */
+export async function trustFolder(dir: string, log: Logger): Promise<void> {
+  await keepWritten(() => ensureWorkspaceTrust(dir), `trusted ${dir} in Claude Code, so sessions there skip its folder-trust prompt`,
+    `could not mark ${dir} as trusted in Claude Code`, log);
+}
+
+/** Makes sure Claude Code's first-run setup is marked done (`ensureOnboarded`). Never throws. */
+export async function skipClaudeSetup(log: Logger): Promise<void> {
+  await keepWritten(ensureOnboarded, "marked Claude Code's first-run setup done, so sessions skip it", "could not mark Claude Code's first-run setup done", log);
 }

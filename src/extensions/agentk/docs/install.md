@@ -19,7 +19,8 @@ curl -fsSL https://mekodata.ai/install.sh | sh
 meko extension install kode
 ```
 
-(or **Install** on Meko's Extensions page). Meko downloads Kode's newest release, checks it and
+(or **Install** on Meko's Extensions page). When Meko's installer adds `~/.local/bin` to your PATH,
+run the second command in a new terminal: the one the installer ran in keeps its old PATH. Meko downloads Kode's newest release, checks it and
 unpacks it into its data folder, then runs Kode's setup, which offers to install anything that's
 missing (git, curl, and Claude Code, OpenCode or Kiro CLI when none is there: it asks which, or pass
 `meko extension install kode -- --agent opencode` or `-- --agent kiro`) and to set up Meko for

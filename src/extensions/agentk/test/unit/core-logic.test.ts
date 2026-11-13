@@ -1026,13 +1026,13 @@ describe('github helpers', () => {
 });
 
 describe('Claude folder trust', () => {
-  it("trusts a folder by its own entry and its real path's, never a parent's, keeping what's there", async () => {
-    const { ensureWorkspaceTrust, isTrusted } = await import('../../src/server/trust.js');
-    const { writeFileSync, readFileSync, mkdirSync, symlinkSync, realpathSync, mkdtempSync: mk } = await import('node:fs');
+  it("trusts a folder by its own entry and its real path's, never a parent's, and marks the first-run setup done, keeping what's there", async () => {
+    const { ensureOnboarded, ensureWorkspaceTrust, isTrusted } = await import('../../src/server/trust.js');
+    const { writeFileSync, readFileSync, mkdirSync, symlinkSync, realpathSync, mkdtempSync: mk, existsSync: exists, rmSync: rm } = await import('node:fs');
     const dir = mk(join(tmpdir(), 'akl-trust-'));
     process.env.CLAUDE_CONFIG_DIR = dir;
     const file = join(dir, '.claude.json');
-    const read = () => JSON.parse(readFileSync(file, 'utf8')) as { other: number; projects: Record<string, { hasTrustDialogAccepted?: boolean }> };
+    const read = () => JSON.parse(readFileSync(file, 'utf8')) as { other: number; hasCompletedOnboarding?: boolean; projects: Record<string, { hasTrustDialogAccepted?: boolean }> };
     writeFileSync(file, JSON.stringify({ projects: { '/home/u': { hasTrustDialogAccepted: true }, '/home/u/code/old': { lastSessionId: 's1' } }, other: 1 }));
     // A trusted parent doesn't count: Claude Code still asks about a git repo under it.
     expect(isTrusted('/home/u/code/demo', read())).toBe(false);
@@ -1052,6 +1052,18 @@ describe('Claude folder trust', () => {
     expect(read().projects[linked]).toEqual({ hasTrustDialogAccepted: true });
     expect(read().projects[realpathSync(real)]).toEqual({ hasTrustDialogAccepted: true });
     expect(ensureWorkspaceTrust(linked)).toBe('already');
+    // Claude Code's first-run setup, which signing in leaves to do, is marked done once, and only
+    // once the config shows a sign-in: signed out, its sign-in screen is what shows the session waits.
+    expect(ensureOnboarded()).toBe('signed-out');
+    expect(read().hasCompletedOnboarding).toBeUndefined();
+    writeFileSync(file, JSON.stringify({ ...read(), oauthAccount: { accountUuid: 'a1' } }));
+    expect(ensureOnboarded()).toBe('added');
+    expect(read()).toMatchObject({ hasCompletedOnboarding: true, other: 1 });
+    expect(ensureOnboarded()).toBe('already');
+    // Never a config of its own: with none, Claude Code has never run here.
+    rm(file);
+    expect(ensureOnboarded()).toBe('no-config');
+    expect(exists(file)).toBe(false);
   });
 });
 

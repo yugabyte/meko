@@ -657,6 +657,7 @@ export function App() {
           onMekoSettings={() => setModal({ kind: 'settings', tab: 'harness', agent: 'claude' })}
           onSettings={() => setModal({ kind: 'settings', tab: 'harness' })}
           onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to, opener: 'banner' })}
+          tourOnScreen={!!currentProject?.tour && !currentProject.tour.finished}
         />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />

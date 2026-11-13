@@ -107,6 +107,15 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > re-checks after a moment). If the prompt still appears (for a new, resumed or recovered session),
 > the session shows *needs you* with an explanation, and the repo is trusted again for the next one.
 
+> **Claude Code's first-run setup.** Until `~/.claude.json` says `hasCompletedOnboarding`, Claude
+> Code opens on its first-run setup (the text style, then how to sign in), which signing in with
+> `claude auth login` doesn't mark done, and fires no hooks meanwhile: a new install's first
+> sessions (the tour's) waited there behind the Starting panel. So before each launch the server
+> marks it done (`ensureOnboarded` in `trust.ts`, re-checked as trust is; Claude keeps its default
+> text style), but only once the config shows a sign-in (`oauthAccount`), never making the file:
+> signed out, the setup's sign-in screen is what shows. If the setup shows, the session shows
+> *needs you*, as for folder trust, until it's answered.
+
 > **Meko: the Meko on this computer.** Datapacks are how a project keeps track of its work, and
 > sharing a project goes through its datapack. Kode uses the Meko running on this computer, and
 > nothing else; it can't be turned off. It doesn't know or ask whether that Meko is linked to Meko

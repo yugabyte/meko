@@ -229,7 +229,7 @@ async function webUrl(paths: Paths, cfg: Config): Promise<{ url: string | null; 
   if (p.meko?.webOff) return { url: null, why: "Meko's web UI is off: turn it on with meko ui start" };
   if (p.meko) return { url: null, why: 'the Meko on this computer is too old to serve Kode: update it with meko update' };
   if (p.state === 'stopped') return { url: null, why: "Meko isn't running: start it with meko start" };
-  return { url: null, why: 'no Meko on this computer serves Kode: install Meko, then run meko extension install kode' };
+  return { url: null, why: 'no Meko on this computer serves Kode: install Meko, then run `meko extension install kode`' };
 }
 
 /** Opens Kode in this computer's browser through Meko (`meko ui`), or prints its URL. */

@@ -528,7 +528,9 @@ hides the offer in that browser for good (`localStorage`, as the other banners d
 per browser and device, so the server doesn't keep it). The page catches the browser's
 `beforeinstallprompt` as it loads and holds it, so Android Chrome doesn't show its own install bar
 as well (`src/web/installapp.ts`). The banner doesn't show in the installed app, once the app is
-installed (Chrome stops making the offer in its tabs), or before a sign-in on a Meko that has one. While the browser can
+installed (Chrome stops making the offer in its tabs), before a sign-in on a Meko that has one, or
+while the Kode tour's project is on screen with the tour still running (its guide card's button is
+the one to press next). While the browser can
 still install it, **Install Kode as an app** is in the `⌘K` palette too, even after Not now.
 Tapping Install doesn't also ask for notification permission (the first-click ask waits for the
 next click), so one tap never brings up two prompts.

@@ -1506,10 +1506,12 @@ textarea.input {
   border-style: dashed;
   text-decoration: line-through;
 }
+/* Marked, not filled: a filled blue reads as a button, and the guide card's is the one to press. */
 .tour-stage.current {
-  color: var(--accent-ink);
-  background: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
   border-color: var(--accent);
+  font-weight: 700;
 }
 .tour-switch {
   display: flex;

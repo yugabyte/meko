@@ -50,6 +50,8 @@ import { claudePath } from './paths.js';
 
 /** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
 const TRUST_DETAIL = 'Claude is asking whether you trust this folder. Answer in the terminal.';
+/** The status detail while Claude Code's first-run setup waits (its text style, then how to sign in): matched exactly too. */
+const SETUP_DETAIL = 'Claude is asking for its first-run settings. Answer in the terminal.';
 /** A Changes panel request for a commit the branch no longer has (amended or rebased away). */
 const GONE_COMMIT = 'That commit isn\'t on this session\'s branch any more (it was amended or rebased). Pick All changes or another commit from the commit menu.';
 
@@ -1833,13 +1835,14 @@ export class SessionManager {
           run(this.db, 'UPDATE sessions SET claude_session_id = ? WHERE id = ?', p.session_id, id);
           this.event(id, 'conversation', `${agentName(row)} moved to a new conversation; Resume continues that one`);
         }
-        const trustPrompt = row.status === 'needs_input' && row.status_detail === TRUST_DETAIL;
+        // A question Claude asked before it started (folder trust, first-run setup), now answered.
+        const asked = row.status === 'needs_input' && (row.status_detail === TRUST_DETAIL || row.status_detail === SETUP_DETAIL);
         const st = this.startup.get(id);
-        if ((row.status === 'starting' || trustPrompt) && st?.hasPrompt && !st.resumed) {
+        if ((row.status === 'starting' || asked) && st?.hasPrompt && !st.resumed) {
           // Claude is up; it submits the first prompt next (UserPromptSubmit ends startup).
-          if (trustPrompt) this.setStatus(id, 'starting');
+          if (asked) this.setStatus(id, 'starting');
           this.setStartup(id, 'prompt');
-        } else if (row.status === 'starting' || row.status === 'exited' || trustPrompt) {
+        } else if (row.status === 'starting' || row.status === 'exited' || asked) {
           this.clearStartup(id);
           this.setStatus(id, 'idle');
           this.back(id);
@@ -2039,6 +2042,11 @@ export class SessionManager {
           if (repo) await h.trustFolder?.(repo, this.core.log); // so the next session skips it
           this.setStatus(row.id, 'needs_input', TRUST_DETAIL);
           this.notifyUser(row.id, 'Needs you', 'Confirm folder trust in the terminal.');
+        } else if (h.setupPrompt?.test(screen) && row.status_detail !== SETUP_DETAIL) {
+          // Its first-run setup, which beforeLaunch marks done, came up anyway. Looked at again
+          // after, since the folder-trust dialog can follow it.
+          this.setStatus(row.id, 'needs_input', SETUP_DETAIL);
+          this.notifyUser(row.id, 'Needs you', "Finish Claude Code's first-run setup in the terminal.");
         }
       } else if (pane.dead && row.status !== 'exited') {
         this.startup.delete(row.id);

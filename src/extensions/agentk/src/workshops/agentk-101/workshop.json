@@ -34,14 +34,14 @@
       "stages": [
         {
           "id": "repo", "kind": "repo", "title": "The repo",
-          "labels": { "next": "Move on to stage 2" },
+          "labels": { "next": "Move on to step 2" },
           "text": {
             "done": "A small Snake game with a bug: score a few points, press **New game**, and the score carries over.\n\nPlay the game first to see the bug."
           }
         },
         {
           "id": "review-cold", "kind": "review-first-look", "title": "Review without context",
-          "labels": { "run": "Run the review", "next": "Move on to stage 3" },
+          "labels": { "run": "Run the review", "next": "Move on to step 3" },
           "text": {
             "ready": "A new teammate has put out a fix for the score bug, and we are going to review it. This review runs with no Meko context: it has only the code to go on, like a new teammate or an AI agent.",
             "running": "The review is running on **{{session}}**. The magnifier beside its tab shows its progress.",
@@ -51,7 +51,7 @@
         },
         {
           "id": "teach", "kind": "teach", "title": "Mine and store context in Meko",
-          "labels": { "run": "Add the gotchas to Meko", "next": "Move on to stage 4" },
+          "labels": { "run": "Add the gotchas to Meko", "next": "Move on to step 4" },
           "text": {
             "ready": "Now give Meko what the team knows. Kode adds the team's gotchas to a Meko datapack, `{{gotchasDatapack}}`. They're traps that earlier work on this game hit, mined from the repo's history (issues, commits, PR comments and Slack threads):\n\n{{gotchas.list}}",
             "running": "Kode is adding gotchas.md to Meko as a single file. Meko processes and indexes it automatically.",
@@ -68,7 +68,7 @@
             "done": "With the gotchas, the review found {{context.kept}}. It caught the trap from the team's gotcha ({{context.gotchas}}). The code alone couldn't show it, since the daily challenge lives in another repo.\n\nThat's what Meko adds to every review: the team's context, so known traps aren't missed again.",
             "missed": "With the gotchas, the review found {{context.kept}}, but none of its findings credits a gotcha this time: a model can have a bad run. MG-2 says the score reset belongs where a run starts, never in `newGame()`.",
             "failed": "The review couldn't finish: {{failure}}",
-            "blocked": "The level's session was closed, so there's nothing to review again. Take Level 1 again from its first stage."
+            "blocked": "The level's session was closed, so there's nothing to review again. Take Level 1 again from its first step."
           }
         }
       ]
@@ -90,7 +90,7 @@
       "stages": [
         {
           "id": "learn", "kind": "learn", "title": "Learn the project",
-          "labels": { "run": "Learn the project", "next": "Move on to stage 2" },
+          "labels": { "run": "Learn the project", "next": "Move on to step 2" },
           "text": {
             "ready": "Meko hasn't learned this project yet. Learn the project reads the game's code and docs and saves what it finds to `{{datapack}}`.",
             "running": "**{{session}}** is reading the game and saving what it learns. The **m** on its tab lights up during each Meko call. It closes itself when it's done.\n\nOpen the datapack in a new tab to watch Meko gain memories as it learns.",
@@ -100,7 +100,7 @@
         },
         {
           "id": "ask", "kind": "ask", "title": "Ask about the game",
-          "labels": { "run": "Ask about the game", "next": "Move on to stage 3" },
+          "labels": { "run": "Ask about the game", "next": "Move on to step 3" },
           "text": {
             "ready": "A new session asks two questions about the game:\n\n1. How is the game run and tested, and why are its scripts plain scripts rather than ES modules?\n2. Which of the game's rules have no test yet?\n\nKode gives it what Meko already knows when it starts, so it doesn't burn tokens reading all the code again.",
             "running": "**{{session}}** is answering. The **m** on its tab lights up during each Meko call. When its turn ends, Kode saves what it worked out to Meko by itself.",

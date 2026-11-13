@@ -134,6 +134,9 @@ type runningOptions struct {
 	// pick, when set, asks which extension to add after the links, and adds it: install's picker
 	// (pickExtension). It returns the extension added, or "".
 	pick func(r report) string
+	// newTerminal titles the commands "Next, in a new terminal:": install just put meko on the
+	// PATH in the shell's profile, which this terminal hasn't read.
+	newTerminal bool
 }
 
 // printRunning is the end of start's and install's summary: the context engine's row, which shows
@@ -185,7 +188,11 @@ func printRunning(l paths.Layout, o runningOptions, stdout io.Writer) {
 		s.webOff = !st.Web.Enabled
 	}
 	s.added = added
-	r.next(nextSteps(s, o.kind))
+	title := "Next:"
+	if o.newTerminal {
+		title = nextInNewTerminal
+	}
+	r.nextUnder(title, nextSteps(s, o.kind))
 }
 
 // waitEngine prints the context engine's row: on a terminal it shows the dots while the engine
