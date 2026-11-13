@@ -23,9 +23,12 @@ const maxNesting = 32
 
 // mdParser finds CommonMark's blocks only: no inline parsing, no tables and no paragraph
 // transformers. Inline parsing and tables never move a top-level heading. Without the
-// link-reference transformer, a paragraph of only link definitions over a setext underline
-// ("[a]: /url" then "===") is a heading, where CommonMark reads definitions and a paragraph "==="
-// (accepted: definitions are rare outside documents' ends). It's safe for concurrent use.
+// link-reference transformer, link definitions at the start of a paragraph stay paragraph text, so
+// under a setext underline they are a heading or part of its text, where CommonMark reads them as
+// definitions: "[a]: /url" then "===" is an h1 "[a]: /url" (CommonMark: a paragraph "==="), then
+// "---" an h2 (CommonMark: a rule, no heading), and "[a]: /url", "foo", "===" an h1 "[a]: /url foo"
+// (CommonMark: "foo"). Accepted: definitions are rare outside documents' ends. It's safe for
+// concurrent use.
 var mdParser = parser.NewParser(
 	parser.WithBlockParsers(parser.DefaultBlockParsers()...),
 	parser.WithInlineParsers(),
@@ -33,9 +36,14 @@ var mdParser = parser.NewParser(
 
 var (
 	titleLine = regexp.MustCompile(`^title:\s*(.+?)\s*$`)
-	// yamlLine is a line front matter may hold: a key, a list item, an indented continuation or a
-	// comment.
-	yamlLine = regexp.MustCompile(`^(?:[^\s#:][^:]*:(?:[ \t].*)?|[ \t]*-(?:[ \t].*)?|[ \t]+\S.*|[ \t]*#.*)$`)
+	// yamlKey is a front matter line that starts a key: a bare key without spaces, or a quoted one,
+	// then ':' and a space or the line's end. "Steps to follow: install it" isn't one.
+	yamlKey = regexp.MustCompile(`^(?:[^\s#:"'-][^\s:]*|"[^"]*"|'[^']*'):(?:[ \t].*)?$`)
+	// yamlMore is a front matter line that only follows a key: a list item or an indented
+	// continuation.
+	yamlMore = regexp.MustCompile(`^(?:[ \t]*-(?:[ \t].*)?|[ \t]+\S.*)$`)
+	// yamlComment is a front matter comment.
+	yamlComment = regexp.MustCompile(`^[ \t]*#.*$`)
 )
 
 // heading is a top-level heading: its level and text, and the bytes of its lines in the text
@@ -69,12 +77,16 @@ func markdownSections(ctx context.Context, text string) (title string, sections 
 }
 
 // frontMatter takes a leading "---" block that reads as YAML off text, closed by "---" or "...",
-// and returns its title. Anything else, such as a "---" rule over prose, is left as Markdown.
+// and returns its title: comments, and key lines ("key: value", no spaces in a bare key) each
+// followed by any list items or indented lines. Anything else, such as a "---" rule over a sentence
+// or an indented line, is left as Markdown; a rule over a single "Note: read this first." line
+// is valid YAML, so it is taken.
 func frontMatter(text string) (title, rest string) {
 	first, body, ok := strings.Cut(text, "\n")
 	if !ok || strings.TrimSpace(first) != "---" {
 		return "", text
 	}
+	sawKey := false
 	for off := 0; off < len(body); {
 		line, next := body[off:], len(body)
 		if i := strings.IndexByte(line, '\n'); i >= 0 {
@@ -88,7 +100,10 @@ func frontMatter(text string) (title, rest string) {
 				}
 			}
 			return title, body[next:]
-		case t != "" && !yamlLine.MatchString(line):
+		case t == "" || yamlComment.MatchString(line):
+		case yamlKey.MatchString(line):
+			sawKey = true
+		case !sawKey || !yamlMore.MatchString(line):
 			return "", text
 		}
 		off = next
@@ -279,8 +294,8 @@ func restartInside(b ast.Node, src []byte) (off int, inPara bool) {
 // paragraphOnly says whether a line can only be paragraph text, wherever a parse starts: at most 3
 // spaces, then nothing that opens another block. A line may start with '#' (not 1-6 of them and a
 // space: "#tag"), '*', '-' or '+' (not a list marker or a rule: "*draft*"), '=' or '-' (not only
-// those: "=x"), or '`' or '~' (fewer than three: "“x"), but not '>', '<' or a tab, nor a list
-// marker or a thematic break.
+// those: "=x"), or a backtick or '~' (fewer than three in a row: "~x"), but not '>', '<' or a tab,
+// nor a list marker or a thematic break.
 func paragraphOnly(line []byte) bool {
 	line = bytes.TrimRight(line, "\n")
 	text := bytes.TrimLeft(line, " ")
@@ -380,8 +395,9 @@ func markers(line []byte) int {
 	return n
 }
 
-// listMarker is the length of a list marker ("-", "*", "+", or 1-9 digits and "." or ")") and the
-// space or tab after it at the start of line, or 0.
+// listMarker is the length of a list marker ("-", "*", "+", or 1-9 digits and "." or ")") at the
+// start of line, when a space, tab or the line's end follows it, or 0. The space isn't counted:
+// "- x" gives 1.
 func listMarker(line []byte) int {
 	n := 0
 	switch {
@@ -403,15 +419,16 @@ func listMarker(line []byte) int {
 }
 
 // limitNesting turns the quote or list marker past the maxNesting'th at the start of each line
-// into text ('x'), in place, keeping every byte's offset. A line of rule characters is left alone:
-// "- - -" is a thematic break, not three list items.
+// into text ('x'), in place, keeping every byte's offset. Rule characters are left alone, at the
+// start of a line or after its quotes and list markers: "- - -" is a thematic break, not three
+// list items.
 func limitNesting(src []byte) {
 	for s := 0; s < len(src); {
 		e := len(src)
 		if i := bytes.IndexByte(src[s:], '\n'); i >= 0 {
 			e = s + i
 		}
-		if i := deepMarker(src[s:e]); i >= 0 && !isRule(src[s:e]) {
+		if i := deepMarker(src[s:e]); i >= 0 {
 			src[s+i] = 'x'
 		}
 		s = e + 1
@@ -431,6 +448,9 @@ func deepMarker(line []byte) int {
 		case '>':
 			n = 1
 		default:
+			if isRule(line[i:]) { // "> - - -": the rest is a rule, not list items
+				return -1
+			}
 			if n = listMarker(line[i:]); n == 0 {
 				return -1
 			}
