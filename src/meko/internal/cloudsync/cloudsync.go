@@ -56,7 +56,7 @@ var (
 	// ErrUnsupported is a linked Meko Cloud without the import routes.
 	ErrUnsupported = errors.New("this Meko Cloud can't take synced datapacks yet")
 	// ErrNotLinked is a sync while Meko Cloud isn't linked.
-	ErrNotLinked = errors.New("link Meko Cloud first: Settings › Meko Cloud, or meko cloud_link")
+	ErrNotLinked = errors.New("link Meko Cloud first: Settings › Meko Cloud, or meko cloud-link")
 )
 
 // CloudError is Meko Cloud's refusal of an import call, with its status, code and message.

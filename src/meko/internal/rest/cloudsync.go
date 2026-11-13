@@ -30,7 +30,7 @@ func (a *api) registerCloudSync(g *echo.Group) {
 
 func (a *api) syncOwner(c echo.Context) error {
 	return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
-		"Only Meko's owner can sync a datapack to Meko Cloud: the web UI, or meko cloud_sync.")
+		"Only Meko's owner can sync a datapack to Meko Cloud: the web UI, or meko cloud-sync.")
 }
 
 // cloudSyncSetting is GET /settings/cloud-sync: {enabled}, whether datapacks can be synced to Meko

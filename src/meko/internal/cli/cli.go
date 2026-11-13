@@ -184,7 +184,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer, tr *tracked) 
 	if cmd == "answers" {
 		return runAnswers(rest, stdout, stderr)
 	}
-	if cmd == "cloud_sync" {
+	if cmd == "cloud-sync" {
 		return runCloudSync(rest, stdout, stderr)
 	}
 	fs := flag.NewFlagSet(prog+" "+cmd, flag.ContinueOnError)

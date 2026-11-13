@@ -262,42 +262,6 @@ func TestMemoryExtractor(t *testing.T) {
 	wantErr(t, e, "POST", settings+"/run", nil, 409, "EXTRACTOR_OFF")
 }
 
-// A turn replayed with metadata.session_date is extracted as said on that date: the call shows
-// that date, and the memory is backdated to it, as Cloud backdates memories from the same key.
-func TestMemoryExtractorSessionDate(t *testing.T) {
-	h := &fakeHarness{}
-	fakeClaude(t)
-	e := testenv.Start(t, testenv.Options{ExtractorHarness: h})
-	ctx := context.Background()
-	if r := asAdmin(t, e, "/settings/memory-extractor", map[string]any{"harness": "claude"}); r.Status != 200 {
-		t.Fatalf("set up: %+v", r)
-	}
-	h.reset()
-	conv, err := e.Service.CreateConversation(ctx, memory.CreateConversation{AgentID: "claude_code:x",
-		DatapackID: e.DatapackID, SessionID: "s", Title: "replay"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = e.Service.AddMessage(ctx, memory.AddMessage{ConversationID: conv.ID, AgentID: "claude_code:x",
-		DatapackID: e.DatapackID, Input: "I bought five tops at H&M last weekend for the trip.", Seed: "0",
-		Metadata: map[string]any{"session_date": "2023-05-20T22:00:00-07:00"}}); err != nil {
-		t.Fatal(err)
-	}
-	h.answer = func(string) ([]memory.ExtractedFact, error) {
-		return []memory.ExtractedFact{{Text: "The user bought five tops at H&M.", Turn: 0}}, nil
-	}
-	if run := obj(okData(t, e, "POST", "/settings/memory-extractor/run", nil, 200)); num(run["memories"]) != 1 {
-		t.Fatalf("run %v", run)
-	}
-	if _, input, _ := h.last(); !strings.Contains(input, "[turn 0] (2023-05-20)") {
-		t.Errorf("the call doesn't date the turn by its session:\n%s", input)
-	}
-	found, err := e.Service.SearchMemories(ctx, memory.Search{DatapackID: e.DatapackID, Query: "H&M tops", Limit: 5})
-	if err != nil || len(found) != 1 || found[0].CreatedAt != "2023-05-21T05:00:00.000Z" {
-		t.Errorf("memory %+v, %v: want created_at at the session's instant, 2023-05-21T05:00Z", found, err)
-	}
-}
-
 // A datapack syncing to Meko Cloud is skipped by extraction: no call is made, its turns stay queued
 // with no attempt counted, and the run goes on; once the sync ends they're extracted as usual.
 func TestExtractorSkipsASyncingDatapack(t *testing.T) {
@@ -334,5 +298,41 @@ func TestExtractorSkipsASyncingDatapack(t *testing.T) {
 	okData(t, e, "POST", settings+"/run", nil, 200)
 	if _, _, n := h.last(); n != 1 {
 		t.Errorf("after the sync ended, %d calls, want 1", n)
+	}
+}
+
+// A turn replayed with metadata.session_date is extracted as said on that date: the call shows
+// that date, and the memory is backdated to it, as Cloud backdates memories from the same key.
+func TestMemoryExtractorSessionDate(t *testing.T) {
+	h := &fakeHarness{}
+	fakeClaude(t)
+	e := testenv.Start(t, testenv.Options{ExtractorHarness: h})
+	ctx := context.Background()
+	if r := asAdmin(t, e, "/settings/memory-extractor", map[string]any{"harness": "claude"}); r.Status != 200 {
+		t.Fatalf("set up: %+v", r)
+	}
+	h.reset()
+	conv, err := e.Service.CreateConversation(ctx, memory.CreateConversation{AgentID: "claude_code:x",
+		DatapackID: e.DatapackID, SessionID: "s", Title: "replay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Service.AddMessage(ctx, memory.AddMessage{ConversationID: conv.ID, AgentID: "claude_code:x",
+		DatapackID: e.DatapackID, Input: "I bought five tops at H&M last weekend for the trip.", Seed: "0",
+		Metadata: map[string]any{"session_date": "2023-05-20T22:00:00-07:00"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.answer = func(string) ([]memory.ExtractedFact, error) {
+		return []memory.ExtractedFact{{Text: "The user bought five tops at H&M.", Turn: 0}}, nil
+	}
+	if run := obj(okData(t, e, "POST", "/settings/memory-extractor/run", nil, 200)); num(run["memories"]) != 1 {
+		t.Fatalf("run %v", run)
+	}
+	if _, input, _ := h.last(); !strings.Contains(input, "[turn 0] (2023-05-20)") {
+		t.Errorf("the call doesn't date the turn by its session:\n%s", input)
+	}
+	found, err := e.Service.SearchMemories(ctx, memory.Search{DatapackID: e.DatapackID, Query: "H&M tops", Limit: 5})
+	if err != nil || len(found) != 1 || found[0].CreatedAt != "2023-05-21T05:00:00.000Z" {
+		t.Errorf("memory %+v, %v: want created_at at the session's instant, 2023-05-21T05:00Z", found, err)
 	}
 }

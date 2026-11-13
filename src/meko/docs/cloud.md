@@ -312,7 +312,7 @@ note `delete_datapack` adds about the default datapack, which it leaves out whil
 ## Syncing a datapack to Meko Cloud
 
 One of this Meko's datapacks can be moved to the linked Meko Cloud, one at a time and once:
-`POST /datapacks/:id/cloud-sync`, `meko cloud_sync <datapack>`, or Sync to Meko Cloud on the
+`POST /datapacks/:id/cloud-sync`, `meko cloud-sync <datapack>`, or Sync to Meko Cloud on the
 datapack's page (`internal/cloudsync`). It's all or nothing, and it's the owner's (the admin token,
 or the web UI); an agent's client token gets 403.
 
