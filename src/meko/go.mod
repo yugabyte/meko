@@ -9,6 +9,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20261006181056-94fd7ecea202
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/yuin/goldmark v1.7.13
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.61.0
 	golang.org/x/sys v0.49.0

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -58,7 +57,8 @@ func Chunks(ctx context.Context, filename string, data []byte) (chunks []string,
 	case r := <-done:
 		chunks, err = r.chunks, r.err
 	case <-ctx.Done():
-		// The parser has no way to be stopped; it finishes on its own and its result is dropped.
+		// PDF extraction and Markdown's heading finder check ctx between pages and windows; what
+		// runs meanwhile can't be stopped, and its result is dropped.
 		return nil, ctx.Err()
 	}
 	if err != nil {
@@ -94,12 +94,16 @@ func extract(ctx context.Context, filename string, data []byte) ([]string, error
 	if !utf8.Valid(data) {
 		return nil, invalid("%s isn't UTF-8 text", filepath.Base(filename))
 	}
-	text := strings.ReplaceAll(strings.TrimPrefix(string(data), bom), "\r\n", "\n")
+	// Line ends become "\n": "\r\n", and a lone "\r" (classic Mac OS) too, or the file reads as one line.
+	text := strings.ReplaceAll(strings.ReplaceAll(strings.TrimPrefix(string(data), bom), "\r\n", "\n"), "\r", "\n")
 	switch ext {
 	case ".csv":
 		return packLines(text), nil
 	case ".md":
-		title, sections := markdownSections(text)
+		title, sections, err := markdownSections(ctx, text)
+		if err != nil {
+			return nil, err
+		}
 		if title == "" {
 			title = strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
 		}
@@ -116,81 +120,6 @@ func extract(ctx context.Context, filename string, data []byte) ([]string, error
 	}
 	// Plain text, JSON and XML are chunked as they are, as Meko Cloud chunks them.
 	return splitText(text, ChunkSize, ChunkOverlap), nil
-}
-
-var (
-	atxHeading = regexp.MustCompile(`^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$`)
-	atxEmpty   = regexp.MustCompile(`^ {0,3}(#{1,6})[ \t]*$`)
-	setextRule = regexp.MustCompile(`^ {0,3}(=+|-+)[ \t]*$`)
-	fence      = regexp.MustCompile("^ {0,3}(```+|~~~+)")
-	titleLine  = regexp.MustCompile(`^title:\s*(.+?)\s*$`)
-)
-
-// markdownSections splits Markdown into sections at its headings (ATX "# x" and setext underlines),
-// outside code fences. The title is front matter's title, else "".
-func markdownSections(text string) (title string, sections []section) {
-	lines := strings.Split(text, "\n")
-	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
-		for i := 1; i < len(lines); i++ {
-			if t := strings.TrimSpace(lines[i]); t == "---" || t == "..." {
-				for _, l := range lines[1:i] {
-					if m := titleLine.FindStringSubmatch(l); m != nil {
-						title = strings.Trim(m[1], `"'`)
-					}
-				}
-				lines = lines[i+1:]
-				break
-			}
-		}
-	}
-	var h headings
-	cur := section{}
-	var body []string
-	flush := func(next []string) {
-		cur.text = strings.Join(body, "\n")
-		sections = append(sections, cur)
-		cur, body = section{path: next}, nil
-	}
-	inFence := ""
-	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-		if m := fence.FindStringSubmatch(line); m != nil {
-			switch {
-			case inFence == "":
-				inFence = m[1][:1]
-			case strings.HasPrefix(m[1], inFence):
-				inFence = ""
-			}
-			body = append(body, line)
-			continue
-		}
-		if inFence != "" {
-			body = append(body, line)
-			continue
-		}
-		if m := atxHeading.FindStringSubmatch(line); m != nil {
-			flush(h.enter(len(m[1]), strings.TrimSpace(m[2])))
-			continue
-		}
-		if atxEmpty.MatchString(line) {
-			continue
-		}
-		// A setext heading: a line of text underlined with = (level 1) or - (level 2).
-		if i+1 < len(lines) && strings.TrimSpace(line) != "" && setextRule.MatchString(lines[i+1]) &&
-			!strings.HasPrefix(strings.TrimSpace(line), "-") && !strings.HasPrefix(strings.TrimSpace(line), ">") &&
-			(len(body) == 0 || strings.TrimSpace(body[len(body)-1]) == "") {
-			level := 2
-			if strings.TrimSpace(lines[i+1])[0] == '=' {
-				level = 1
-			}
-			flush(h.enter(level, strings.TrimSpace(line)))
-			i++
-			continue
-		}
-		body = append(body, line)
-	}
-	flush(nil)
-	return title, sections
 }
 
 // cutText is text cut at limit bytes, on a rune boundary.

@@ -28,6 +28,8 @@ Where Meko follows Cloud, the behavior is stated here and the code is written fr
 | **Ingestion in Go, the document's status as the queue**: an indexer goroutine claims the oldest QUEUED file, extracts and chunks it outside any transaction, and stores its chunks unembedded, 500 per transaction; the embedder sweep that embeds conversation turns embeds them, turns first | Nothing holds the writer for long, and a large file never holds up conversation search. Chunk rowids are `AUTOINCREMENT`, as conversation chunks' are, so a vector embedded for a chunk deleted meanwhile can't land on another. |
 | **Two embedding queues in the context engine**: the sweeps' batches (`/v1/embed` with `background: true`) wait while a search's query is queued | A query waits for at most the one batch being embedded. |
 | **Chunks sized to the embedder's window**: 1000 characters overlapping by 100, Markdown and HTML cut at their headings with a `Document:` / `Section:` prefix | all-MiniLM-L6-v2 reads 256 tokens, about 1000 characters, so a longer chunk's tail wouldn't be embedded. Text before the first heading is kept. |
+| **Markdown's headings found by goldmark, parsing blocks only, a 1 MiB window at a time** | A window's blocks are trusted up to the last one a parse can start at (a heading, paragraph, list, quote or HTML block whose first line holds a `>` or list marker for each quote and list item it opens), and the next window starts there. A code or HTML block still open at a window's end (goldmark takes in a line of text added after it) carries its opening line into the next window, which is all goldmark needs to read on as that block; a list or quote that fills a window restarts at one of its items, a paragraph at a line that can only be paragraph text (`#tag` and `*draft*` can, `# x` and `- x` can't); otherwise the window doubles. Whole-file goldmark holds its syntax tree, 1.6 GB for a 50 MiB list and 6.2 GB with tables (Measured); windowed, finding headings took 112–239 MB on 50 MiB files of every shape tried, one giant code block, comment or `<pre>` and a paragraph of `#x` or `*a_` lines included, against 128–1,730 MB for a line scanner that tracks only code fences (Measured). Chosen over a hand-written line scanner with CommonMark's fence and HTML block rules (every rule ours to keep current), and over md4c through cgo (its inline pass can't be skipped and took 3.7 GB on 50 MiB of `[`; a crash in it takes the server down). The fuzz test checks windowed against whole-file parsing; on 5,514 real Markdown files the headings were the same with 8-byte to 1 MiB windows. |
+| **Where Markdown readers differ, CommonMark** | A heading right after a quote line (`> quote` then `## H`) is a heading, as CommonMark has it; Meko Cloud keeps it in the quote. Chunk ids are row ids, so a change to chunking breaks nothing, but a file indexed before it keeps its chunks until it's deleted and uploaded again: uploading the same bytes finds the document by its SHA-256 and queues it again only if it FAILED. |
 | **Hybrid search on FTS5 and `vec0`**, a cross-encoder (ms-marco-MiniLM-L-6-v2) run locally, and the best 20 candidates by reciprocal-rank fusion reranked | The cross-encoder costs about 11 ms a pair (Measured): 40 candidates would take 440 ms. Without the reranker, results come back in fused order, untrimmed and without `rerank_score`, as Cloud's do. |
 | **context_search keeps knowledge-base results within cosine distance 0.6** (`[knowledge_base] max_distance`), **and every keyword or hybrid match the reranker scored** | With MiniLM a paraphrase measured 0.37 to 0.51 from its chunk and unrelated chunks 0.87 to 0.99. The cutoff is for meaning alone: a name or an id matches on its words while its chunk's embedding sits far from a short query (a resume's name measured 0.65), so a match on the query's own words is kept, as Cloud keeps it. Only a reranked one: while the reranker is loading or down, a word match is any chunk sharing one of the query's words. |
 | **Promoted memories are chunks too**, with a new UUID, the conversation as `document_id`, and `metadata_filters` `{source: "memory", agent_id, memory_id}`; promotion copies the memory's vector | As Cloud stores them. The memory is searchable at once. |
@@ -77,9 +79,9 @@ they're queued once they arrive. `meko-cli upload` waits for a file already uplo
 
 | Type | Text | Chunks |
 |---|---|---|
-| `.txt`, `.text`, `.json`, `.xml` | UTF-8 as it is, BOM and CRs dropped | Recursive: paragraphs, lines, words, characters; 1000 / 100 |
+| `.txt`, `.text`, `.json`, `.xml` | UTF-8 as it is, BOM dropped, CRLF and lone CR line ends read as LF | Recursive: paragraphs, lines, words, characters; 1000 / 100 |
 | `.csv` | Its lines | Packed to 1000 characters, 100 overlapping; the header isn't repeated |
-| `.md` | Front matter's title, ATX and setext headings outside code fences | A section per heading, prefixed `Document: <title>` and `Section: h1 > h2` |
+| `.md` | Front matter's title (a leading `---` block only when its lines read as YAML: comments, and `key: value` lines with no space in a bare key, each followed by list items or indented lines); top-level ATX and setext headings as CommonMark reads them, found by `yuin/goldmark` parsing blocks only, a 1 MiB window at a time: none inside code, HTML blocks, quotes or list items. One exception: link definitions aren't read, so link definitions at the start of a paragraph under a setext underline are a heading or part of its text (`[a]: /url` then `---` is a heading `[a]: /url`, where CommonMark has a definition and a rule) | A section per heading, prefixed `Document: <title>` and `Section: h1 > h2` |
 | `.html`, `.htm` | `golang.org/x/net/html`, without `script`, `style`, `noscript`, `template`, `svg` or `head` (but its title); block elements become line breaks | Sections at `h1`–`h6`, as for Markdown |
 | `.pdf` | `ledongthuc/pdf`, each page's text in drawing order, a line break where the next piece is more than half the font size above or below, and spaces decided a line at a time by most of its pieces: from the gaps when most letters have widths; with none and most steps zero (a word's letters drawn at its start), at every step forward and the PDF's own spaces; with none and letters spread out (design tools often leave widths 0), from the PDF's own spaces plus any jump past three times the line's usual step (a column gap). A spread-out line with no spaces drawn gets only its column gaps, since a word break can't be told from a wide letter's step | Recursive 1000 / 100 |
 
@@ -88,7 +90,10 @@ signature, UTF-8 with no NUL bytes for the rest, and a fitting first character f
 HTML. A file's chunks hold at most 4 times its size in text (or 1 MiB, for a small file whose
 section prefixes outweigh its text), and a title or heading in a prefix is cut to 200 characters,
 so a hostile file (a PDF that expands, Markdown with a huge heading over many tiny sections) can't
-fill the indexer's memory or the database. A parser that panics fails the file.
+fill the indexer's memory or the database. A parser that panics fails the file. Markdown's heading
+finder turns a line's quote and list markers past the 32nd into text before parsing (goldmark's time
+grows with the square of a line's nesting: 512 KiB of `>` took a minute, and 50 MiB takes 0.4 s with
+the cap), and stops between windows once the file's deadline has passed.
 
 ## Search
 
@@ -158,7 +163,10 @@ In `make test` on Linux and macOS:
 
 - **knowledge**: each type's extraction (PDFs made in the test), chunk sizes and overlap, section
   prefixes, the type check's refusals, the text cap, a canceled extraction, the files folder
-  (modes, the size limit, the sweep).
+  (modes, the size limit, the sweep). Markdown's headings on CommonMark's fence, HTML block and
+  setext cases with 1 MiB and 8-byte windows, front matter, lone CRs, the nesting cap, hostile
+  shapes' time staying linear (512 KiB against 64 KiB), and a fuzz test of windowed against
+  whole-file parsing whose seeds run here (`make fuzz` fuzzes for 5 minutes).
 - **store**: dedupe, claim order, requeueing, chunks findable only once embedded, completion with
   the last vector, cascades, the promotion copy, the migration's chunks for earlier promotions,
   stats, the activity feed, dropping common terms.
