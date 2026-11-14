@@ -6,11 +6,11 @@ import {
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { openGhDialog } from '../ghdialog';
-import { GH_NEEDED } from '../../shared/types';
+import { AGENTK_TOUR, GH_NEEDED } from '../../shared/types';
 import { appUrl } from '../base';
 import { useMedia, useTouch } from '../hooks/useMedia';
 import { useInstall } from '../installapp';
-import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, linkEntries, workLinkEntries, type LabelPart } from '../palette';
+import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, linkEntries, tourEntries, workLinkEntries, type LabelPart } from '../palette';
 import { workLinkKey } from '../../shared/worklinks';
 import { navigate } from '../router';
 import { actionsOn, sessionActions, type SessionActionId } from '../sessionactions';
@@ -58,6 +58,7 @@ export function CommandPalette({
   onClose,
   onNewProject,
   onStartTour,
+  onRestartTour,
   onNewSession,
   onMoveSession,
   onOpenPr,
@@ -83,8 +84,10 @@ export function CommandPalette({
   currentSession: Session | null;
   onClose: () => void;
   onNewProject: () => void;
-  /** Starts the Kode tour (or goes to its project when it's open). */
+  /** Starts the Kode tour, while none is open. */
   onStartTour: () => void;
+  /** Asks, then starts the open Kode tour over. */
+  onRestartTour: () => void;
   onNewSession: (projectId: string) => void;
   /** Opens the Move to another stage dialog for the session on screen. */
   onMoveSession: () => void;
@@ -499,7 +502,14 @@ export function CommandPalette({
       }
     }
     out.push({ id: 'new-project', label: ['Open project'], hint: 'Action', keywords: 'open new create project repo add', run: onNewProject });
-    out.push({ id: 'start-tour', label: ['Start the Kode tour'], hint: 'Action', keywords: 'tour workshop demo guide tutorial learn agentk meko', run: onStartTour });
+    const tourProject = projects.find((p) => p.workshop === AGENTK_TOUR)?.id ?? null;
+    for (const { kind, ...t } of tourEntries(tourProject)) {
+      const go = () => {
+        if (tourProject) navigate({ view: 'project', projectId: tourProject, sessionId: null });
+      };
+      const run = kind === 'start' ? onStartTour : kind === 'over' ? onRestartTour : go;
+      out.push({ ...t, run });
+    }
     out.push({ id: 'work-queue', label: ['Work queue'], hint: 'View', keywords: 'work queue items todo tasks priorities list', run: () => navigate({ view: 'queue' }) });
     out.push({ id: 'work-add', label: ['Add a work item'], hint: 'Action', keywords: 'work queue item add new todo task', run: onAddWorkItem });
     out.push({
@@ -511,7 +521,7 @@ export function CommandPalette({
     // Still offered after the banner's Not now, while the browser can install it.
     if (canInstall) out.push({ id: 'install', label: ['Install Kode as an app'], hint: 'Action', keywords: 'install app window dock home screen pwa', run: () => void install() });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onStartTour, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, mekoConfigured, onError]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onStartTour, onRestartTour, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, mekoConfigured, onError]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];

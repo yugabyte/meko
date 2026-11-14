@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AskAgentkAction, JoinByLinkResult, LinkPlan, ProjectWithSessions, SessionMatch, WorkItem, WorkLinkMatch } from '../../src/shared/types.js';
-import { askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, labelText, linkEntries, workLinkEntries, type LabelPart } from '../../src/web/palette.js';
+import { askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, labelText, linkEntries, tourEntries, workLinkEntries, type LabelPart } from '../../src/web/palette.js';
 
 const item = (id: string, label: LabelPart[], keywords = '') => ({ id, label, keywords });
 const items = [
@@ -26,6 +26,25 @@ describe('command palette labels', () => {
     expect(ids('AGENT-K-LOCAL home')).toEqual(['home']);
     expect(ids('fix-login')).toEqual(['s1']);
     expect(ids('nothing like this')).toEqual([]);
+  });
+});
+
+describe('the Kode tour', () => {
+  const found = (tour: string | null, q: string) => filterItems(tourEntries(tour), q).map((t) => t.kind);
+
+  it('offers Start the Kode tour while none is open, found however it is asked for', () => {
+    expect(tourEntries(null).map((t) => labelText(t.label))).toEqual(['Start the Kode tour']);
+    for (const q of ['tour', 'start the tour again', 'restart tour', 'begin the tour']) expect(found(null, q)).toEqual(['start']);
+  });
+
+  it('offers Go to and Start over while one is open, with taking it again finding only Start over', () => {
+    expect(tourEntries('p1').map((t) => [t.kind, labelText(t.label)])).toEqual([
+      ['go', 'Go to the Kode tour'],
+      ['over', 'Start the Kode tour over'],
+    ]);
+    expect(found('p1', 'tour')).toEqual(['go', 'over']);
+    for (const q of ['start the tour again', 'restart tour', 'tour over', 'reset the tour', 'start the tour']) expect(found('p1', q)).toEqual(['over']);
+    expect(found('p1', 'go to tour')).toEqual(['go']);
   });
 });
 

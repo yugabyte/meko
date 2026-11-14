@@ -470,9 +470,10 @@ export class ProjectService {
     tx(this.db, () => ids.forEach((pid, i) => run(this.db, 'UPDATE projects SET position = ? WHERE id = ?', i, pid)));
   }
 
-  async delete(id: string): Promise<void> {
+  /** Closes the project; the worktrees its sessions kept for their uncommitted changes. */
+  async delete(id: string): Promise<string[]> {
     this.row(id);
-    await this.core.sessions.teardownProject(id);
+    const kept = await this.core.sessions.teardownProject(id);
     const now = Date.now();
     tx(this.db, () => {
       run(this.db, 'UPDATE projects SET deleted_at = ? WHERE id = ?', now, id);
@@ -480,6 +481,7 @@ export class ProjectService {
     });
     this.core.log.info(`project closed: ${id}`);
     this.core.changed();
+    return kept;
   }
 
   attachDatapack(id: string, req: AttachDatapackRequest): Project {

@@ -175,6 +175,7 @@ export const api = {
 
   workshops: () => get<Workshop[]>('/api/workshops'),
   startWorkshop: (id: string) => post<WorkshopStart>(`/api/workshops/${enc(id)}/start`, {}),
+  startOverWorkshop: (id: string) => post<WorkshopStart>(`/api/workshops/${enc(id)}/start-over`, {}),
   tourAct: (id: string, req: TourActRequest) => post<TourActResult>(`/api/workshops/${enc(id)}/act`, req),
   openProject: (b: CreateProjectRequest) => post<OpenedProject>('/api/projects', b),
   updateProject: (id: string, b: UpdateProjectRequest) => request<Project>('PATCH', `/api/projects/${enc(id)}`, b),

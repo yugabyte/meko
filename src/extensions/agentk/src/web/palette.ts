@@ -21,6 +21,25 @@ export function filterItems<T extends { label: LabelPart[]; keywords: string }>(
   });
 }
 
+/** What a tour item does: start the tour, go to the open one, or start it over (after asking). */
+export type TourEntryKind = 'start' | 'go' | 'over';
+
+/** The words every tour item is found by, beside its label's. */
+const TOUR_WORDS = 'tour workshop demo guide tutorial learn agentk meko';
+
+/**
+ * The Kode tour's palette items: Start the Kode tour while none is open; with one open, Go to it and
+ * Start it over. Their keywords take the ways people ask to take it again ("start the tour again",
+ * "restart tour"), since the filter wants every word typed.
+ */
+export function tourEntries(tourProjectId: string | null): { id: string; kind: TourEntryKind; label: LabelPart[]; hint: string; keywords: string }[] {
+  if (!tourProjectId) return [{ id: 'start-tour', kind: 'start', label: ['Start the Kode tour'], hint: 'Action', keywords: `${TOUR_WORDS} again restart over begin new` }];
+  return [
+    { id: 'go-tour', kind: 'go', label: ['Go to the Kode tour'], hint: 'View', keywords: `${TOUR_WORDS} open back` },
+    { id: 'restart-tour', kind: 'over', label: ['Start the Kode tour over'], hint: 'Action', keywords: `${TOUR_WORDS} again restart reset begin new fresh` },
+  ];
+}
+
 /**
  * What a pasted link's palette item does: go to a session, start one (an issue's at `start`) in
  * `projectId` (left out: in the project the plan opens), or nothing (it says why).
