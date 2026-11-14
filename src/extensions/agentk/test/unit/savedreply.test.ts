@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -21,8 +21,9 @@ describe("Claude Code's saved replies", () => {
   it("reads a reply only from the session's own tool-results folder", () => {
     const { dir, main, own } = setup();
     expect(readSavedReplySync(notice(own), main)).toBe('{"result":"{}"}');
-    // A notice ending its sentence with a period names the file without it.
-    expect(savedReplyFile(`${notice(own).split('\n')[0]}.`, main)).toBe(own);
+    // A notice ending its sentence with a period names the file without it. The file comes back by its
+    // real path (macOS's temp folder, /var/folders, is a link into /private/var).
+    expect(savedReplyFile(`${notice(own).split('\n')[0]}.`, main)).toBe(realpathSync(own));
     // Another session's folder, a file beside the transcript, one that doesn't exist, or other text: none.
     const theirs = join(dir, 'other', 'tool-results', 'x.txt');
     writeFileSync(theirs, 'theirs');
