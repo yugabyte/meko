@@ -835,6 +835,18 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX cli_reviews_project ON cli_reviews(project_id, created_at);
   `,
+  // 54: the tokens Meko says a search saved (its context_search reply's token_savings.tokens_saved;
+  // mekousage.ts tokensSavedOf), for Claude's calls and Kode's search at start: 0 when the reply
+  // says it sent nothing, NULL when it gave no figure (another tool, an error, a reply that couldn't
+  // be read). Calls and searches from before this keep NULL: transcripts aren't read again, and kv
+  // meko-saved-since (ms) is when Kode started keeping the figure, so only a later NULL counts as a
+  // reply that gave none (MekoSaved.unreported).
+  `
+  ALTER TABLE meko_calls ADD COLUMN tokens_saved INTEGER;
+  ALTER TABLE meko_preloads ADD COLUMN tokens_saved INTEGER;
+  INSERT INTO kv(key, value) VALUES ('meko-saved-since', CAST(CAST(unixepoch('subsec') * 1000 AS INTEGER) AS TEXT))
+    ON CONFLICT(key) DO NOTHING;
+  `,
 ];
 
 export function openDb(path: string): Db {

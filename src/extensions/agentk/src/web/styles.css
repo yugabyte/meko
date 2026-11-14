@@ -5007,7 +5007,7 @@ div[id^='dak-mermaid-'] .label {
 .usage-num.muted {
   color: var(--muted);
 }
-/* Est. saved in the Usage page's table by project: green for a saving. */
+/* Tokens saved (Meko's figure) in the Usage page's table by project: green for a saving. */
 .usage-table td.saved {
   color: var(--ok);
 }

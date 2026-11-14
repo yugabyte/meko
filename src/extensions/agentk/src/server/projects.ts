@@ -628,17 +628,19 @@ export class ProjectService {
   /**
    * Searches each of the project's datapacks (the project home's search, and the search at session
    * start). A datapack whose search fails is logged and skipped; `failed` says how many did. Nothing
-   * is searched with no datapacks or Meko off.
+   * is searched with no datapacks or Meko off. `tokensSaved`: the sum of what Meko says each search
+   * saved, null when no reply gave a figure.
    */
-  async searchDatapacks(id: string, query: string, timeoutMs?: number): Promise<{ results: SearchResult[]; searched: number; failed: number; error: unknown }> {
+  async searchDatapacks(id: string, query: string, timeoutMs?: number): Promise<{ results: SearchResult[]; tokensSaved: number | null; searched: number; failed: number; error: unknown }> {
     const datapacks = this.core.mekoStatus.configured ? projectDatapacks(this.db, id) : [];
-    if (!datapacks.length) return { results: [], searched: 0, failed: 0, error: null };
+    if (!datapacks.length) return { results: [], tokensSaved: null, searched: 0, failed: 0, error: null };
     const conv = await this.ensureConversation(id, timeoutMs);
     const settled = await Promise.allSettled(datapacks.map((d) => this.core.meko.search(query, d, AGENTK_AGENT_ID, conv, timeoutMs)));
-    const out = { results: [] as SearchResult[], searched: datapacks.length, failed: 0, error: null as unknown };
+    const out = { results: [] as SearchResult[], tokensSaved: null as number | null, searched: datapacks.length, failed: 0, error: null as unknown };
     settled.forEach((s, i) => {
       if (s.status === 'fulfilled') {
-        out.results.push(...s.value);
+        out.results.push(...s.value.results);
+        if (s.value.tokensSaved !== null) out.tokensSaved = (out.tokensSaved ?? 0) + s.value.tokensSaved;
         return;
       }
       this.core.log.warn(`search in ${datapacks[i].name} failed`, errMsg(s.reason));

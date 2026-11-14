@@ -5,7 +5,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { harnessOf, type HarnessId } from '../shared/harnesses.js';
-import type { MekoDatapack, SearchResult } from '../shared/types.js';
+import type { MekoDatapack, MekoSearch, SearchResult } from '../shared/types.js';
+import { tokensSavedOf } from './mekousage.js';
 
 export interface MekoCreds {
   url: string;
@@ -352,7 +353,7 @@ export class MekoClient {
 
   async search(
     query: string, datapack: { id: string; name: string }, agentId: string, conversationId: string, timeoutMs = 30000,
-  ): Promise<SearchResult[]> {
+  ): Promise<MekoSearch> {
     const r = (await this.call('context_search', {
       query,
       conversation_id: conversationId,
@@ -374,7 +375,7 @@ export class MekoClient {
     push('knowledge_base', results.knowledge_base);
     const conv = results.conversation as Json | undefined;
     push('conversation', Array.isArray(conv) ? conv : conv?.hits);
-    return out;
+    return { results: out, tokensSaved: tokensSavedOf(r) };
   }
 
   async addMemory(text: string, datapackId: string, agentId: string, conversationId: string, metadata?: Json): Promise<void> {

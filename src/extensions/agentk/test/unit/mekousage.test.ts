@@ -107,10 +107,70 @@ describe('Meko calls in transcripts', () => {
     expect(classifyResult(kind, text, isError)).toMatchObject(want);
   });
 
+  const savings = (tokenSavings: unknown) => wrapped({ results: { knowledge_base: [], memory: [{ memory: 'a' }], conversation: null }, token_savings: tokenSavings });
+  it.each<[string, string, boolean, number | null]>([
+    ["a context_search reply's figure", savings({ total_tokens: 14000, memory: { tokens_sent: 200, tokens_saved: 13800 }, tokens_saved: 13800 }), false, 13800],
+    // Meko leaves tokens_saved out when the search sent nothing.
+    ['a reply whose search sent nothing', buckets([]), false, 0],
+    ['a fractional or negative figure', savings({ tokens_saved: -3.6 }), false, 0],
+    ['a reply with no token_savings (memory_search)', found, false, null],
+    ['a token_savings that is not an object', savings('lots'), false, null],
+    ['a failed call', "Error calling tool 'context_search': boom", true, null],
+    ['an error field', wrapped({ error: 'quota', token_savings: { tokens_saved: 5 } }), false, null],
+    ['a too-large notice', notice, false, null],
+    ['plain text', 'The deploy runs on Fridays.', false, null],
+  ])("reads what Meko says the search saved from %s", (_what, text, isError, want) => {
+    expect(classifyResult('lookup', text, isError).tokensSaved).toBe(want);
+  });
+
+  it("never asks for the saved reply when Meko's reply reached Claude", () => {
+    const pending = new Map([['t1', { kind: 'lookup' as const, tool: 'context_search' }]]);
+    expect(parseMekoResults(result('t1', savings({ tokens_saved: 7 })), pending, () => { throw new Error('not asked'); })[0].tokensSaved).toBe(7);
+  });
+
+  it("keeps what Meko says each search saved, reading a too-large reply from the session's own tool-results folder", () => {
+    const { dir, db } = setup();
+    const main = join(dir, 'c.jsonl');
+    mkdirSync(join(dir, 'c', 'tool-results'), { recursive: true });
+    const own = join(dir, 'c', 'tool-results', 'mcp-meko-context_search-1.txt');
+    writeFileSync(own, savings({ tokens_saved: 12000 }));
+    const big = (file: string) => `Error: result (90,000 characters) exceeds maximum allowed tokens. Output has been saved to ${file}\nFormat: JSON`;
+    writeFileSync(main,
+      call('m1', [['a', 'mcp__meko__context_search'], ['b', 'mcp__meko__context_search'], ['d', 'mcp__meko__memory_search']]) +
+      result('a', savings({ tokens_saved: 9800 })) + result('b', big(own)) + result('d', found) + reply('m2'));
+    ingestSessionUsage(db, 's1', main);
+    expect(all(db, 'SELECT tool_use_id, outcome, tokens_saved FROM meko_calls ORDER BY tool_use_id')).toEqual([
+      { tool_use_id: 'a', outcome: 'found', tokens_saved: 9800 },
+      { tool_use_id: 'b', outcome: 'found', tokens_saved: 12000 },
+      { tool_use_id: 'd', outcome: 'found', tokens_saved: null },
+    ]);
+  });
+
+  it("sums Meko's figure over found searches and seeds, counting replies that gave none only since Kode kept it", () => {
+    const { dir, db } = setup();
+    const main = join(dir, 'c.jsonl');
+    writeFileSync(main,
+      call('m1', [['a', 'mcp__meko__context_search'], ['b', 'mcp__meko__context_search'], ['c', 'mcp__meko__context_search'], ['d', 'mcp__meko__memory_search']]) +
+      result('a', savings({ tokens_saved: 9800 })) + result('b', buckets([])) + result('c', notice) + result('d', found) + reply('m2'));
+    ingestSessionUsage(db, 's1', main);
+    recordPreload(db, 's1', { outcome: 'found', results: 2, chars: 4000, ms: 900, tokensSaved: 8000 });
+    const m = projectUsage(db, 'p').meko;
+    // b found nothing, so it doesn't count; c's reply was too large to read; d (memory_search) never has a figure.
+    expect(m.mekoSaved).toEqual({ tokens: 17800, searches: 1, seeds: 1, unreported: 1 });
+    expect(projectUsage(db, 'p').bySession[0].meko).toMatchObject({ lookups: 4, found: 3, mekoSaved: m.mekoSaved });
+    expect(usageOverview(db).byProject[0].meko.mekoSaved).toEqual(m.mekoSaved);
+    // Calls from before Kode kept the figure aren't counted as replies that gave none.
+    run(db, `UPDATE kv SET value = ? WHERE key = 'meko-saved-since'`, String(Date.now() + 60_000));
+    expect(projectUsage(db, 'p').meko.mekoSaved).toEqual({ tokens: 17800, searches: 1, seeds: 1, unreported: 0 });
+    // A search at start that passed nothing counts nothing.
+    run(db, `UPDATE meko_preloads SET outcome = 'late'`);
+    expect(projectUsage(db, 'p').meko.mekoSaved).toMatchObject({ tokens: 9800, seeds: 0 });
+  });
+
   it('reads results only for calls waiting for one, as text or text blocks', () => {
     const pending = new Map([['t1', { kind: 'lookup' as const, tool: 'memory_search' }]]);
     expect(parseMekoResults(result('t1', [{ type: 'text', text: found }]), pending)).toEqual([
-      { toolUseId: 't1', outcome: 'found', results: 1, resultChars: found.length },
+      { toolUseId: 't1', outcome: 'found', results: 1, resultChars: found.length, tokensSaved: null },
     ]);
     expect(parseMekoResults(result('t9', found), pending)).toEqual([]);
     expect(parseMekoResults(result('t1', found), new Map())).toEqual([]);
@@ -224,7 +284,7 @@ describe('what Meko saved', () => {
     const pu = projectUsage(db, 'p');
     expect(pu.meko).toMatchObject({ calls: 4, lookups: 3, found: 2, empty: 1, errors: 1, saves: 1 });
     expect(pu.meko.savings).toEqual({ searches: 1, seeds: 0, tokens: expected.tokens, usd: expected.usd, unpricedSearches: 0, unpricedSeeds: 0 });
-    expect(pu.bySession[0].meko).toEqual({ lookups: 3, found: 2, saves: 1 });
+    expect(pu.bySession[0].meko).toMatchObject({ lookups: 3, found: 2, saves: 1 });
     expect(pu.cost.usd).toBeGreaterThan(0);
     expect(pu.cost.unpricedMessages).toBe(0);
 
@@ -258,7 +318,7 @@ describe('what Meko saved', () => {
              VALUES ('s1', 'kiro:c:t1', NULL, 'auto', 20, 0, 0, 0, 0, 0.5)`);
     recordMekoCalls(db, 's1', null,
       [mekoCallOf({ toolUseId: 't1', tool: 'memory_search', at: 10, input: { query: 'q' }, model: null, contextTokens: null })],
-      [{ toolUseId: 't1', outcome: 'found', results: 1, resultChars: 400 }]);
+      [{ toolUseId: 't1', outcome: 'found', results: 1, resultChars: 400, tokensSaved: null }]);
     const m = projectUsage(db, 'p').meko;
     expect(m).toMatchObject({ lookups: 1, found: 1 });
     expect(m.savings).toEqual({ searches: 0, seeds: 0, tokens: 0, usd: 0, unpricedSearches: 0, unpricedSeeds: 0 });
@@ -280,6 +340,7 @@ describe('what Meko saved', () => {
     const { db } = setup();
     expect(projectUsage(db, 'p').meko).toEqual({
       calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, sentTokens: 0, savings: { searches: 0, seeds: 0, tokens: 0, usd: 0, unpricedSearches: 0, unpricedSeeds: 0 },
+      mekoSaved: { tokens: 0, searches: 0, seeds: 0, unreported: 0 },
     });
   });
 

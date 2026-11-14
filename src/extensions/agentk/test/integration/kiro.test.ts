@@ -244,7 +244,7 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
       { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'error', results: null, model: null },
     ]);
     const usage = (await env.core.projects.home(p.id)).usage;
-    expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 3, found: 1, saves: 0 });
+    expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 3, found: 1, saves: 0, mekoSaved: { tokens: 0, searches: 0, seeds: 0, unreported: 0 } });
     expect(usage.meko).toMatchObject({ lookups: 3, found: 1, empty: 1 });
 
     // A call that ends at once, in a turn that goes on: the hold keeps its m, then lets it go.

@@ -130,7 +130,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running K
       { tool_use_id: expect.stringMatching(/^opencode:call_x\d+:meko_memory_search#2$/), tool: 'memory_search', outcome: 'empty', results: 0, model: null },
     ]);
     const usage = (await env.core.projects.home(p.id)).usage;
-    expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 3, found: 2, saves: 0 });
+    expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 3, found: 2, saves: 0, mekoSaved: { tokens: 0, searches: 0, seeds: 0, unreported: 0 } });
   });
 
   it('keeps what a turn left running in the background, and drops each as it ends between turns', async () => {

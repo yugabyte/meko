@@ -4,7 +4,7 @@ import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type 
 import { mekoDatapackPath } from '../shared/mekourls';
 import { YOU_CANCELLED, countsText, isStrategySetting, resolveReview, reviewHolds, reviewRunning, reviewSettled, reviewWaitsOnYou, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides, type ReviewSettings } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
-import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
+import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoSaved, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while Kode saves what it learned to
@@ -537,6 +537,29 @@ export function firstTurnText(t: MekoFirstTurn): { split: string | null; title: 
       `About ${f(t.seedTokens + t.searchedTokens)} tokens from Meko in the first turns of ${sessions(t.sessions)} (characters ÷ 4): ` +
       `${seed} and ${f(t.searchedTokens)} from Claude's own Meko searches before its first turn ended. ` +
       'Only sessions in projects with datapacks count.',
+  };
+}
+
+/**
+ * Meko's figure of the tokens its searches saved, in words: the number for a tile or a cell (a dash
+ * when no reply gave one), the same as a phrase for a session's tooltip (null then), and a tooltip
+ * that says whose figure it is, what counted, and how many replies gave none.
+ */
+export function mekoSavedText(m: MekoSaved): { num: string; phrase: string | null; title: string } {
+  const f = (n: number) => n.toLocaleString();
+  const n = (k: number, one: string, many: string) => `${f(k)} ${k === 1 ? one : many}`;
+  const from = [m.searches > 0 && n(m.searches, 'search', 'searches'), m.seeds > 0 && n(m.seeds, 'search at session start', 'searches at session start')]
+    .filter(Boolean).join(' and ');
+  const unreported = m.unreported > 0
+    ? ` ${n(m.unreported, "search's reply", "searches' replies")} didn't say (too large to read, or an older Meko).` : '';
+  if (m.searches + m.seeds === 0) {
+    return { num: '—', phrase: null, title: `No Meko search that found something has said what it saved yet.${unreported}` };
+  }
+  return {
+    num: `≈ ${formatTokens(m.tokens)}`,
+    phrase: `≈ ${formatTokens(m.tokens)} tokens saved`,
+    title: `${f(m.tokens)} tokens saved, as Meko figures it for ${from}: what sending the datapack's whole knowledge base ` +
+      `would have cost, less what each search sent.${unreported}`,
   };
 }
 

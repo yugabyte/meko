@@ -359,10 +359,13 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     const p = await newProject();
     env.meko.search = async (...args: unknown[]) => {
       env.meko.calls.push({ name: 'search', args });
-      return [
-        { id: 'm1', source: 'memory', text: 'The thing lives in src/thing.ts; it breaks when the cache is cold.', score: 0.8, datapackName: 'agent-k-local/test/demo' },
-        { id: 'm2', source: 'memory', text: 'Unrelated note.', score: 0.3, datapackName: 'agent-k-local/test/demo' },
-      ];
+      return {
+        results: [
+          { id: 'm1', source: 'memory' as const, text: 'The thing lives in src/thing.ts; it breaks when the cache is cold.', score: 0.8, datapackName: 'agent-k-local/test/demo' },
+          { id: 'm2', source: 'memory' as const, text: 'Unrelated note.', score: 0.3, datapackName: 'agent-k-local/test/demo' },
+        ],
+        tokensSaved: 9600,
+      };
     };
     const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'Fix the thing when the cache is cold', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
@@ -375,7 +378,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(ctx.additionalContext).toContain('## What Meko already knows about this task');
     expect(ctx.additionalContext).toContain('src/thing.ts');
     expect(ctx.additionalContext).not.toContain('Unrelated note.');
-    expect(get(env.core.db, 'SELECT outcome, results FROM meko_preloads WHERE session_id = ?', s.id)).toEqual({ outcome: 'found', results: 1 });
+    expect(get(env.core.db, 'SELECT outcome, results, tokens_saved FROM meko_preloads WHERE session_id = ?', s.id)).toEqual({ outcome: 'found', results: 1, tokens_saved: 9600 });
     // The first turn is over, and something from Meko was in it.
     const home = await waitFor(() => env.core.projects.home(p.id), (h) => h.usage.mekoFirstTurn.sessions === 1, 10000, 'the first turn');
     const { chars } = get<{ chars: number }>(env.core.db, 'SELECT chars FROM meko_preloads WHERE session_id = ?', s.id)!;
@@ -410,13 +413,20 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
       const dp = args[1] as { id: string; name: string };
       env.meko.calls.push({ name: 'search', args });
       if (down.has(dp.id)) throw new Error(`${dp.name} is down`);
-      return [{ id: 'm1', source: 'memory', text: 'A gotcha about the cold cache in src/thing.ts.', score: 0.8, datapackName: dp.name }];
+      return { results: [{ id: 'm1', source: 'memory' as const, text: 'A gotcha about the cold cache in src/thing.ts.', score: 0.8, datapackName: dp.name }], tokensSaved: 9000 };
     };
     const s = await env.core.sessions.create(p.id, { name: 'One down', prompt: 'the cold cache', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     expect(env.meko.calls.filter((c) => c.name === 'search').map((c) => (c.args[1] as { id: string }).id).sort())
       .toEqual(['dp-agent-k-local-test-demo', 'dp-kb']);
-    expect(get(env.core.db, 'SELECT outcome FROM meko_preloads WHERE session_id = ?', s.id)).toEqual({ outcome: 'found' });
+    // What Meko says the search saved counts only the datapacks that answered.
+    expect(get(env.core.db, 'SELECT outcome, tokens_saved FROM meko_preloads WHERE session_id = ?', s.id)).toEqual({ outcome: 'found', tokens_saved: 9000 });
+
+    // With both answering, it's the sum.
+    down = new Set();
+    const both = await env.core.sessions.create(p.id, { name: 'Both up', prompt: 'the cold cache', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(both.id).status, (st) => st === 'idle', 10000, 'first turn');
+    expect(get(env.core.db, 'SELECT outcome, tokens_saved FROM meko_preloads WHERE session_id = ?', both.id)).toEqual({ outcome: 'found', tokens_saved: 18000 });
 
     down = new Set(['dp-kb', 'dp-agent-k-local-test-demo']);
     const u = await env.core.sessions.create(p.id, { name: 'All down', prompt: 'the cold cache', kind: 'quick' });
@@ -467,7 +477,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     // Context 5,103 tokens, a 20-token result, one later response: 2 × 5,103 + 480 + (6,000 − 20) × 2.
     expect(home.usage.meko.savings).toEqual({ searches: 1, seeds: 0, tokens: 22_646, usd: null, unpricedSearches: 1, unpricedSeeds: 0 });
     expect(home.usage.cost).toEqual({ usd: 0, unpricedMessages: 2 });
-    expect(home.usage.bySession[0].meko).toEqual({ lookups: 1, found: 1, saves: 0 });
+    expect(home.usage.bySession[0].meko).toEqual({ lookups: 1, found: 1, saves: 0, mekoSaved: { tokens: 0, searches: 0, seeds: 0, unreported: 0 } });
     const overview = usageOverview(env.core.db);
     expect(overview.meko.found).toBe(1);
     expect(overview.byProject[0].meko).toMatchObject({ lookups: 1, found: 1, savings: { searches: 1, tokens: 22_646, usd: null } });

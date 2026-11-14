@@ -1,5 +1,5 @@
 import { costOf, priceFor } from '../shared/pricing.js';
-import { type CallHomeAgentkMeko, type CallHomeLearn, type CallHomeMekoTool, type CallHomeTokens, type MekoFirstTurn, type MekoLearning, type MekoUsage, type SessionUsage } from '../shared/types.js';
+import { type CallHomeAgentkMeko, type CallHomeLearn, type CallHomeMekoTool, type CallHomeTokens, type MekoFirstTurn, type MekoLearning, type MekoSaved, type MekoUsage, type SessionUsage } from '../shared/types.js';
 import { all, get, type Db } from './db.js';
 import { CARRY_TURNS, SEARCH_TOOL_NAMES, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
 
@@ -75,6 +75,11 @@ export interface MekoResult {
   /** Items a lookup returned, when the result could be read. */
   results: number | null;
   resultChars: number;
+  /**
+   * The tokens Meko says the search saved (`tokensSavedOf`): 0 when its reply says it sent nothing,
+   * null when the reply gave no figure.
+   */
+  tokensSaved: number | null;
 }
 
 /** A call still waiting for its result. */
@@ -131,13 +136,25 @@ export function mekoCallOf(c: { toolUseId: string; tool: string; at: number; inp
  * A call's result from its reply's text: found, empty or failed. A null text is a reply too long to
  * keep, which counts as found, as one too large for Claude does.
  */
-export function mekoResultOf(toolUseId: string, call: PendingCall, text: string | null, isError: boolean): MekoResult {
-  if (text === null && !isError) return { toolUseId, outcome: call.kind === 'lookup' ? 'found' : 'ok', results: null, resultChars: 0 };
-  return { toolUseId, ...classifyResult(call.kind, text ?? '', isError) };
+export function mekoResultOf(toolUseId: string, call: PendingCall, text: string | null, isError: boolean, saved?: SavedReply): MekoResult {
+  if (text === null && !isError) return { toolUseId, outcome: call.kind === 'lookup' ? 'found' : 'ok', results: null, resultChars: 0, tokensSaved: null };
+  const r: MekoResult = { toolUseId, ...classifyResult(call.kind, text ?? '', isError) };
+  // Only Claude Code's notice reached the transcript: Meko's figure is in the reply it saved.
+  if (saved && r.tokensSaved === null && !isError && text !== null && TOO_LARGE.test(text)) {
+    const full = saved(text);
+    if (full !== null) r.tokensSaved = tokensSavedOf(unwrap(full));
+  }
+  return r;
 }
 
-/** Results, in one transcript line, of the calls still waiting for one (`pending`, by tool_use_id). */
-export function parseMekoResults(line: string, pending: ReadonlyMap<string, PendingCall>): MekoResult[] {
+/** The whole reply Claude Code saved to a file for its too-large notice, or null when it can't be read. */
+export type SavedReply = (notice: string) => string | null;
+
+/**
+ * Results, in one transcript line, of the calls still waiting for one (`pending`, by tool_use_id).
+ * `saved` reads the reply behind a too-large notice, for Meko's figure only.
+ */
+export function parseMekoResults(line: string, pending: ReadonlyMap<string, PendingCall>, saved?: SavedReply): MekoResult[] {
   if (pending.size === 0 || !line.includes('"tool_result"')) return [];
   let mentioned = false;
   for (const id of pending.keys()) {
@@ -159,7 +176,7 @@ export function parseMekoResults(line: string, pending: ReadonlyMap<string, Pend
     if (b?.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue;
     const call = pending.get(b.tool_use_id);
     if (!call) continue;
-    out.push(mekoResultOf(b.tool_use_id, call, resultText(b.content), b.is_error === true));
+    out.push(mekoResultOf(b.tool_use_id, call, resultText(b.content), b.is_error === true, saved));
   }
   return out;
 }
@@ -184,18 +201,32 @@ const NOTHING = /^(?:no|nothing|0)\b|\bnot found\b|\bno (?:results|memories|matc
  * Found, empty or failed, from a result's text. Meko wraps its JSON in `{"result": "<json>"}`. A
  * result too large for Claude counts as found: only Claude Code's notice reached it (TOO_LARGE).
  */
-export function classifyResult(kind: MekoKind, text: string, isError: boolean): Pick<MekoResult, 'outcome' | 'results' | 'resultChars'> {
+export function classifyResult(kind: MekoKind, text: string, isError: boolean): Pick<MekoResult, 'outcome' | 'results' | 'resultChars' | 'tokensSaved'> {
   const chars = text.length;
-  if (isError) return { outcome: 'error', results: null, resultChars: chars };
+  const none = { results: null, resultChars: chars, tokensSaved: null };
+  if (isError) return { outcome: 'error', ...none };
   const big = TOO_LARGE.exec(text);
-  if (big) return { outcome: kind === 'lookup' ? 'found' : 'ok', results: null, resultChars: chars };
-  if (BACKGROUND.test(text)) return { outcome: kind === 'lookup' ? 'empty' : 'ok', results: null, resultChars: chars };
-  if (/^Error( calling tool|:)/.test(text)) return { outcome: 'error', results: null, resultChars: chars };
+  if (big) return { outcome: kind === 'lookup' ? 'found' : 'ok', ...none };
+  if (BACKGROUND.test(text)) return { outcome: kind === 'lookup' ? 'empty' : 'ok', ...none };
+  if (/^Error( calling tool|:)/.test(text)) return { outcome: 'error', ...none };
   const v = unwrap(text);
-  if (v && typeof v === 'object' && !Array.isArray(v) && hasError((v as Json).error)) return { outcome: 'error', results: null, resultChars: chars };
-  if (kind !== 'lookup') return { outcome: 'ok', results: null, resultChars: chars };
+  if (v && typeof v === 'object' && !Array.isArray(v) && hasError((v as Json).error)) return { outcome: 'error', ...none };
+  if (kind !== 'lookup') return { outcome: 'ok', ...none };
   const n = countItems(v);
-  return { outcome: n > 0 ? 'found' : 'empty', results: n, resultChars: chars };
+  return { outcome: n > 0 ? 'found' : 'empty', results: n, resultChars: chars, tokensSaved: tokensSavedOf(v) };
+}
+
+/**
+ * The tokens Meko says a search saved, from its reply's `token_savings` (context_search's): its
+ * `tokens_saved`, or 0 when it's left out, which Meko does for a search that sent nothing. Null for a
+ * reply with no `token_savings` (the other searches, plain text).
+ */
+export function tokensSavedOf(reply: unknown): number | null {
+  if (!reply || typeof reply !== 'object' || Array.isArray(reply)) return null;
+  const s = (reply as Json).token_savings;
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return null;
+  const n = (s as Json).tokens_saved;
+  return typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
 }
 
 function unwrap(text: string): unknown {
@@ -260,6 +291,10 @@ interface CallRow {
   later: number | null;
   /** When the call was made, or the search at start ran. */
   at: number;
+  /** The tokens Meko says the search (or the search at start) saved; null when its reply gave no figure. */
+  tokens_saved: number | null;
+  /** 1 for a context_search that found something (or a seed) since Kode kept Meko's figure whose reply gave none. */
+  unreported: number;
 }
 
 const SEARCH_LIST = [...SEARCH_TOOLS].map((t) => `'${t}'`).join(', ');
@@ -276,17 +311,22 @@ export function mekoCalls(db: Db, projectId?: string, sessionId?: string): CallR
   const args = [...(projectId ? [projectId] : []), ...(sessionId ? [sessionId] : [])];
   const where = conds.length ? ` WHERE ${conds.join(' AND ')}` : '';
   return all<CallRow>(db,
-    `SELECT s.project_id, c.session_id, c.tool, c.kind, c.outcome, c.result_chars, c.input_chars, c.model, c.context_tokens, c.at,
+    `WITH since AS (SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM kv WHERE key = 'meko-saved-since'), 0) AS at)
+     SELECT s.project_id, c.session_id, c.tool, c.kind, c.outcome, c.result_chars, c.input_chars, c.model, c.context_tokens, c.at,
        CASE WHEN c.outcome = 'found' AND c.tool IN (${SEARCH_LIST}) AND c.context_tokens IS NOT NULL THEN
          (SELECT COUNT(*) FROM (SELECT 1 FROM usage_messages u
           WHERE u.session_id = c.session_id AND u.agent IS c.agent AND u.at > c.at LIMIT ?))
-       END AS later
+       END AS later,
+       c.tokens_saved,
+       (c.outcome = 'found' AND c.tool = 'context_search' AND c.tokens_saved IS NULL AND c.at >= (SELECT at FROM since)) AS unreported
      FROM meko_calls c JOIN sessions s ON s.id = c.session_id${where}
      UNION ALL
      SELECT s.project_id, p.session_id, 'seed', 'seed', 'found', p.chars, 0, f.model,
        MAX(0, f.input + f.cache_read + f.cache_write - ROUND(p.chars / 4.0)), p.at,
        (SELECT COUNT(*) FROM (SELECT 1 FROM usage_messages u
-        WHERE u.session_id = p.session_id AND u.agent IS NULL AND u.at > f.at LIMIT ?))
+        WHERE u.session_id = p.session_id AND u.agent IS NULL AND u.at > f.at LIMIT ?)),
+       p.tokens_saved,
+       (p.tokens_saved IS NULL AND p.at >= (SELECT at FROM since))
      FROM meko_preloads p JOIN sessions s ON s.id = p.session_id
        JOIN usage_messages f ON f.session_id = p.session_id AND f.agent IS NULL
          AND f.message_id = (SELECT m.message_id FROM usage_messages m WHERE m.session_id = p.session_id AND m.agent IS NULL
@@ -297,11 +337,25 @@ export function mekoCalls(db: Db, projectId?: string, sessionId?: string): CallR
 
 const tokensOf = (chars: number | null) => Math.round((chars ?? 0) / 4);
 
+export const noMekoSaved = (): MekoSaved => ({ tokens: 0, searches: 0, seeds: 0, unreported: 0 });
+
+/** Adds a found search's (or a seed's) figure from Meko, or counts it as one whose reply gave none. */
+function addMekoSaved(m: MekoSaved, r: CallRow): void {
+  if (r.tokens_saved !== null) {
+    m.tokens += r.tokens_saved;
+    if (r.kind === 'seed') m.seeds++;
+    else m.searches++;
+  } else if (r.unreported) {
+    m.unreported++;
+  }
+}
+
 /** Counts and the savings estimate for a set of calls (seeds count only toward the savings). */
 export function summarizeMeko(rows: CallRow[]): MekoUsage {
   const u: MekoUsage = {
     calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, sentTokens: 0,
     savings: { searches: 0, seeds: 0, tokens: 0, usd: null, unpricedSearches: 0, unpricedSeeds: 0 },
+    mekoSaved: noMekoSaved(),
   };
   let usd = 0;
   let priced = 0;
@@ -321,6 +375,7 @@ export function summarizeMeko(rows: CallRow[]): MekoUsage {
     if (r.kind === 'seed') {
       u.savings.seeds++;
       credit(r);
+      addMekoSaved(u.mekoSaved, r);
       continue;
     }
     u.calls++;
@@ -333,6 +388,7 @@ export function summarizeMeko(rows: CallRow[]): MekoUsage {
     if (r.outcome !== 'found') continue;
     u.found++;
     u.foundTokens += tokensOf(r.result_chars);
+    addMekoSaved(u.mekoSaved, r);
     if (r.later === null) continue; // not a search, or one with no context to credit
     u.savings.searches++;
     credit(r);
@@ -587,7 +643,7 @@ export function mekoBy(rows: CallRow[], key: (r: CallRow) => string): Map<string
 
 /** The per-session counts shown in the project home's session table. */
 export function sessionMeko(u: MekoUsage | undefined): SessionUsage['meko'] {
-  return { lookups: u?.lookups ?? 0, found: u?.found ?? 0, saves: u?.saves ?? 0 };
+  return { lookups: u?.lookups ?? 0, found: u?.found ?? 0, saves: u?.saves ?? 0, mekoSaved: u?.mekoSaved ?? noMekoSaved() };
 }
 
 /** About <n> tokens, as a person reads it: "≈ 900", "≈ 24k", "≈ 1.2M". */

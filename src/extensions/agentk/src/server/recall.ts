@@ -1,4 +1,4 @@
-import type { SearchResult } from '../shared/types.js';
+import type { MekoSearch, SearchResult } from '../shared/types.js';
 import { run, type Db } from './db.js';
 import type { IssueText } from './github.js';
 import { isDesignLine } from './design.js';
@@ -128,13 +128,15 @@ export function formatRecall(items: SearchResult[]): string | null {
 
 export interface RecallSource {
   /** Searches every datapack; fails only when every datapack's search did. */
-  search(query: string): Promise<SearchResult[]>;
+  search(query: string): Promise<MekoSearch>;
   issue(number: number): Promise<IssueText>;
 }
 
 export interface RecallRun {
   text: string | null;
   results: number;
+  /** What Meko says the searches saved, summed over the datapacks; null (or left out) when no reply said. */
+  tokensSaved?: number | null;
 }
 
 /** Searches the datapacks for the task. An issue that can't be read is left out of the query. */
@@ -144,8 +146,8 @@ export async function runRecall(name: string, task: string, src: RecallSource): 
     .filter((i): i is { number: number } & IssueText => !!i);
   const query = recallQuery(name, task, issues);
   const found = await src.search(query);
-  const items = pickResults(found);
-  return { text: formatRecall(items), results: items.length };
+  const items = pickResults(found.results);
+  return { text: formatRecall(items), results: items.length, tokensSaved: found.tokensSaved };
 }
 
 export interface PreloadRecord {
@@ -154,14 +156,16 @@ export interface PreloadRecord {
   chars: number;
   /** From the start of the search to its end. */
   ms: number;
+  /** What Meko says the search saved (`RecallRun.tokensSaved`). */
+  tokensSaved?: number | null;
 }
 
 /** Keeps the outcome of a session's search at start, for the first-turn Meko stats. */
 export function recordPreload(db: Db, sessionId: string, r: PreloadRecord, at = Date.now()): void {
-  run(db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms) VALUES (?, ?, ?, ?, ?, ?)
+  run(db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms, tokens_saved) VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET at = excluded.at, outcome = excluded.outcome, results = excluded.results,
-             chars = excluded.chars, ms = excluded.ms`,
-    sessionId, at, r.outcome, r.results, r.chars, r.ms);
+             chars = excluded.chars, ms = excluded.ms, tokens_saved = excluded.tokens_saved`,
+    sessionId, at, r.outcome, r.results, r.chars, r.ms, r.tokensSaved ?? null);
 }
 
 interface Entry {
@@ -192,7 +196,7 @@ export class RecallStore {
     const rec = (outcome: RecallOutcome, r: RecallRun | null) => {
       if (this.entries.get(sessionId) === e) {
         this.save(sessionId, {
-          outcome, results: r?.results ?? 0, chars: r?.text?.length ?? 0, ms: e.ms,
+          outcome, results: r?.results ?? 0, chars: r?.text?.length ?? 0, ms: e.ms, tokensSaved: r?.tokensSaved ?? null,
         });
       }
     };
@@ -243,7 +247,7 @@ export class RecallStore {
       return null;
     }
     const text = e.run?.text ?? null;
-    if (text) this.save(sessionId, { outcome: 'found', results: e.run!.results, chars: text.length, ms: e.ms });
+    if (text) this.save(sessionId, { outcome: 'found', results: e.run!.results, chars: text.length, ms: e.ms, tokensSaved: e.run!.tokensSaved ?? null });
     this.forget(sessionId, e);
     return text;
   }

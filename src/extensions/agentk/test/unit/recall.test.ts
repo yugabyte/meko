@@ -95,12 +95,13 @@ describe('runRecall', () => {
       },
       search: async (q) => {
         queries.push(q);
-        return [mem('a gotcha about this', 0.9), mem('unrelated', 0.3)];
+        return { results: [mem('a gotcha about this', 0.9), mem('unrelated', 0.3)], tokensSaved: 9400 };
       },
     });
     expect(queries).toEqual(['Fix #10 Fix #10 and #11 #10: Sessions rarely search Meko']);
     expect(r.results).toBe(1);
     expect(r.text).toContain('a gotcha about this');
+    expect(r.tokensSaved).toBe(9400);
   });
 
   it('fails when the search does', async () => {

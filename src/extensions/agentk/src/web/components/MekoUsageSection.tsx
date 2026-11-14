@@ -1,11 +1,12 @@
 import { mekoGapsPath } from '../../shared/mekourls';
-import type { MekoFirstTurn, MekoGaps, MekoLearning, MekoSavings, MekoUsage } from '../../shared/types';
+import type { MekoFirstTurn, MekoGaps, MekoLearning, MekoSaved, MekoUsage } from '../../shared/types';
 import { appUrl } from '../base';
-import { cx, firstTurnText, formatCost, formatTokens, gapsLine, learningText, type LearningTile } from '../util';
+import { cx, firstTurnText, formatTokens, gapsLine, learningText, mekoSavedText, type LearningTile } from '../util';
 
 /**
- * Meko lookups and saves Claude made, how many tokens Meko brought into sessions' first turns, and what
- * the learn step saved and the tokens it used: the project home and the Usage page. `gaps`
+ * Meko lookups and saves Claude made, how many tokens Meko brought into sessions' first turns, the
+ * tokens Meko says its searches saved, and what the learn step saved and the tokens it used: the
+ * project home and the Usage page. `gaps`
  * (the project home only): the open questions on Meko's Context Gaps for the project's dedicated datapack,
  * as a line under the stats linking to that tab in Meko's web UI, there with none open too.
  */
@@ -47,6 +48,7 @@ export function MekoUsageSection({
           <span className="usage-num">≈ {formatTokens(meko.foundTokens)}</span>
           <span className="usage-lbl">Tokens found</span>
         </div>
+        <MekoSavedStat saved={meko.mekoSaved} />
         <LearningStat tile={learned.learned} label="Learned" />
         <LearningStat tile={learned.tokens} label="Learning tokens" />
       </div>
@@ -71,6 +73,17 @@ function GapsLine({ gaps }: { gaps: MekoGaps }) {
       </span>
       <span className="meko-gaps-link">See Context Gaps in Meko ›</span>
     </a>
+  );
+}
+
+/** The tokens Meko says its searches saved (`mekoSavedText`): a dash before any reply gave a figure. */
+function MekoSavedStat({ saved }: { saved: MekoSaved }) {
+  const t = mekoSavedText(saved);
+  return (
+    <div className="usage-stat" title={t.title}>
+      <span className={cx('usage-num', t.num === '—' && 'muted')}>{t.num}</span>
+      <span className="usage-lbl">Tokens saved</span>
+    </div>
   );
 }
 
@@ -99,36 +112,7 @@ function FirstTurnStat({ firstTurn: t }: { firstTurn: MekoFirstTurn }) {
   );
 }
 
-/** Green only for a saving; a negative estimate keeps the normal text color. */
-export function savedClass(s: MekoSavings): string | false {
-  return credited(s) && (s.usd ?? s.tokens) > 0 && 'saved';
-}
-
-/** Est. saved in a table cell: cost, tokens when no model had a price, or a dash with no search to count. */
-export function savedText(s: MekoSavings): string {
-  if (!credited(s)) return '—';
-  return s.usd !== null ? formatCost(s.usd) : `≈ ${signedTokens(s.tokens)}`;
-}
-
-/** Tooltip for an Est. saved cell: the tokens behind it, and searches or seeds its dollars leave out. */
-export function savedTitle(s: MekoSavings): string | undefined {
-  if (!credited(s)) return undefined;
-  const left = s.usd !== null && s.unpricedSearches + s.unpricedSeeds > 0
-    ? `; the dollars leave out ${countText(s.unpricedSearches, s.unpricedSeeds)} on models without a known price` : '';
-  return `≈ ${s.tokens.toLocaleString()} tokens from ${countText(s.searches, s.seeds)}${left}`;
-}
-
-/** Whether anything was credited: a search that found something or a seed. */
-export function credited(s: MekoSavings): boolean {
-  return s.searches + s.seeds > 0;
-}
-
-/** Searches and seeds in words, leaving out a zero: "3 searches and 1 seed", "2 seeds". */
-function countText(searches: number, seeds: number): string {
-  const n = (k: number, one: string, many: string) => `${k.toLocaleString()} ${k === 1 ? one : many}`;
-  return [searches > 0 && n(searches, 'search', 'searches'), seeds > 0 && n(seeds, 'seed', 'seeds')].filter(Boolean).join(' and ');
-}
-
-function signedTokens(n: number): string {
-  return n < 0 ? `−${formatTokens(-n)}` : formatTokens(n);
+/** A Tokens saved cell is green for a saving. */
+export function savedClass(m: MekoSaved): string | false {
+  return m.tokens > 0 && 'saved';
 }

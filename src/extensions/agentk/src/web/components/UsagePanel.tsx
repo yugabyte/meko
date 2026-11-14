@@ -3,7 +3,7 @@ import type { DailyUsage, MekoGaps, ProjectUsage, SessionUsage, TokenUsage, Usag
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
-import { creditsNumber, cx, formatCostOf, formatTokens, modelLabel, rowTokens, totalTokens, usageTitle } from '../util';
+import { creditsNumber, cx, formatCostOf, formatTokens, mekoSavedText, modelLabel, rowTokens, totalTokens, usageTitle } from '../util';
 import { CodeReviewUsageSection } from './CodeReviewUsageSection';
 import { MekoUsageSection } from './MekoUsageSection';
 
@@ -11,6 +11,13 @@ type SessionKey = 'name' | 'meko' | 'output' | 'total' | 'credits';
 
 const sessionValue = (s: SessionUsage, k: SessionKey): number | string =>
   k === 'name' ? s.name : k === 'meko' ? s.meko.found : k === 'output' ? s.usage.output : k === 'credits' ? (s.usage.credits ?? 0) : totalTokens(s.usage);
+
+/** The Meko cell's tooltip on the project home's session table, with the tokens Meko says the session's searches saved. */
+export function sessionMekoTitle(m: SessionUsage['meko']): string {
+  const saved = mekoSavedText(m.mekoSaved).phrase;
+  return `${m.found} of ${m.lookups} Meko lookups found something · ${m.saves} ${m.saves === 1 ? 'save' : 'saves'}` +
+    (saved ? ` · ${saved} (Meko's figure)` : '');
+}
 
 /**
  * Token usage for a project: headline numbers, a 14-day chart (code reviews' tokens stacked on each
@@ -110,7 +117,7 @@ export function UsagePanel({ projectId, usage, mekoOn, gaps }: { projectId: stri
                       {mekoColumn && (
                         <td
                           className="num"
-                          title={`${s.meko.found} of ${s.meko.lookups} Meko lookups found something · ${s.meko.saves} ${s.meko.saves === 1 ? 'save' : 'saves'}`}
+                          title={sessionMekoTitle(s.meko)}
                         >
                           {s.meko.lookups > 0 ? `${s.meko.found}/${s.meko.lookups}` : '—'}
                         </td>

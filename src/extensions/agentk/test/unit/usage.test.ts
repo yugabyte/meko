@@ -366,6 +366,38 @@ describe('token formatting (web)', () => {
     });
   });
 
+  it("puts the tokens Meko says its searches saved in words, for the tile, the project's cell and a session's tooltip", async () => {
+    const { mekoSavedText } = await import('../../src/web/util.js');
+    const { sessionMekoTitle } = await import('../../src/web/components/UsagePanel.js');
+    const none = { tokens: 0, searches: 0, seeds: 0, unreported: 0 };
+    expect(mekoSavedText(none)).toEqual({ num: '—', phrase: null, title: 'No Meko search that found something has said what it saved yet.' });
+    expect(mekoSavedText({ ...none, unreported: 1 }).title).toBe(
+      "No Meko search that found something has said what it saved yet. 1 search's reply didn't say (too large to read, or an older Meko).");
+    const some = mekoSavedText({ tokens: 212_400, searches: 26, seeds: 1, unreported: 3 });
+    expect(some).toEqual({
+      num: '≈ 212k',
+      phrase: '≈ 212k tokens saved',
+      title: "212,400 tokens saved, as Meko figures it for 26 searches and 1 search at session start: what sending the datapack's whole " +
+        "knowledge base would have cost, less what each search sent. 3 searches' replies didn't say (too large to read, or an older Meko).",
+    });
+    const meko = { lookups: 3, found: 2, saves: 1, mekoSaved: none };
+    expect(sessionMekoTitle(meko)).toBe('2 of 3 Meko lookups found something · 1 save');
+    expect(sessionMekoTitle({ ...meko, mekoSaved: { ...none, tokens: 12_000, searches: 2 } }))
+      .toBe("2 of 3 Meko lookups found something · 1 save · ≈ 12k tokens saved (Meko's figure)");
+  });
+
+  it('shows a Tokens saved tile in the Meko section', async () => {
+    const { createElement } = await import('react');
+    const { renderToStaticMarkup } = await import('react-dom/server');
+    const { MekoUsageSection } = await import('../../src/web/components/MekoUsageSection.js');
+    const project = projectUsage(openDb(':memory:'), 'none');
+    const render = (mekoSaved: typeof project.meko.mekoSaved) => renderToStaticMarkup(createElement(MekoUsageSection, {
+      meko: { ...project.meko, mekoSaved }, firstTurn: project.mekoFirstTurn, learning: project.mekoLearning,
+    })).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(render({ tokens: 48_000, searches: 3, seeds: 0, unreported: 0 })).toContain('Tokens found ≈ 48k Tokens saved');
+    expect(render({ tokens: 0, searches: 0, seeds: 0, unreported: 0 })).toContain('— Tokens saved');
+  });
+
   it("says how many questions Meko couldn't answer under the Meko stats, leaving out a part with none", async () => {
     const { gapsLine } = await import('../../src/web/util.js');
     expect(gapsLine({ empty: 0, weak: 0 })).toBeNull();
