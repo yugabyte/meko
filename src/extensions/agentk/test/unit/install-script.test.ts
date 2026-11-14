@@ -314,27 +314,16 @@ describe('deps.sh: installing missing tools', () => {
     });
   }
 
-  it('asks before installing anything, and installs on yes, then offers gh on its own', async () => {
-    const r = await runInTerminal('y', 'Install them now?', [['Install gh, GitHub', '']]);
+  it('asks before installing anything, and installs on yes, never offering gh', async () => {
+    const r = await runInTerminal('y');
     expect(r.out).toContain('sudo dnf install -y git curl');
-    // gh isn't in the main plan: it's shown with its own question.
-    const [main, gh] = r.out.split('Install them now?');
-    expect(main).not.toContain('download gh');
-    expect(gh.split('Install gh, GitHub')[0]).toContain('download gh from github.com/cli/cli releases into ~/.local/bin');
+    expect(r.out).not.toContain('download gh');
+    expect(r.out).not.toContain('Install gh');
     expect(r.code).toBe(0);
     expect(r.calls).toContain('sudo dnf install -y git curl');
-    // Enter takes the default: yes.
-    expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(true);
-    expect(r.out).toContain('git, curl, gh, Claude Code');
-  });
-
-  it("skips gh on no, saying Kode asks for it later, and asks nothing else when it's all that's missing", async () => {
-    have('git', 'curl');
-    const r = await runInTerminal('n', 'Install gh, GitHub');
-    expect(r.code).toBe(0);
-    expect(r.out).not.toContain('Install them now?');
     expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(false);
     expect(r.out).toContain("gh isn't installed: Kode asks for it when you open a PR");
+    expect(r.out).toContain('git, curl, Claude Code');
   });
 
   it('installs nothing on no', async () => {

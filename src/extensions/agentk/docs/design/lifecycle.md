@@ -170,9 +170,9 @@ stateDiagram-v2
 ## gh on demand
 
 Kode does everything on GitHub through gh, GitHub's command-line tool, but doesn't need it to
-install or run: setup only offers it (`scripts/deps.sh`: a question of its own, default yes, once
-git, curl and an agent are there; `--install-deps` installs it with the rest; `--non-interactive`
-and `--no-install-deps` skip it with a warning). Updates don't need it: Meko downloads releases
+install or run, and setup doesn't offer it (`scripts/deps.sh`: `--install-deps` installs it with
+the rest; any other install skips it with a warning, asking nothing, since the GitHub dialog below
+installs it the first time something needs it). Updates don't need it: Meko downloads releases
 without a token. What does need it asks for it then:
 
 - **The gate.** Every action that starts work on GitHub calls `core.gh.require(<what>)` in the core
