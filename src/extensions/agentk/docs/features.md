@@ -18,7 +18,7 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   answers two questions from Meko, and what Meko couldn't answer is taught by Kode's learn step and
   shows on Meko's Context Gaps under Taught, so the next session answers that from Meko too. Take it
   any time from **Take the Kode tour** on the empty screen or **Start the Kode tour** in the command
-  palette. More levels follow.
+  palette, and start it over from the beginning with **Start the Kode tour over** there. More levels follow.
 - **gh when you need it.** Kode installs without gh, GitHub's command-line tool (setup offers it,
   and installs it with `--install-deps`). The first time you do something that works on GitHub
   (Open PR, Run to merge, a move to Pull Request, Merge, Review a PR, a task on a PR, a GitHub

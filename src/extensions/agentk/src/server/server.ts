@@ -391,6 +391,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // ---- workshops (bundled tours, src/server/workshops.ts) ----
   app.get('/api/workshops', async (): Promise<Workshop[]> => core.workshops.list());
   app.post<{ Params: { id: string } }>('/api/workshops/:id/start', async (req): Promise<WorkshopStart> => core.workshops.start(req.params.id));
+  app.post<{ Params: { id: string } }>('/api/workshops/:id/start-over', async (req): Promise<WorkshopStart> => core.workshops.startOver(req.params.id));
   app.post<{ Params: { id: string } }>('/api/workshops/:id/go', async (req, reply) => {
     await core.workshops.go(req.params.id);
     return reply.code(204).send();

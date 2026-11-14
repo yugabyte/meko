@@ -81,7 +81,10 @@ reduced motion it doesn't rotate and names them all at once.
 
 **Asking.** Any text that isn't a GitHub link or a Meko share link gets an **Ask Kode: "…"** item, after the commands
 that match and before the [sessions found](#finding-a-session). A sentence matches no command (the
-filter needs every word), so the item comes first and Enter picks it; `⌘Enter` (`Ctrl+Enter`) asks whatever else matches. The browser sends the text,
+filter needs every word), so the item comes first and Enter picks it; a command people ask for in a
+sentence carries that sentence's words in its keywords instead, as the tour's do ("start the tour
+again" finds **Start the Kode tour over**: `tourEntries()`, [workshops.md](workshops.md)), since Ask
+Kode's answer can't start a tour; `⌘Enter` (`Ctrl+Enter`) asks whatever else matches. The browser sends the text,
 the exchange so far (the last 10, kept only while the palette is open) and what's on screen to
 `POST /api/ask-kode` (`src/server/askagentk.ts`). Esc (or **Cancel**) while Kode thinks cancels the ask and
 puts the text back; closing the palette cancels it too, and the server stops Claude when the

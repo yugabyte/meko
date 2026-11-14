@@ -152,7 +152,19 @@ key; a failure keeps it for the next start. The App's rule of opening the first 
 the tour.
 
 **By hand.** The empty state has **Take the Kode tour** as its main button, before Open project, and the command
-palette **Start the Kode tour**.
+palette **Start the Kode tour**. While a tour is open, the palette offers **Go to the Kode tour** and
+**Start the Kode tour over** in its place (`tourEntries()` in `src/web/palette.ts`, whose keywords
+take "again", "restart", "over" and the like, since the palette wants every word typed).
+
+**Starting over.** **Start the Kode tour over** asks first (`RestartTourDialog`), then
+`WorkshopService.startOver` (`POST /api/workshops/:id/start-over`, under the same one-at-a-time
+lock as a start: a second press gets the first one's tour) reads the open tour's demo folder, its
+gotchas datapack (from MEKO.md) and its dedicated datapack, closes its project (`Projects.delete`,
+which archives its sessions and returns the worktrees they kept for uncommitted changes), removes
+those worktrees (and drops them from the pool), deletes both datapacks, removes the demo folder
+unless another open project uses that repo, and starts a new tour as above, which takes the freed
+folder. A delete that fails is logged and doesn't stop the new tour. Close tour, by contrast,
+keeps the demo folder and its datapacks.
 
 ## The tour
 

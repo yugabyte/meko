@@ -356,6 +356,53 @@ describe('the Kode tour (a bundled workshop Kode runs itself; real session host 
     expect(env.core.workshops.list()[0].projectId).toBeNull();
   });
 
+  it('starts the tour over: the old project closed, its demo, kept worktree and both datapacks deleted, and a new tour on its welcome card', async () => {
+    uuids();
+    // With no tour open, it's a plain start.
+    const first = await env.core.workshops.startOver(AGENTK_TOUR);
+    const old = env.core.projects.get(first.projectId);
+    expect(old.repoPath).toBe(join(env.home, 'code', 'kode-demo'));
+    expect(deleted()).toEqual([]);
+    // Level 1's task, with a fix left uncommitted in its worktree: closing the project keeps that worktree.
+    await act('repo', 'begin');
+    await act('repo', 'next');
+    const out = await act('review-cold', 'run');
+    const wt = env.core.sessions.row(out.sessionId!).worktree_path;
+    await waitFor(() => existsSync(wt), (x) => x, 10000, 'the task\'s worktree');
+    writeFileSync(join(wt, 'README.md'), 'a fix in progress\n');
+    // Run the review made the gotchas datapack again: MEKO.md names the new one.
+    const gotchas = listed(old.repoPath, 'main', '/gotchas')!;
+    expect(gotchas).not.toBe(GOTCHAS_ID);
+    const dedicated = old.datapacks[0].id;
+
+    // A second press while the first is under way gets the same new tour.
+    const [r, again] = await Promise.all([env.core.workshops.startOver(AGENTK_TOUR), env.core.workshops.startOver(AGENTK_TOUR)]);
+    expect(again).toEqual(r);
+    expect(r.projectId).not.toBe(old.id);
+    expect(env.core.sessions.row(out.sessionId!).desired).toBe('archived');
+    expect(get(env.core.db, 'SELECT deleted_at FROM projects WHERE id = ?', old.id)).toEqual({ deleted_at: expect.any(Number) });
+    expect(existsSync(wt)).toBe(false);
+    expect(get(env.core.db, 'SELECT path FROM worktrees WHERE path = ?', wt)).toBeUndefined();
+    expect(deleted().slice(-2).sort()).toEqual([gotchas, dedicated].sort());
+    // The new demo takes the freed folder, with datapacks of its own, on the welcome card.
+    const p = env.core.projects.get(r.projectId);
+    expect(p.repoPath).toBe(old.repoPath);
+    expect(listed(p.repoPath, 'main', '/gotchas')).not.toBe(gotchas);
+    expect(p.datapacks[0].id).not.toBe(dedicated);
+    expect(env.core.sessions.listForProject(p.id)).toEqual([]);
+    expect(tourOf(p.id)()).toMatchObject({ welcome: true, stage: 'repo' });
+    expect(env.core.workshops.list()[0].projectId).toBe(p.id);
+
+    // A project of the user's own on the demo repo keeps the folder; the datapacks still go.
+    const mine = await env.core.projects.create({ repoPath: p.repoPath, name: 'Mine', datapack: { mode: 'none' } });
+    const before = deleted().length;
+    const r2 = await env.core.workshops.startOver(AGENTK_TOUR);
+    expect(existsSync(join(p.repoPath, '.git'))).toBe(true);
+    expect(deleted()).toHaveLength(before + 2);
+    expect(env.core.projects.get(r2.projectId).repoPath).toBe(join(env.home, 'code', 'kode-demo-2'));
+    expect(env.core.projects.get(mine.id).repoPath).toBe(p.repoPath);
+  });
+
   it("opens without Meko, with no datapacks and no MEKO.md: Run the review says to start the tour again, and Level 2 says why it can't run", async () => {
     await noMeko(env);
     const r = await env.core.workshops.start(AGENTK_TOUR);

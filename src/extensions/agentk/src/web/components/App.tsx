@@ -35,6 +35,7 @@ import {
 import { isSessionMenuKey } from '../keys';
 import { Banners } from './Banners';
 import { CloseProjectDialog } from './CloseProjectDialog';
+import { RestartTourDialog } from './RestartTourDialog';
 import { CommandPalette } from './CommandPalette';
 import { Busy } from './common';
 import { NewProjectDialog } from './NewProjectDialog';
@@ -73,6 +74,8 @@ type Modal =
   | { kind: 'link-work'; itemId?: string; sessionId?: string }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
+  /** Start the Kode tour over (the command palette, while a tour is open): asks first. */
+  | { kind: 'restart-tour' }
   | { kind: 'settings'; tab?: SettingsTab; agent?: HarnessId }
   | { kind: 'palette' }
   /** Move a session to another stage, starting from `preset` (a stage clicked in the stage bar). */
@@ -785,6 +788,15 @@ export function App() {
           }}
         />
       )}
+      {modal.kind === 'restart-tour' && (
+        <RestartTourDialog
+          onClose={() => setModal({ kind: 'none' })}
+          onStarted={(projectId) => {
+            setModal({ kind: 'none' });
+            navigate({ view: 'project', projectId, sessionId: null });
+          }}
+        />
+      )}
       {moveSession && (
         <MoveSessionDialog
           key={moveSession.id}
@@ -828,6 +840,7 @@ export function App() {
             setModal({ kind: 'none' });
             void startTour();
           }}
+          onRestartTour={() => setModal({ kind: 'restart-tour' })}
           onNewSession={(projectId) => setModal({ kind: 'new-session', projectId })}
           onMoveSession={() => currentSession && setModal({ kind: 'move', sessionId: currentSession.id })}
           onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}

@@ -395,6 +395,58 @@ export class WorkshopService {
   }
 
   /**
+   * POST /api/workshops/:id/start-over: the open tour's project closed, its demo folder, the worktrees
+   * its sessions kept and its two datapacks deleted, then a new tour started. A press while a start
+   * is under way gets that start's tour: it's new either way.
+   */
+  startOver(id: string): Promise<WorkshopStart> {
+    const going = this.starting.get(id);
+    if (going) return going;
+    const p = this.doStartOver(id).finally(() => this.starting.delete(id));
+    this.starting.set(id, p);
+    return p;
+  }
+
+  private async doStartOver(id: string): Promise<WorkshopStart> {
+    if (!this.bundle(id)) throw new HttpError(404, `There's no workshop ${id} in this Kode.`);
+    const projectId = this.projectOf(id);
+    const p = projectId ? projectRow(this.core.db, projectId) : undefined;
+    if (projectId && p) {
+      // Read before the close: MEKO.md names the gotchas datapack, and the dedicated row goes with the project.
+      const datapacks = [this.gotchasOf(projectId), dedicatedDatapack(this.core.db, projectId)].filter((d): d is { id: string; name: string } => !!d);
+      const kept = await this.core.projects.delete(projectId);
+      // Archive kept these for their uncommitted changes: starting over lets them go, with the repo they're in.
+      for (const path of kept) {
+        try {
+          rmSync(path, { recursive: true, force: true });
+        } catch (e) {
+          this.core.log.warn(`removing the old tour's worktree at ${path} failed`, errMsg(e));
+          continue;
+        }
+        this.core.worktrees.drop(path);
+        for (const s of all<{ id: string }>(this.core.db, 'SELECT id FROM sessions WHERE project_id = ? AND worktree_path = ?', projectId, path)) this.core.worktrees.released(s.id);
+      }
+      if (this.core.mekoStatus.configured) {
+        for (const dp of datapacks) {
+          await this.core.meko.deleteDatapack(dp.id).catch((e: unknown) => this.core.log.warn(`deleting the old tour's datapack ${dp.name} failed`, errMsg(e)));
+        }
+      }
+      // A project of the user's own on the demo repo keeps it.
+      if (get(this.core.db, 'SELECT id FROM projects WHERE deleted_at IS NULL AND repo_path = ?', p.repo_path)) {
+        this.core.log.info(`kept the old tour's demo at ${p.repo_path}: another project uses it`);
+      } else {
+        try {
+          rmSync(p.repo_path, { recursive: true, force: true });
+        } catch (e) {
+          this.core.log.warn(`removing the old tour's demo at ${p.repo_path} failed`, errMsg(e));
+        }
+      }
+      this.core.log.info(`workshop ${id} closed for a start over: project ${projectId}`);
+    }
+    return this.doStart(id);
+  }
+
+  /**
    * A fresh install's tour (`[welcome] tour`): started once while there are no projects, then the
    * key goes. One that fails keeps it, and the next start tries again.
    */
