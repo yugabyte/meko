@@ -155,10 +155,9 @@ the usage stats report carries it ([Usage stats](usage-stats.md)), and so does t
 Meko line (`sessionMekoLine`). The pages show what Meko itself says it saved (below).
 An index on `usage_messages(session_id, agent, at)` keeps counting *k* cheap. A result over 6,000
 tokens makes the content and carry terms negative, and they're kept. Session, project and overall
-figures are plain sums, so the pages agree. With a context of 216k, a 1,420-token result and 10
+figures are plain sums, so the report and the tour agree. With a context of 216k, a 1,420-token result and 10
 later responses, one search saves about 483k tokens, almost all of them cache reads, so the dollar
-figure is much smaller than the token count. The estimate can't show that Meko didn't help, which is
-why it's labelled **Est.** A comparison of sessions with and without Meko finds was tried and
+figure is much smaller than the token count. The estimate can't show that Meko didn't help. A comparison of sessions with and without Meko finds was tried and
 dropped: too few sessions to compare, no chance deciding which sessions used Meko, and nothing to
 compare with once every session does.
 

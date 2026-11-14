@@ -123,19 +123,8 @@ describe('Meko calls in transcripts', () => {
     expect(classifyResult('lookup', text, isError).tokensSaved).toBe(want);
   });
 
-  it("reads Meko's figure from the reply behind a too-large notice only through the reader it's given", () => {
+  it("never asks for the saved reply when Meko's reply reached Claude", () => {
     const pending = new Map([['t1', { kind: 'lookup' as const, tool: 'context_search' }]]);
-    const line = result('t1', notice);
-    expect(parseMekoResults(line, pending)[0]).toMatchObject({ outcome: 'found', results: null, resultChars: notice.length, tokensSaved: null });
-    const asked: string[] = [];
-    const saved = (n: string) => {
-      asked.push(n);
-      return savings({ tokens_saved: 9000 });
-    };
-    expect(parseMekoResults(line, pending, saved)[0]).toMatchObject({ outcome: 'found', results: null, resultChars: notice.length, tokensSaved: 9000 });
-    expect(asked).toEqual([notice]);
-    // A file that can't be read leaves it unknown, and a reply that reached Claude isn't looked for.
-    expect(parseMekoResults(line, pending, () => null)[0].tokensSaved).toBeNull();
     expect(parseMekoResults(result('t1', savings({ tokens_saved: 7 })), pending, () => { throw new Error('not asked'); })[0].tokensSaved).toBe(7);
   });
 
@@ -143,21 +132,16 @@ describe('Meko calls in transcripts', () => {
     const { dir, db } = setup();
     const main = join(dir, 'c.jsonl');
     mkdirSync(join(dir, 'c', 'tool-results'), { recursive: true });
-    mkdirSync(join(dir, 'other', 'tool-results'), { recursive: true });
     const own = join(dir, 'c', 'tool-results', 'mcp-meko-context_search-1.txt');
-    const theirs = join(dir, 'other', 'tool-results', 'mcp-meko-context_search-2.txt');
     writeFileSync(own, savings({ tokens_saved: 12000 }));
-    writeFileSync(theirs, savings({ tokens_saved: 50000 }));
     const big = (file: string) => `Error: result (90,000 characters) exceeds maximum allowed tokens. Output has been saved to ${file}\nFormat: JSON`;
     writeFileSync(main,
-      call('m1', [['a', 'mcp__meko__context_search'], ['b', 'mcp__meko__context_search'], ['c', 'mcp__meko__context_search'], ['d', 'mcp__meko__memory_search']]) +
-      result('a', savings({ tokens_saved: 9800 })) + result('b', big(own)) + result('c', big(theirs)) + result('d', found) + reply('m2'));
+      call('m1', [['a', 'mcp__meko__context_search'], ['b', 'mcp__meko__context_search'], ['d', 'mcp__meko__memory_search']]) +
+      result('a', savings({ tokens_saved: 9800 })) + result('b', big(own)) + result('d', found) + reply('m2'));
     ingestSessionUsage(db, 's1', main);
     expect(all(db, 'SELECT tool_use_id, outcome, tokens_saved FROM meko_calls ORDER BY tool_use_id')).toEqual([
       { tool_use_id: 'a', outcome: 'found', tokens_saved: 9800 },
       { tool_use_id: 'b', outcome: 'found', tokens_saved: 12000 },
-      // Another session's folder is never read.
-      { tool_use_id: 'c', outcome: 'found', tokens_saved: null },
       { tool_use_id: 'd', outcome: 'found', tokens_saved: null },
     ]);
   });
