@@ -359,7 +359,8 @@ export async function runInstall(args: string[]): Promise<void> {
     if (inMeko) cfg.meko.home = inMeko;
     else if (process.env.MEKO_HOME) cfg.meko.home = resolve(process.env.MEKO_HOME);
 
-    // 1. The tools: git, curl and a coding agent, installed after asking when missing, and gh, offered.
+    // 1. The tools: git, curl and a coding agent, installed after asking when missing (gh only
+    // with --install-deps: Kode asks for it when something needs it).
     ui.title('Kode setup');
     checkTools([
       ...(interactive ? [] : ['--non-interactive']),

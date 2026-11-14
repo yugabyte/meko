@@ -1,9 +1,9 @@
 #!/bin/sh
 # Kode's prerequisites: git, curl and a coding agent (Claude Code, OpenCode or Kiro CLI; one is
 # enough), each agent signed in. gh, GitHub's command-line tool, is optional: Kode needs it for PRs
-# and reviews, and asks for it when one of those needs it. Here it's offered in a question of its own
-# once the rest is there, installed with --install-deps, and skipped with a warning otherwise; when
-# it's there, it's offered a sign-in. `meko kode install` runs it first, on the terminal Meko's
+# and reviews, and asks for it when one of those needs it. Here it's never offered: it's installed
+# with --install-deps, and skipped with a warning otherwise; when it's there, it's offered a sign-in.
+# `meko kode install` runs it first, on the terminal Meko's
 # `meko extension install kode` attached (a release has it as lib/scripts/deps.sh), and passes its
 # options on:
 #
@@ -185,13 +185,12 @@ add_missing() { missing="${missing:+$missing, }$1"; }
 git_ok || { add_missing git; pkgs="$pkgs git"; }
 command -v curl >/dev/null 2>&1 || { add_missing curl; pkgs="$pkgs curl"; }
 # gh is optional (Kode asks for it when a PR or a review needs it): --install-deps installs it with
-# the rest, an install that can ask offers it on its own once the rest is there, and any other skips it.
-gh_skipped=false gh_offer=false
+# the rest, and any other install skips it without asking.
+gh_skipped=false
 if ! command -v gh >/dev/null 2>&1; then
   if [ "$install_deps" = yes ]; then
     add_missing "gh (GitHub CLI)"
     if [ "$platform" = darwin ]; then pkgs="$pkgs gh"; else gh_download=true; fi
-  elif $interactive && [ "$install_deps" = ask ]; then gh_offer=true
   else gh_skipped=true
   fi
 fi
@@ -374,18 +373,6 @@ if [ -n "$plan" ]; then
   ! $opencode_install || has_opencode || die "OpenCode is still not available after installing it."
   ! $kiro_install || command -v kiro-cli >/dev/null 2>&1 || die "Kiro CLI is still not available after installing it."
   ok "Installed" "$missing"
-fi
-
-# gh, offered on its own once the required tools are there.
-if $gh_offer; then
-  say "${b}GitHub${n}"
-  gh_plan
-  if ask "  Install gh, GitHub's command-line tool, to open PRs and follow reviews?"; then
-    if install_gh_alone; then ok "Installed" "gh"
-    else warn "GitHub" "couldn't install gh (see above)"; gh_skipped=true
-    fi
-  else gh_skipped=true
-  fi
 fi
 
 # Each agent there has to be signed in before Kode can run sessions on it. The sign-in checks read
