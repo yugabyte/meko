@@ -743,6 +743,11 @@ export class SessionManager {
    * else a workshop's, `WorkshopService.reviewModel`), else its agent's default.
    */
   async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null, model: string | null = null): Promise<SessionRow> {
+    // A review whose start was under way as its task was archived or its project closed doesn't
+    // begin one: nothing would ever stop it, and it'd hold the task's branch.
+    if (sessionRow(this.db, task.id)?.desired !== 'running' || !projectRow(this.db, task.project_id)) {
+      throw new HttpError(409, `${task.name} was closed, so its code review didn't start.`);
+    }
     const slug = `${task.slug}-review-${randomBytes(3).toString('hex')}`;
     const id = `${task.project_id}--${slug}`;
     const now = Date.now();

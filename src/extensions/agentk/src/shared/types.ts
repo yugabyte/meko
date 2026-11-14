@@ -2857,6 +2857,10 @@ export type TermServerMessage =
 // POST   /api/workshops/:id/start              → WorkshopStart   (builds the demo repo and opens it as a project, where
 //        its tour starts; a workshop whose project is open goes to it; 404 for an unknown workshop, 500 with the
 //        reason when the demo can't be built)
+// POST   /api/workshops/:id/start-over         → WorkshopStart   (Start the Kode tour over: checks Clone into first (400),
+//        closes the open tour's project, removes the worktrees its sessions kept in the demo and the demo itself
+//        (not while another open project or its sessions use that repo), deletes the datapacks the tour made, then
+//        starts as above; a plain start when no tour is open; 404 for an unknown workshop)
 // POST   /api/workshops/:id/act   TourActRequest → TourActResult   (a guide card's button; 404 when the workshop isn't
 //        open, 409 for a stage that isn't the one on screen or a button it doesn't offer now)
 // POST   /api/workshops/:id/go                 → 204   (after a level's first look: the gotchas go into Meko and Kode

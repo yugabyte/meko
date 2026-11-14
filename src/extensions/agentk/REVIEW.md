@@ -254,7 +254,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       user's main checkout or repo. Trimming idle worktrees never uses `--force`. The one exception
       is **Start the Kode tour over** (`WorkshopService.startOver`), which the user confirms after
       being told it deletes them: it removes only the open tour's own demo repo, which Kode built
-      (and not while another open project uses it), and the worktrees that project's sessions kept.
+      (and not while a live project or one of its sessions uses it), the worktrees that project's
+      sessions kept in it (through git), and only the datapacks named as the tour names its own.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
       session starts (`merge --ff-only` with autostash off in the main checkout, or a non-forced
       `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), the same

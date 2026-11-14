@@ -158,13 +158,20 @@ take "again", "restart", "over" and the like, since the palette wants every word
 
 **Starting over.** **Start the Kode tour over** asks first (`RestartTourDialog`), then
 `WorkshopService.startOver` (`POST /api/workshops/:id/start-over`, under the same one-at-a-time
-lock as a start: a second press gets the first one's tour) reads the open tour's demo folder, its
-gotchas datapack (from MEKO.md) and its dedicated datapack, closes its project (`Projects.delete`,
-which archives its sessions and returns the worktrees they kept for uncommitted changes), removes
-those worktrees (and drops them from the pool), deletes both datapacks, removes the demo folder
-unless another open project uses that repo, and starts a new tour as above, which takes the freed
-folder. A delete that fails is logged and doesn't stop the new tour. Close tour, by contrast,
-keeps the demo folder and its datapacks.
+lock as a start: a second press gets the first one's tour) first checks Clone into (`cloneFolder`),
+so a folder it can't use leaves the old tour as it was. It reads the datapacks the tour made
+(`tourDatapacks`: the gotchas one MEKO.md names and the project's own, each only under the name the
+tour gives it, so a datapack of the user's the project was switched to is never deleted, while the
+tour's own, kept as shared after that switch, still is), then closes the project (`Projects.delete`,
+which archives its sessions and returns the worktrees they kept for uncommitted changes) and stops
+any session that began as it closed (a level's code review: `startReviewSession` also refuses a
+closed task or project), since it would hold the demo's branch in the new tour. It removes the kept
+worktrees in the demo through git (`git worktree remove --force`, `dropKeptWorktree`, and from the
+pool; one a session kept in a repo of the user's stays, as Close tour leaves it), deletes the
+datapacks, removes the demo folder unless a live project or one of its sessions uses that repo
+(`WorktreePool.repoInUse`, the count `releaseRepo` keeps idle worktrees by), and starts a new tour
+as above, which takes the freed folder. A delete that fails is logged and doesn't stop the new
+tour. Close tour, by contrast, keeps the demo folder and its datapacks.
 
 ## The tour
 

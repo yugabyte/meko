@@ -8,13 +8,13 @@ import { isGotchasDatapack, parseMekoMd } from '../shared/mekomd.js';
 import { TOUR_STAGE_KINDS, type LearnBrief, type TourStageKind, type Workshop, type WorkshopStart } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, kvDelete, kvGet, kvSet, run, tx } from './db.js';
-import { commitDemoRepo, demoBranch, freeDemoBranches, recommitDemo, type GitIdent } from './git.js';
+import { commitDemoRepo, demoBranch, freeDemoBranches, recommitDemo, removeWorktree, type GitIdent } from './git.js';
 import type { KnowledgeResult } from './knowledge.js';
 import { errMsg } from './log.js';
-import { expandHome, isFullPath } from './paths.js';
+import { expandHome, isFullPath, repoKey } from './paths.js';
 import { HttpError, isDatapackLimit } from './projects.js';
 import { checkLearn } from './sessions.js';
-import { dedicatedDatapack, projectRow, projectRows, sessionDatapack, sessionRow, type SessionRow } from './store.js';
+import { dedicatedDatapack, projectDatapacks, projectRow, projectRows, sessionDatapack, sessionRepo, sessionRow, type SessionRow } from './store.js';
 
 /**
  * Workshops bundled with Kode (docs/design/workshops.md): each is a folder of `src/workshops/`
@@ -408,42 +408,82 @@ export class WorkshopService {
   }
 
   private async doStartOver(id: string): Promise<WorkshopStart> {
-    if (!this.bundle(id)) throw new HttpError(404, `There's no workshop ${id} in this Kode.`);
+    const b = this.bundle(id);
+    if (!b) throw new HttpError(404, `There's no workshop ${id} in this Kode.`);
+    // Checked before anything goes, so a Clone into it can't use leaves the old tour as it was.
+    cloneFolder(this.core.config.repos.cloneInto);
     const projectId = this.projectOf(id);
     const p = projectId ? projectRow(this.core.db, projectId) : undefined;
     if (projectId && p) {
-      // Read before the close: MEKO.md names the gotchas datapack, and the dedicated row goes with the project.
-      const datapacks = [this.gotchasOf(projectId), dedicatedDatapack(this.core.db, projectId)].filter((d): d is { id: string; name: string } => !!d);
+      const demo = p.repo_path;
+      // Read before the close: MEKO.md names the gotchas datapack, and the project's rows go with it.
+      const datapacks = this.tourDatapacks(projectId, b, demo);
       const kept = await this.core.projects.delete(projectId);
-      // Archive kept these for their uncommitted changes: starting over lets them go, with the repo they're in.
-      for (const path of kept) {
-        try {
-          rmSync(path, { recursive: true, force: true });
-        } catch (e) {
-          this.core.log.warn(`removing the old tour's worktree at ${path} failed`, errMsg(e));
-          continue;
-        }
-        this.core.worktrees.drop(path);
-        for (const s of all<{ id: string }>(this.core.db, 'SELECT id FROM sessions WHERE project_id = ? AND worktree_path = ?', projectId, path)) this.core.worktrees.released(s.id);
-      }
+      // A level's code review that began as it closed (teardown lists the sessions once) is stopped
+      // too, or it would hold the demo's branch in the new tour, which takes the same folder.
+      await this.core.sessions.teardownProject(projectId);
+      // Another open project's or its sessions' repo (the closed tour's no longer counts) keeps the demo.
+      const keepDemo = this.core.worktrees.repoInUse(demo);
+      for (const path of kept) await this.dropKeptWorktree(projectId, demo, path, keepDemo);
       if (this.core.mekoStatus.configured) {
         for (const dp of datapacks) {
           await this.core.meko.deleteDatapack(dp.id).catch((e: unknown) => this.core.log.warn(`deleting the old tour's datapack ${dp.name} failed`, errMsg(e)));
         }
       }
-      // A project of the user's own on the demo repo keeps it.
-      if (get(this.core.db, 'SELECT id FROM projects WHERE deleted_at IS NULL AND repo_path = ?', p.repo_path)) {
-        this.core.log.info(`kept the old tour's demo at ${p.repo_path}: another project uses it`);
+      if (keepDemo) {
+        this.core.log.info(`kept the old tour's demo at ${demo}: another project uses it`);
       } else {
         try {
-          rmSync(p.repo_path, { recursive: true, force: true });
+          rmSync(demo, { recursive: true, force: true });
         } catch (e) {
-          this.core.log.warn(`removing the old tour's demo at ${p.repo_path} failed`, errMsg(e));
+          this.core.log.warn(`removing the old tour's demo at ${demo} failed`, errMsg(e));
         }
       }
       this.core.log.info(`workshop ${id} closed for a start over: project ${projectId}`);
     }
     return this.doStart(id);
+  }
+
+  /**
+   * The datapacks the tour made, which a start over deletes: the gotchas one MEKO.md names and the
+   * project's own, each only under the name the tour gives it (a number or short suffix allowed), so
+   * a datapack of the user's the project was pointed at (Add or switch datapack) is never one. The
+   * tour's own datapack, kept as shared after such a switch, is still found.
+   */
+  private tourDatapacks(projectId: string, b: WorkshopBundle, demo: string): { id: string; name: string }[] {
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const folder = basename(demo);
+    const own = new RegExp(`^${esc(defaultProjectDatapackName(folder, b.title))}(-\\d+)?$`);
+    const gotchas = b.gotchas ? new RegExp(`^${esc(gotchasName(b.gotchas.datapack, folder).replace(/\/gotchas$/, ''))}(-\\d+)?(-[0-9a-f]{1,4})?/gotchas$`) : null;
+    const g = this.gotchasOf(projectId);
+    return [
+      ...(g && gotchas?.test(g.name) ? [g] : []),
+      ...projectDatapacks(this.core.db, projectId).filter((d) => own.test(d.name)).map((d) => ({ id: d.id, name: d.name })),
+    ];
+  }
+
+  /**
+   * A worktree the closed tour's sessions kept for its uncommitted changes, removed through git
+   * (`worktree remove --force`, so a demo that stays doesn't count it as checking out its branch),
+   * and let go of in the pool. Only one in the demo: a session that worked in a repo of the user's
+   * keeps its worktree there, as Close tour does.
+   */
+  private async dropKeptWorktree(projectId: string, demo: string, path: string, keepDemo: boolean): Promise<void> {
+    const rows = all<SessionRow>(this.core.db, 'SELECT * FROM sessions WHERE project_id = ? AND worktree_path = ?', projectId, path);
+    if (!rows.length || rows.some((r) => repoKey(sessionRepo(this.core.db, r) ?? demo) !== repoKey(demo))) return;
+    let gone = await removeWorktree(demo, path, true);
+    if (!gone && !keepDemo) {
+      // The demo goes too, so nothing in git can still count it.
+      try {
+        rmSync(path, { recursive: true, force: true });
+        gone = true;
+      } catch (e) {
+        this.core.log.warn(`removing the old tour's worktree at ${path} failed`, errMsg(e));
+      }
+    }
+    if (!gone) return;
+    this.core.worktrees.drop(path);
+    for (const r of rows) this.core.worktrees.released(r.id);
   }
 
   /**

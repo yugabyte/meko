@@ -155,9 +155,13 @@ export class WorktreePool {
    * repo (the last project on it is being deleted).
    */
   async releaseRepo(repo: string, exceptProject: string): Promise<void> {
-    const key = repoKey(repo);
-    if (this.liveRepos(exceptProject).has(key)) return;
-    await this.trim(key, 0);
+    if (this.repoInUse(repo, exceptProject)) return;
+    await this.trim(repoKey(repo), 0);
+  }
+
+  /** Whether a live project other than <exceptProject> uses <repo>, as its own or a session's (`liveRepos`). */
+  repoInUse(repo: string, exceptProject = ''): boolean {
+    return this.liveRepos(exceptProject).has(repoKey(repo));
   }
 
   /**
