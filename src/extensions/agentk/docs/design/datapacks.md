@@ -99,10 +99,22 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 
 > **Folder trust.** Claude Code asks "Do you trust this folder?" the first time it runs somewhere
 > new, and fires no hooks until that's answered. For a worktree, Claude keys that decision by the
-> main repository, so the server marks the project's repo as trusted in `~/.claude.json` when the
-> project is created, and checks again before each launch (other Claude processes can overwrite a
-> fresh entry when they start, so it re-checks after a moment). If the prompt still appears (for a
-> new, resumed or recovered session), the session shows *needs you* with an explanation.
+> main repository, and only the repo's own entry counts: a trusted parent (the home or repos
+> folder) doesn't stop the question for a git repo, and Claude goes by the real path. So the server
+> marks the project's repo itself as trusted in `~/.claude.json` (by the path it has and, when
+> that's a symlinked spelling, by its real path too) when the project is created, and checks again
+> before each launch (other Claude processes can overwrite a fresh entry when they start, so it
+> re-checks after a moment). If the prompt still appears (for a new, resumed or recovered session),
+> the session shows *needs you* with an explanation, and the repo is trusted again for the next one.
+
+> **Claude Code's first-run setup.** Until `~/.claude.json` says `hasCompletedOnboarding`, Claude
+> Code opens on its first-run setup (the text style, then how to sign in), which signing in with
+> `claude auth login` doesn't mark done, and fires no hooks meanwhile: a new install's first
+> sessions (the tour's) waited there behind the Starting panel. So before each launch the server
+> marks it done (`ensureOnboarded` in `trust.ts`, re-checked as trust is; Claude keeps its default
+> text style), but only once the config shows a sign-in (`oauthAccount`), never making the file:
+> signed out, the setup's sign-in screen is what shows. If the setup shows, the session shows
+> *needs you*, as for folder trust, until it's answered.
 
 > **Meko: the Meko on this computer.** Datapacks are how a project keeps track of its work, and
 > sharing a project goes through its datapack. Kode uses the Meko running on this computer, and

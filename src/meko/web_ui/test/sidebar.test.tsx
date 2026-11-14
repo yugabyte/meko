@@ -216,6 +216,18 @@ test("Settings is a gear at the foot of the sidebar, not a row in the top links"
   expect(document.querySelectorAll('a[href="/settings"]')).toHaveLength(1);
 });
 
+test("Discord is a link just above the sidebar's footer, opening Meko's Discord in a new tab", async () => {
+  await render();
+  const discord = [...document.querySelectorAll<HTMLAnchorElement>("aside a")].find(
+    (a) => a.textContent === "Join us on Discord",
+  )!;
+  expect(discord.getAttribute("href")).toBe("https://mekodata.ai/discord/");
+  expect(discord.getAttribute("target")).toBe("_blank");
+  expect(discord.closest("nav")).toBeNull();
+  const footer = document.querySelector("aside .border-t")!;
+  expect(discord.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 test("Agents is a top link under Status, above Extensions, opening the Agents page", async () => {
   await render({ view: "agents" });
   const top = [...document.querySelectorAll<HTMLAnchorElement>("aside a")].map((a) => a.getAttribute("href"));

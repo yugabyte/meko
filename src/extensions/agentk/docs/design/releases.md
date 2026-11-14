@@ -105,11 +105,11 @@ meko extension install kode -- --agent kiro      # options after -- go to `meko 
 #     on Linux (apt-get, dnf, yum, zypper, pacman or apk), and an agent with its own installer
 #     (Claude Code's claude.ai/install.sh, which publishes no checksum, OpenCode's or Kiro's; which
 #     one: --agent, else it asks, else Claude Code). gh is optional (Kode asks for it when a PR
-#     or a review needs it: lifecycle.md's "gh on demand"): once the rest is there, a missing gh is
-#     offered in a question of its own, default yes, after showing what it runs (brew on macOS, its
-#     GitHub release, checksum-verified, into ~/.local/bin on Linux, no root either way);
-#     --install-deps installs it with the rest, and --non-interactive and --no-install-deps skip it
-#     with a warning. `--only gh` installs gh alone that way (the GitHub dialog's Install gh). It
+#     or a review needs it: lifecycle.md's "gh on demand"): a missing gh is never offered;
+#     --install-deps installs it with the rest (brew on macOS, its GitHub release,
+#     checksum-verified, into ~/.local/bin on Linux, no root needed for it), and any other install
+#     skips it with a warning. `--only gh` installs gh alone, without root (the GitHub dialog's
+#     Install gh). It
 #     checks the tools themselves afterwards: Homebrew exiting with an error
 #     once they work (it builds from source on a macOS it no longer supports) is a warning, while
 #     a failed Linux package manager stops it; then offers each agent's sign-in and `gh auth

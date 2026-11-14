@@ -95,7 +95,7 @@ idle_stop_hours = 24      # a session's agent idle this long is stopped, and res
 
 [code_review.models.opencode] # the model each tier of review step runs on; Claude Code's are opus, sonnet and haiku,
 # large = "anthropic/…"      # OpenCode's and Kiro's empty (the session's own model)
-# mid = "anthropic/…"
+# mid = "anthropic/…"        # no strategy runs a step on mid now
 # small = "anthropic/…"
 
 [ask_kode]

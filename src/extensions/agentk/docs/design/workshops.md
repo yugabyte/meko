@@ -197,7 +197,7 @@ its buttons and links, its session, and Level 1's scoreboard. A level whose `nee
 
 | Kind | Its button | Kode does | Done when |
 |---|---|---|---|
-| `repo` | Play the game (first, and the blue button until it's clicked) · Move on to stage 2 | Nothing. | At once |
+| `repo` | Play the game (first, and the blue button until it's clicked) · Move on to step 2 | Nothing. | At once |
 | `review-first-look` | Run the review | Makes the gotchas datapack again (above), then begins the level's task (its first prompt, at Code on the level's branch, `existingBranch`), which only waits; its first look starts as it's created (`reviewLevel`). A review that can't start is kept (kv `workshop-review-failed:<task>`) for Retry. | That review's findings are in |
 | `teach` | Add the gotchas to Meko | Uploads `gotchas.md` (`addGotchas`, Meko's presigned flow, followed until indexed; an upload Kode stops following ends as `unknown`). | Meko is done with it; a failure shows its reason and Retry |
 | `review-context` | Run the review again | The review proper (`runLevelReview(task, false)`, hand-off on); its findings stay with the review. Blocked without the task. A review that credits no gotcha (`missed` text) offers Run the review again beside Move on. | Its findings wait on the user (`triage`) or it's done |
@@ -263,7 +263,11 @@ Merge unavailable. The server refuses Open PR, Run to merge (on a session and at
 and a move to Pull Request there with a 409 (`checkOpensPr` in `lifecycle.ts`; the session tools'
 `open_pr` and `move_session` go through the same calls). In the UI, the Code gate shows "No PR in
 the demo" and **Run code review** (the `review-run` action, while `canRunReview` offers it;
-`demoReviewGate` in `src/web/util.ts`) where Open PR and Run to merge would be; while a review's
+`demoReviewGate` in `src/web/util.ts`) where Open PR and Run to merge would be, except while the
+tour runs there (`tourRuns`): for the whole tour its guide card's button is the next step (the
+review's own on its review steps, none on the others), and the only filled blue one on screen (the
+rail marks the current step without filling it, and the install-as-an-app banner waits while the
+tour's project is on screen), so the gate leaves Run code review to the ⋯ menu and the palette; while a review's
 findings wait on the user, or it waits in its terminal, the gate shows that as a review's gate does
 (**Findings wait on you**, **Send to Kode**). The session's ⋯ and the palette leave out Open PR
 with instructions. Every review there skips the PR description (`runNow` turns `describe` off for a

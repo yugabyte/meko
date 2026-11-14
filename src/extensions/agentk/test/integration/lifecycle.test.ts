@@ -384,6 +384,28 @@ describe('lifecycle: PR → Kode review → Merge & Close', () => {
     expect(lastEvent(s.id, 'cleanup')).toMatch(/branch .* kept because it has commits PR #7 doesn't have/);
   });
 
+  it('dismisses the work item a merged session is on, and leaves one a discarded session is on', async () => {
+    const work = await env.core.workQueue.create({ title: 'Fix it' });
+    const s = await inReview('From the queue', undefined, { workItemId: work.id });
+    expect(env.core.workQueue.get(work.id)).toMatchObject({ status: 'open', sessionId: s.id });
+    gh.status = { ...gh.status!, state: 'MERGED' };
+    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
+    await closed(s.id);
+    expect(env.core.workQueue.get(work.id)).toMatchObject({ status: 'closed', sessionId: s.id });
+    expect(lastEvent(s.id, 'work-item')).toBe('Work item dismissed: Fix it');
+    // The cleanup run again (a restart partway) finds nothing open and says nothing more.
+    await env.core.lifecycle.cleanup(env.core.sessions.row(s.id), gh.status);
+    expect(all(env.core.db, "SELECT 1 FROM session_events WHERE session_id = ? AND kind = 'work-item'", s.id)).toHaveLength(1);
+
+    const other = await env.core.workQueue.create({ title: 'Try it' });
+    const p = env.core.sessions.row(s.id).project_id;
+    const d = await env.core.sessions.create(p, { name: 'Dropped', prompt: 'do it', kind: 'quick', workItemId: other.id });
+    await waitFor(() => env.core.sessions.get(d.id), (x) => x.status === 'idle', 10000, 'first turn');
+    await env.core.sessions.action(d.id, 'discard', { skipLearn: true });
+    await waitFor(() => lastEvent(d.id, 'discarded'), (t) => !!t, 10000, 'the discard');
+    expect(env.core.workQueue.get(other.id)).toMatchObject({ status: 'open', sessionId: d.id });
+  });
+
   it('waits for Claude to finish its turn before closing a merged session', async () => {
     const s = await inReview('Merged mid-turn');
     slowTurns();

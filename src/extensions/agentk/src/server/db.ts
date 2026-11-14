@@ -806,6 +806,35 @@ const MIGRATIONS: string[] = [
     updated_at INTEGER NOT NULL
   );
   `,
+  // 53: the runs of `meko kode review` (src/server/review/clirecords.ts), taken in from the records
+  // the CLI leaves in run/cli-reviews/: counts only. project_id: the project on the run's repo, NULL
+  // for a repo no project uses. sweeps: 0 for a run that stopped (or found nothing changed) before
+  // its passes. The tokens and cost are what its steps' Claude Code reported.
+  `
+  CREATE TABLE cli_reviews (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    repo TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    base TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    depth INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    detail TEXT,
+    pr INTEGER NOT NULL DEFAULT 0,
+    sweeps INTEGER NOT NULL DEFAULT 0,
+    candidates INTEGER NOT NULL DEFAULT 0,
+    counts_json TEXT NOT NULL,
+    input INTEGER NOT NULL DEFAULT 0,
+    output INTEGER NOT NULL DEFAULT 0,
+    cache_read INTEGER NOT NULL DEFAULT 0,
+    cache_write INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER NOT NULL
+  );
+  CREATE INDEX cli_reviews_project ON cli_reviews(project_id, created_at);
+  `,
 ];
 
 export function openDb(path: string): Db {

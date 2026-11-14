@@ -98,7 +98,7 @@ describe('deps.sh: installing missing tools', () => {
     expect(r.err).toContain('sudo -n dnf install -y git curl');
     // gh is optional: not in the plan without --install-deps.
     expect(r.err).not.toContain('download gh');
-    expect(r.err).toContain('Run meko extension install kode -- --install-deps to install them');
+    expect(r.err).toContain('Run `meko extension install kode -- --install-deps` to install them');
     expect(r.calls).toEqual([]); // nothing was installed
   });
 
@@ -207,7 +207,7 @@ describe('deps.sh: installing missing tools', () => {
     stub(bin, 'dnf', `echo "dnf $*" >> "${log}"; shift; ${installs(repo, bin).replace(/exit 0$/, 'exit 1')}`);
     const r = run(['--non-interactive', '--install-deps']);
     expect(r.code).toBe(1);
-    expect(r.err).toContain('installing git curl failed (see the output above). Install them yourself and run meko extension install kode again.');
+    expect(r.err).toContain('installing git curl failed (see the output above). Install them yourself and run `meko extension install kode` again.');
     expect(r.err).not.toContain('going on');
   });
 
@@ -314,27 +314,16 @@ describe('deps.sh: installing missing tools', () => {
     });
   }
 
-  it('asks before installing anything, and installs on yes, then offers gh on its own', async () => {
-    const r = await runInTerminal('y', 'Install them now?', [['Install gh, GitHub', '']]);
+  it('asks before installing anything, and installs on yes, never offering gh', async () => {
+    const r = await runInTerminal('y');
     expect(r.out).toContain('sudo dnf install -y git curl');
-    // gh isn't in the main plan: it's shown with its own question.
-    const [main, gh] = r.out.split('Install them now?');
-    expect(main).not.toContain('download gh');
-    expect(gh.split('Install gh, GitHub')[0]).toContain('download gh from github.com/cli/cli releases into ~/.local/bin');
+    expect(r.out).not.toContain('download gh');
+    expect(r.out).not.toContain('Install gh');
     expect(r.code).toBe(0);
     expect(r.calls).toContain('sudo dnf install -y git curl');
-    // Enter takes the default: yes.
-    expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(true);
-    expect(r.out).toContain('git, curl, gh, Claude Code');
-  });
-
-  it("skips gh on no, saying Kode asks for it later, and asks nothing else when it's all that's missing", async () => {
-    have('git', 'curl');
-    const r = await runInTerminal('n', 'Install gh, GitHub');
-    expect(r.code).toBe(0);
-    expect(r.out).not.toContain('Install them now?');
     expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(false);
     expect(r.out).toContain("gh isn't installed: Kode asks for it when you open a PR");
+    expect(r.out).toContain('git, curl, Claude Code');
   });
 
   it('installs nothing on no', async () => {
@@ -342,7 +331,7 @@ describe('deps.sh: installing missing tools', () => {
     const r = await runInTerminal('n');
     expect(r.code).toBe(1);
     expect(r.calls).toEqual([]);
-    expect(r.out).toMatch(/Install them and run meko extension install kode again/);
+    expect(r.out).toMatch(/Install them and run `meko extension install kode` again/);
   });
 
   it('offers to sign gh in to GitHub', async () => {
@@ -391,7 +380,7 @@ describe('install.sh', () => {
   it("only says Meko installs Kode now, and fails, for the Mekos and instructions that run it", () => {
     const r = run(['--meko-url', 'http://127.0.0.1:7778/mcp', '--meko-key', 'k'], {}, STUB);
     expect(r.code).toBe(1);
-    expect(r.err).toContain('Update Meko first (meko update), then run: meko extension install kode');
+    expect(r.err).toContain('Update Meko first (meko update), then run `meko extension install kode`.');
     expect(r.calls).toEqual([]);
     // An older Meko refuses an installer that doesn't mention --meko-url, with a less clear message.
     expect(readFileSync(STUB, 'utf8')).toContain('--meko-url');

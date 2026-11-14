@@ -19,16 +19,16 @@ curl -fsSL https://mekodata.ai/install.sh | sh
 meko extension install kode
 ```
 
-(or **Install** on Meko's Extensions page). Meko downloads Kode's newest release, checks it and
+(or **Install** on Meko's Extensions page). When Meko's installer adds `~/.local/bin` to your PATH,
+run the second command in a new terminal: the one the installer ran in keeps its old PATH. Meko downloads Kode's newest release, checks it and
 unpacks it into its data folder, then runs Kode's setup, which offers to install anything that's
 missing (git, curl, and Claude Code, OpenCode or Kiro CLI when none is there: it asks which, or pass
 `meko extension install kode -- --agent opencode` or `-- --agent kiro`) and to set up Meko for
 each agent, asking first (Meko's own setup runs quietly: its output shows only if it fails).
 gh, GitHub's command-line tool, is optional: Kode needs it to open PRs and follow reviews, and
 asks for it the first time something needs it, with a dialog that installs it (without root) and
-signs it in. Setup offers it in a question of its own once the rest is there, `-- --install-deps`
-installs it with the rest, and an install that can't ask (Meko's Extensions page) goes on without
-it and says so. Then
+signs it in. Setup doesn't offer it: `-- --install-deps` installs it with the rest, and any other
+install goes on without it and says so. Then
 it prints the address to open, and `meko kode ui`, `status` and `logs`. Its rows say only what
 needs a look: services that run and start at login go without one. On macOS the services are
 LaunchAgents: they start when you log in and stop when you log out, and sessions pause while the
@@ -100,6 +100,7 @@ your phone can connect.
 | `meko kode logs -f` | Follow the server log (`logs/server.log` in Kode's home) |
 | `meko kode uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes Kode's home (in Meko's data folder) except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
 | `meko kode attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
+| `meko kode review [--base <branch>] [--pr <pr> \| --description <text>] [--depth 1-5] [--strategy <id>] [--json]` | Review the change in this folder (from where it left its base to the working tree, uncommitted files included) with Kode's code review, on Claude Code, without a session or the server; print the kept findings and exit 0, or 1 when it couldn't review. See [From the command line](design/code-review.md#from-the-command-line) |
 | `meko kode host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
 
 Kode has no command of its own: `meko kode <command>` runs it for the Meko it belongs to. Its

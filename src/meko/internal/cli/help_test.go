@@ -263,6 +263,15 @@ func TestReport(t *testing.T) {
 	if strings.Contains(b.String(), "│") {
 		t.Error("a box")
 	}
+
+	// After an install that put meko on the PATH in the shell's profile, the same list goes in a new
+	// terminal.
+	b.Reset()
+	r.color = false
+	r.nextUnder(nextInNewTerminal, [][2]string{{"meko ui", "open the web UI"}})
+	if want := "\nNext, in a new terminal:\n  meko ui    open the web UI\n"; b.String() != want {
+		t.Errorf("printed %q, want %q", b.String(), want)
+	}
 	t.Setenv("NO_COLOR", "1")
 	if newReport(os.Stdout).color {
 		t.Error("color with NO_COLOR")

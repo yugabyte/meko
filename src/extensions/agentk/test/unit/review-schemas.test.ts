@@ -84,3 +84,9 @@ describe("a scorer's verdict and the task's outcomes", () => {
     expect(checkOutcomes({ outcomes: [] })).toEqual({ error: 'input.outcomes: needs at least 1 item' });
   });
 });
+
+describe('a strategy id', () => {
+  it('resolves an unknown one to the default', () => {
+    expect(strategyFor('nope').id).toBe('sagittarius-3.0');
+  });
+});

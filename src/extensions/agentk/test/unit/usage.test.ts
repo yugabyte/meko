@@ -227,7 +227,7 @@ describe('code reviews', () => {
 
     const counts = {
       runs: 4, byOutcome: { done: 1, failed: 2, cancelled: 1, running: 0 }, lgtm: 0, prs: 1, rounds: 4, candidates: 9,
-      findings: { blocker: 1, major: 0, minor: 2 }, fixed: 1, declined: 1,
+      findings: { blocker: 1, major: 0, minor: 2 }, fixed: 1, declined: 1, cli: 0,
     };
     const reviews = { ...counts, usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 } };
     const pu = projectUsage(db, 'p', 14, now);
@@ -255,10 +255,10 @@ describe('code reviews', () => {
     const section = renderToStaticMarkup(createElement(CodeReviewUsageSection, {
       reviews: {
         runs: 4, byOutcome: { done: 2, failed: 1, cancelled: 0, running: 1 }, lgtm: 1, prs: 2, rounds: 5, candidates: 9,
-        findings: { blocker: 1, major: 0, minor: 2 }, fixed: 2, declined: 1, usage: usage(1_500_000),
+        findings: { blocker: 1, major: 0, minor: 2 }, fixed: 2, declined: 1, cli: 2, usage: usage(1_500_000),
       },
     })).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-    for (const text of ['Code Reviews', '4 Reviews 5 rounds · 1 failed · 1 running', '3 Issues found 1 blocker, 2 minor', '2 Fixed 1 declined', '2 PRs opened 1 LGTM']) {
+    for (const text of ['Code Reviews', '4 Reviews 5 rounds · 1 failed · 1 running · 2 from the command line', '3 Issues found 1 blocker, 2 minor', '2 Fixed 1 declined', '2 PRs opened 1 LGTM']) {
       expect(section).toContain(text);
     }
     // Neither the candidates the passes raised nor the review sessions' cost is shown.

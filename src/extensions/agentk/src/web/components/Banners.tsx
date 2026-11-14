@@ -227,9 +227,10 @@ function InviteBanners({
  * The offer to install Kode as an app (`installapp.ts`), until it's installed or turned down in this
  * browser. On iOS only Not now hides it: Safari can't tell that Kode is on the Home Screen already.
  */
-function InstallBanner() {
+function InstallBanner({ tourOnScreen }: { tourOnScreen: boolean }) {
   const { offer, install, dismiss } = useInstall();
-  if (!offer) return null;
+  // Not over the Kode tour: its guide card's button is the one to press next.
+  if (!offer || tourOnScreen) return null;
   return (
     <div className="banner info">
       <span className="banner-text">
@@ -352,6 +353,7 @@ export function Banners({
   onMekoSettings,
   onSettings,
   onWhatsNew,
+  tourOnScreen,
 }: {
   state: AppState;
   conn: Conn;
@@ -366,6 +368,8 @@ export function Banners({
   onSettings: () => void;
   /** Opens What's new from one version to another. */
   onWhatsNew: (from: string, to: string) => void;
+  /** The project on screen is the Kode tour's, still running: the offer to install Kode as an app waits. */
+  tourOnScreen: boolean;
 }) {
   const [dismissed, setDismissed] = useState<string | null>(readDismissed);
   const [applying, setApplying] = useState(false);
@@ -493,7 +497,7 @@ export function Banners({
       <MekoClaudeBanner state={state} onDetails={onMekoSettings} onError={onError} />
       <FailedStartBanners state={state} onRetry={onRetryStart} onError={onError} />
       <InviteBanners invites={state.invites ?? []} onOpen={onOpenInvite} onError={onError} />
-      <InstallBanner />
+      <InstallBanner tourOnScreen={tourOnScreen} />
     </div>
   );
 }

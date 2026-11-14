@@ -1315,19 +1315,22 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(env.core.sessions.row(s.id)).toMatchObject({ claude_session_id: s.claudeSessionId, status: 'idle' });
   });
 
-  it('notices the folder-trust prompt in a recovered session, not only a new one', async () => {
+  it.each([
+    ['the folder-trust prompt', 'trust-prompt', /trust this folder/],
+    ["Claude Code's first-run setup", 'setup-prompt', /first-run settings/],
+  ])('notices %s in a recovered session, not only a new one', async (_, marker, detail) => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Trust me', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
-    writeFileSync(join(env.fakeDir, 'trust-prompt'), '');
+    writeFileSync(join(env.fakeDir, marker), '');
     await env.killHost();
     await env.core.sessions.reconcile();
     expect(env.core.sessions.get(s.id).status).toBe('recovered');
     await waitFor(async () => {
       await env.core.sessions.reconcile();
       return env.core.sessions.get(s.id);
-    }, (x) => x.status === 'needs_input' && /trust this folder/.test(x.statusDetail ?? ''), 15000, 'trust prompt noticed');
-    rmSync(join(env.fakeDir, 'trust-prompt'));
+    }, (x) => x.status === 'needs_input' && detail.test(x.statusDetail ?? ''), 15000, 'prompt noticed');
+    rmSync(join(env.fakeDir, marker));
     await env.core.host.sendKeys(s.paneName, 'Enter');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'answered');
   });

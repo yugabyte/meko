@@ -479,18 +479,36 @@ describe('the usage stats report', () => {
     const day = (d: string) => r.days.find((x) => x.day === d)!;
     expect(day('2026-09-27').codeReview).toEqual({
       runs: 1, byOutcome: { done: 1, failed: 0, cancelled: 0, running: 0 }, lgtm: 0, prs: 1, rounds: 2, candidates: 4,
-      findings: { blocker: 1, major: 1, minor: 1 }, fixed: 1, declined: 1,
+      findings: { blocker: 1, major: 1, minor: 1 }, fixed: 1, declined: 1, cli: 0,
       tokens: { input: 100_000, output: 100_000, cacheRead: 0, cacheWrite: 0, messages: 1 }, usdCents: 240,
     });
     expect(day('2026-09-28').codeReview).toEqual({
       runs: 3, byOutcome: { done: 1, failed: 1, cancelled: 0, running: 1 }, lgtm: 1, prs: 1, rounds: 3, candidates: 0,
-      findings: none, fixed: 0, declined: 0, tokens: { input: 50_000, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 }, usdCents: 20,
+      findings: none, fixed: 0, declined: 0, cli: 0, tokens: { input: 50_000, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 }, usdCents: 20,
     });
     expect(day('2026-09-26').codeReview).toBeUndefined();
     // Review sessions aren't a kind of session the report counts.
     expect(r.totals.sessions.byKind).toEqual(report(seeded()).totals.sessions.byKind);
     expect(JSON.stringify(r)).not.toContain('alice');
     expect(validate(r, SCHEMA)).toEqual([]);
+  });
+
+  it('counts the runs of meko kode review with the code reviews, at the cost they reported', () => {
+    const db = seeded();
+    const cli = (id: string, state: string, sweeps: number, counts: Record<string, number>, iso: string) =>
+      run(db, `INSERT INTO cli_reviews(id, project_id, repo, branch, base, strategy, depth, state, sweeps, candidates, counts_json, input, output, cache_read, cache_write,
+               cost_usd, created_at, finished_at) VALUES (?, 'p1', 'acme/demo-repo', 'feat', 'origin/main', 'sagittarius-3.0', 1, ?, ?, 3, ?, 1000, 2000, 3000, 4000, 1.234, ?, ?)`,
+      id, state, sweeps, JSON.stringify(counts), at(iso), at(iso));
+    cli('cli-1', 'done', 1, { blocker: 0, major: 2, minor: 0 }, '2026-09-28T01:00:00Z');
+    cli('cli-2', 'cancelled', 0, { blocker: 0, major: 0, minor: 0 }, '2026-09-28T02:00:00Z');
+    const r = report(db);
+    expect(r.days.find((x) => x.day === '2026-09-28')!.codeReview).toEqual({
+      runs: 2, byOutcome: { done: 1, failed: 0, cancelled: 1, running: 0 }, lgtm: 0, prs: 0, rounds: 1, candidates: 6,
+      findings: { blocker: 0, major: 2, minor: 0 }, fixed: 0, declined: 0, cli: 2,
+      tokens: { input: 2000, output: 4000, cacheRead: 6000, cacheWrite: 8000, messages: 0 }, usdCents: 247,
+    });
+    expect(validate(r, SCHEMA)).toEqual([]);
+    expect(JSON.stringify(r)).not.toContain('acme');
   });
 
   it("keeps a day's 14 most used models and sums the rest into other", () => {
@@ -598,7 +616,7 @@ describe('the usage stats report', () => {
       d.meko = meko;
       d.codeReview = {
         runs: big, byOutcome: { done: big, failed: big, cancelled: big, running: big }, lgtm: big, prs: big, rounds: big, candidates: big,
-        findings: { blocker: big, major: big, minor: big }, fixed: big, declined: big,
+        findings: { blocker: big, major: big, minor: big }, fixed: big, declined: big, cli: big,
         tokens: { input: big, output: big, cacheRead: big, cacheWrite: big, messages: big }, usdCents: big, credits: 123456789.123,
       };
     }

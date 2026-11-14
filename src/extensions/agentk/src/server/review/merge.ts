@@ -3,9 +3,21 @@
  * merging what the passes report into candidates, the refutation gate a scorer has to pass to drop
  * one, which candidates survive scoring, and which of those can be shown on the change's diff.
  */
-import { noCounts, SEVERITIES, type SeverityCounts } from '../../shared/codereview.js';
+import { MIN_SWEEPS, noCounts, SEVERITIES, type CodeReviewFinding, type GotchaCredit, type SeverityCounts } from '../../shared/codereview.js';
 import { anchorsLine } from './diff.js';
-import type { Candidate, Diff, Finding, PassReport, ScoreReport } from './types.js';
+import type { Candidate, Diff, Finding, PassReport, ScoreReport, Tier } from './types.js';
+
+/** The tier each scorer runs on: the cloud's scorers run on the small model. */
+export const SCORER_TIER: Tier = 'small';
+
+/**
+ * The most scorers started at once: a round can have dozens of candidates, so they run in batches
+ * of this many, each batch once the one before has finished (a sweep's passes all start at once).
+ */
+export const SCORE_BATCH = 5;
+
+/** How many times a review asks again for the steps left unreported, before it goes on without them. */
+export const ASK_AGAIN = 1;
 
 /**
  * The confidence an unverified candidate needs to survive (REVIEW_MIN_CONFIDENCE). Confirmed ones
@@ -138,6 +150,55 @@ export function validate(cands: Candidate[], diff: Diff, maxFindings = 100): { p
     post.push({ ...c, finding: { ...c.finding, comment: cut } });
   }
   return { post, withheld };
+}
+
+/**
+ * Whether another sweep follows the one just merged (`sweep`, which added `added` new candidates):
+ * while the depth allows and, from MinSweeps (min(2, depth)) on, the last sweep added something new.
+ */
+export function moreSweeps(depth: number, sweep: number, added: number): boolean {
+  return sweep < depth && (sweep < Math.min(MIN_SWEEPS, depth) || added > 0);
+}
+
+/** A candidate's credits, with the quote each was given (`Finding.quotes`). */
+export function findingCredits(f: Finding): GotchaCredit[] {
+  return f.gotchas.map((id) => ({ id, quote: f.quotes?.[id] ?? '' }));
+}
+
+/**
+ * A round's verdict on its candidates: the scorers' answers applied (`scores`, by candidate number
+ * from 1), the ones that survive scoring (`keepScored`, when the strategy scores), then Validate.
+ * Every candidate becomes a finding keyed `<round>:<number>`, kept or dropped with the reason;
+ * `post` is the kept candidates, strongest first (`keepScored`'s order). The candidates are changed
+ * in place (their scores).
+ */
+export function judgeRound(o: { round: number; cands: Candidate[]; scores: Map<number, ScoreReport>; diff: Diff; scored: boolean }): {
+  findings: CodeReviewFinding[]; post: Candidate[];
+} {
+  const { round, cands, scores } = o;
+  cands.forEach((c, i) => {
+    const s = scores.get(i + 1);
+    if (s) applyScore(c, s);
+  });
+  const kept = o.scored ? keepScored(cands, MIN_CONFIDENCE) : cands;
+  // validate gives back copies of what it posts, and the candidates themselves for what it withholds.
+  const { withheld } = validate(kept, o.diff);
+  const out = new Set(withheld.map((w) => w.candidate));
+  const post = kept.filter((c) => !out.has(c));
+  const dropReason = new Map<Candidate, string>(withheld.map((w) => [w.candidate, w.reason]));
+  for (const c of cands) {
+    if (post.includes(c) || dropReason.has(c)) continue;
+    dropReason.set(c, c.refuted ? 'refuted' : `confidence below ${MIN_CONFIDENCE}`);
+  }
+  const findings = cands.map((c, i): CodeReviewFinding => {
+    const s = scores.get(i + 1);
+    return {
+      key: `${round}:${i + 1}`, round, sweep: c.sweep, file: c.finding.file, line: c.finding.line, severity: c.finding.severity, comment: c.finding.comment,
+      passes: c.passes, gotchas: c.finding.gotchas, credits: findingCredits(c.finding), verdict: c.verdict, confidence: c.scored ? c.score : null,
+      reason: s ? (s.verdict === 'refuted' ? s.refutation : s.reason) : null, kept: post.includes(c), dropped: post.includes(c) ? null : dropReason.get(c) ?? null, outcome: null,
+    };
+  });
+  return { findings, post };
 }
 
 /** How many of each severity. */

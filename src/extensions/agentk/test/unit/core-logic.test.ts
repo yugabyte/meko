@@ -645,6 +645,10 @@ function dropV52(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE workshop_tours');
 }
 
+function dropV53(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE cli_reviews');
+}
+
 /** Undoes migration 45 (What Meko doesn't know moved into Meko): puts back what 34 and 35 added, for tests that rewind the schema. */
 function dropV45(db: ReturnType<typeof openDb>) {
   for (const c of ['query TEXT', 'query_key TEXT', 'top_score REAL', 'top_raw REAL', 'quality TEXT']) db.exec(`ALTER TABLE meko_calls ADD COLUMN ${c}`);
@@ -810,8 +814,8 @@ const V11_COLUMNS = ['kind'];
  * changed no schema, and 44's and 46's columns go with 43's table).
  */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40, dropV41, dropV42, dropV43, () => {}, dropV45, () => {}, () => {}, dropV48, dropV49, dropV50, dropV51, dropV52];
-  for (let v = 52; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40, dropV41, dropV42, dropV43, () => {}, dropV45, () => {}, () => {}, dropV48, dropV49, dropV50, dropV51, dropV52, dropV53];
+  for (let v = 53; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
@@ -1022,22 +1026,44 @@ describe('github helpers', () => {
 });
 
 describe('Claude folder trust', () => {
-  it('trusts a folder once and recognizes trusted parents', async () => {
-    const { ensureWorkspaceTrust, isTrusted } = await import('../../src/server/trust.js');
-    const { writeFileSync, readFileSync, mkdtempSync: mk } = await import('node:fs');
+  it("trusts a folder by its own entry and its real path's, never a parent's, and marks the first-run setup done, keeping what's there", async () => {
+    const { ensureOnboarded, ensureWorkspaceTrust, isTrusted } = await import('../../src/server/trust.js');
+    const { writeFileSync, readFileSync, mkdirSync, symlinkSync, realpathSync, mkdtempSync: mk, existsSync: exists, rmSync: rm } = await import('node:fs');
     const dir = mk(join(tmpdir(), 'akl-trust-'));
     process.env.CLAUDE_CONFIG_DIR = dir;
-    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ projects: { '/home/u': { hasTrustDialogAccepted: true } }, other: 1 }));
-    expect(ensureWorkspaceTrust('/home/u/.agent-k-local/worktrees')).toBe('already');
-    expect(ensureWorkspaceTrust('/data/ak/worktrees')).toBe('added');
-    const cfg = JSON.parse(readFileSync(join(dir, '.claude.json'), 'utf8'));
-    expect(cfg.other).toBe(1);
-    expect(isTrusted('/data/ak/worktrees/p/s', cfg)).toBe(true);
-    expect(ensureWorkspaceTrust('/data/ak/worktrees')).toBe('already');
-    // Exact: a trusted parent doesn't count (Claude asks about a worktree it can't tie to its repo).
-    expect(isTrusted('/data/ak/worktrees/p/s', cfg, true)).toBe(false);
-    expect(ensureWorkspaceTrust('/data/ak/worktrees/p/s', true)).toBe('added');
-    expect(ensureWorkspaceTrust('/data/ak/worktrees/p/s', true)).toBe('already');
+    const file = join(dir, '.claude.json');
+    const read = () => JSON.parse(readFileSync(file, 'utf8')) as { other: number; hasCompletedOnboarding?: boolean; projects: Record<string, { hasTrustDialogAccepted?: boolean }> };
+    writeFileSync(file, JSON.stringify({ projects: { '/home/u': { hasTrustDialogAccepted: true }, '/home/u/code/old': { lastSessionId: 's1' } }, other: 1 }));
+    // A trusted parent doesn't count: Claude Code still asks about a git repo under it.
+    expect(isTrusted('/home/u/code/demo', read())).toBe(false);
+    expect(ensureWorkspaceTrust('/home/u/code/demo')).toBe('added');
+    expect(ensureWorkspaceTrust('/home/u/code/demo')).toBe('already');
+    // An entry Claude made keeps its fields, and so does the rest of the file.
+    expect(ensureWorkspaceTrust('/home/u/code/old')).toBe('added');
+    expect(read().other).toBe(1);
+    expect(read().projects['/home/u/code/demo']).toEqual({ hasTrustDialogAccepted: true });
+    expect(read().projects['/home/u/code/old']).toEqual({ lastSessionId: 's1', hasTrustDialogAccepted: true });
+    // Claude keys trust by the real path: a folder reached through a symlink gets both spellings.
+    const real = join(dir, 'real', 'demo');
+    mkdirSync(real, { recursive: true });
+    symlinkSync(join(dir, 'real'), join(dir, 'link'));
+    const linked = join(dir, 'link', 'demo');
+    expect(ensureWorkspaceTrust(linked)).toBe('added');
+    expect(read().projects[linked]).toEqual({ hasTrustDialogAccepted: true });
+    expect(read().projects[realpathSync(real)]).toEqual({ hasTrustDialogAccepted: true });
+    expect(ensureWorkspaceTrust(linked)).toBe('already');
+    // Claude Code's first-run setup, which signing in leaves to do, is marked done once, and only
+    // once the config shows a sign-in: signed out, its sign-in screen is what shows the session waits.
+    expect(ensureOnboarded()).toBe('signed-out');
+    expect(read().hasCompletedOnboarding).toBeUndefined();
+    writeFileSync(file, JSON.stringify({ ...read(), oauthAccount: { accountUuid: 'a1' } }));
+    expect(ensureOnboarded()).toBe('added');
+    expect(read()).toMatchObject({ hasCompletedOnboarding: true, other: 1 });
+    expect(ensureOnboarded()).toBe('already');
+    // Never a config of its own: with none, Claude Code has never run here.
+    rm(file);
+    expect(ensureOnboarded()).toBe('no-config');
+    expect(exists(file)).toBe(false);
   });
 });
 

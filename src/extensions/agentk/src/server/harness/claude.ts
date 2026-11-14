@@ -10,7 +10,7 @@ import { errMsg, type Logger } from '../log.js';
 import { claudePath, type Paths } from '../paths.js';
 import { toolsMcpConfigPath, toolsPluginDir } from '../tools.js';
 import type { SessionRow } from '../store.js';
-import { TRUST_PROMPT_RE, trustFolder } from '../trust.js';
+import { SETUP_PROMPT_RE, TRUST_PROMPT_RE, skipClaudeSetup, trustFolder } from '../trust.js';
 import { ingestSessionUsage, sessionTranscript } from '../usage.js';
 import type { CliStatus, Harness } from './types.js';
 
@@ -56,15 +56,18 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
       await deps.claudeCode.version();
     },
     async beforeLaunch({ row, repo, log }) {
-      // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
+      await skipClaudeSetup(log);
+      // Claude Code keys folder trust by the git root, which for a worktree is the main repo, and
+      // only the repo's own entry counts: a trusted home or repos folder doesn't.
       if (repo) await trustFolder(repo, log);
       // Started by its local spelling (claudePath), a worktree isn't tied back to its repo (its .git
       // file names the stored spelling), so Claude asks about the worktree itself: trust exactly it.
       const cwd = claudePath(row.worktree_path);
-      if (cwd !== row.worktree_path) await trustFolder(cwd, log, true);
+      if (cwd !== row.worktree_path) await trustFolder(cwd, log);
     },
     trustFolder,
     trustPrompt: TRUST_PROMPT_RE,
+    setupPrompt: SETUP_PROMPT_RE,
     async modDir(paths, cfg) {
       return modReady(paths, cfg) && (await deps.claudeCode.supportsMod()) ? modDirPath(paths) : null;
     },

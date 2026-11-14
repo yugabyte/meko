@@ -47,7 +47,10 @@ on them), which Meko's own schema number marks.
   A day's tokens by model hold at most 15 entries (`MODEL_LIMIT`; the schema allows 20): every model
   while there are no more, else the 14 most used and `other` for the rest, which leaves room for
   `codeReview` in the 7-day report with every count at its largest.
-- *Code reviews* (`codeReview`, optional): the `code_reviews` rows started on the day,
+- *Code reviews* (`codeReview`, optional): the `code_reviews` rows started on the day, and the runs
+  of `meko kode review` started then (`cli_reviews`, also counted on their own in `cli`, which is
+  optional in the schema since earlier releases don't send it; one counts a round when its passes
+  ran, and never a PR, fix or decline),
   counted by their state when the report is built (`done`, `failed`, `cancelled`, or `running` for
   one still under way, which a later report corrects, since days are sent again), with those done
   without a kept finding (`lgtm`), those whose PR prompt went, Open anyway included (`prs`), rounds
@@ -55,7 +58,9 @@ on them), which Meko's own schema number marks.
   passes raised (a round that ran and is still under way, or stopped, counts the ones its sweeps
   have raised so far; each candidate once), kept findings by severity, and the ones the task reported fixed
   or declined; and the tokens the review sessions (`kind = 'code-review'`) spent on the day, with
-  their price in whole cents (`usdCents`) and Kiro's credits when there were some. Left out of a day
+  their price in whole cents (`usdCents`) and Kiro's credits when there were some, plus what the
+  `meko kode review` runs started that day reported spending (their steps' tokens, and the cost
+  Claude Code gave). Left out of a day
   with neither. Nothing from a finding (its file, line or comment) is sent. There's no all-time
   total: the review is newer than the first report's 30 days.
 - *File types* are counts per file extension: files changed, lines added and deleted, from merged

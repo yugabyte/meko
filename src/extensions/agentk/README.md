@@ -87,6 +87,7 @@ Kode has no login. With Meko's remote access (the default over SSH), anyone who 
 | `meko kode ui` | Open Kode in your browser |
 | `meko kode status` | Show whether Kode is running, and its address |
 | `meko kode attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches) |
+| `meko kode review` | Review the change in this folder with Kode's code review, and print what it found |
 | `meko kode logs -f` | Follow the server log |
 
 [All commands](docs/install.md#commands)

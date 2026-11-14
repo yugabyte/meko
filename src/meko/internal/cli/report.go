@@ -76,8 +76,15 @@ func (r report) links(rows []linkRow) {
 
 // next prints the commands to run next, each with what it does: the first as the call to action
 // and the rest blue on a terminal, and what follows a " · " in what it does dim.
-func (r report) next(cmds [][2]string) {
-	fmt.Fprintf(r.w, "\nNext:\n")
+func (r report) next(cmds [][2]string) { r.nextUnder("Next:", cmds) }
+
+// nextInNewTerminal is next for an install that just put meko on the PATH in the shell's profile:
+// this terminal keeps its PATH, so the commands run in a new one.
+const nextInNewTerminal = "Next, in a new terminal:"
+
+// nextUnder is next under another title.
+func (r report) nextUnder(title string, cmds [][2]string) {
+	fmt.Fprintf(r.w, "\n%s\n", title)
 	cmdW := 0
 	for _, c := range cmds {
 		cmdW = max(cmdW, utf8.RuneCountInString(c[0]))

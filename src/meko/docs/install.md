@@ -81,7 +81,9 @@ safe.
   your PATH in ~/.bashrc? [Y/n]` and appends a commented `export PATH="$HOME/.local/bin:$PATH"` to
   `~/.zshrc`, or `~/.bashrc` (`~/.bash_profile` on macOS, whose Terminal opens login shells). For
   other shells, with no terminal, with `--non-interactive` or on "n", it names the line to add.
-  `meko uninstall` removes the line.
+  `meko uninstall` removes the line. The terminal the installer runs in keeps its PATH (a program
+  can't change its shell's), so once it adds the line, the summary's list of what to run next is
+  titled `Next, in a new terminal:`.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service. Before
   it writes anything (`app/current`, the commands, the data folder, the service), it runs the
@@ -607,8 +609,8 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   `<program> install --meko-url <url> --meko-key <client token>` on the terminal, with
   `--non-interactive` without one, and whatever followed `--` on the command line (Kode's
   `--agent claude|opencode|kiro`, `--install-deps`, `--no-install-deps`). Kode's install checks
-  its prerequisites (git, curl, a coding agent, Meko's setup for the agents; gh is offered, not
-  required) with the `deps.sh` its release carries, asking before it installs any, and sets up
+  its prerequisites (git, curl, a coding agent, Meko's setup for the agents; gh is optional and
+  not offered) with the `deps.sh` its release carries, asking before it installs any, and sets up
   its services. A Kode
   from before `--meko-url` is refused with a message, rather than failing on the flag. Then it
   registers the extension's `app/current/bin/<program>`. Uninstalls are

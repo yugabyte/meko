@@ -266,8 +266,9 @@ func TestInstallRowOffersThePath(t *testing.T) {
 			openTTY = func() (*os.File, error) { return os.OpenFile(term.Name(), os.O_RDWR, 0) }
 			defer func() { openTTY = old }()
 			done := make(chan struct{})
+			var added bool
 			go func() {
-				installRow(newReport(term), home+"/.local/bin", home, c.ask)
+				added = installRow(newReport(term), home+"/.local/bin", home, c.ask)
 				close(done)
 			}()
 			if c.typed != "" {
@@ -291,6 +292,10 @@ func TestInstallRowOffersThePath(t *testing.T) {
 			b, _ := os.ReadFile(profile) //nolint:gosec // G304: the test's own file
 			if want := c.added || c.shell == "/usr/bin/zsh"; strings.Contains(string(b), line) != want {
 				t.Errorf("%s holds %q, want the line: %v", profile, b, want)
+			}
+			// What install's Next list goes by: only a line it added means a new terminal.
+			if want := c.added || c.shell == "/usr/bin/zsh"; added != want {
+				t.Errorf("installRow returned %v, want %v", added, want)
 			}
 			if !c.ask && strings.Contains(out, "[Y/n]") {
 				t.Errorf("asked with ask false:\n%s", out)

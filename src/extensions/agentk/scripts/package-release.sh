@@ -21,7 +21,7 @@
 #     lib/node_modules/        production dependencies only
 #     lib/packaging/systemd/   service templates used by `meko kode install` (Linux)
 #     lib/packaging/launchd/   service templates used by `meko kode install` (macOS)
-#     lib/scripts/deps.sh      the prerequisites check `meko kode install` runs first (git, curl, a coding agent; gh offered)
+#     lib/scripts/deps.sh      the prerequisites check `meko kode install` runs first (git, curl, a coding agent; gh only with --install-deps)
 #     VERSION
 set -eu
 

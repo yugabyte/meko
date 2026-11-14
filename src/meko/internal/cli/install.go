@@ -118,6 +118,9 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 		return in.fail(*f)
 	}
 	probation := false
+	// Whether install just put meko on the PATH in the shell's profile: what it says to run next
+	// then goes in a new terminal.
+	newTerminal := false
 	if release {
 		// An upgrade with a service is on probation until it has run a while: a new version that
 		// keeps failing to start is rolled back, its database with it (serve, update.App.Started).
@@ -167,7 +170,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			return failed("Install", callhome.StepInstall, err)
 		}
 		exe = app.CurrentExe()
-		installRow(r, filepath.Dir(link), home, run.ask)
+		newTerminal = installRow(r, filepath.Dir(link), home, run.ask)
 	} else {
 		fmt.Fprintf(stdout, "Setting up this build of meko (%s). It isn't from a release, "+
 			"so it doesn't update itself\n", exe)
@@ -207,7 +210,11 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			r.step(stepOK, "Web UI", fmt.Sprintf("%s, in %s", webOffNote, homeRel(config.WebFile(l.Config), home)))
 		}
 		r.step(stepWarn, "Service", "none (--no-service): start Meko with meko start")
-		r.next([][2]string{
+		title := "Next:"
+		if newTerminal {
+			title = nextInNewTerminal
+		}
+		r.nextUnder(title, [][2]string{
 			{"meko start", "start Meko"},
 			{"meko status", "check on Meko at any time"},
 		})
@@ -277,7 +284,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 		verb = "restarted"
 	}
 	starting.Done(verb + " in " + seconds(time.Since(began)))
-	o := runningOptions{kind: nextInstall, verb: "installed", since: run.started}
+	o := runningOptions{kind: nextInstall, verb: "installed", since: run.started, newTerminal: newTerminal}
 	if run.from != "" {
 		o.verb = "upgraded"
 	}
