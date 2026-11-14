@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ModelUsage, ProjectUsageSummary, UsageOverview } from '../../shared/types';
+import type { MekoSaved, ModelUsage, ProjectUsageSummary, UsageOverview } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
-import { creditsNumber, cx, formatCostOf, modelLabel, relativeTime, repoFolder, rowTokens, totalTokens, usageTitle } from '../util';
+import { creditsNumber, cx, formatCostOf, mekoSavedText, modelLabel, relativeTime, repoFolder, rowTokens, totalTokens, usageTitle } from '../util';
 import { CodeReviewUsageSection } from './CodeReviewUsageSection';
-import { credited, MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
+import { MekoUsageSection, savedClass } from './MekoUsageSection';
 import { TopBar } from './TopBar';
 import { chartHeading, CostStat, CreditsCell, CreditsStat, DailyChart, DailyTable, SortHeader, Stat, TokenCells } from './UsagePanel';
 import { Busy } from './common';
@@ -31,20 +31,26 @@ const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string =>
     case 'meko':
       return p.meko.found;
     case 'saved': {
-      // No estimate sorts last; a tokens-only one (no known price) sorts by its tokens among $0.
-      const s = p.meko.savings;
-      return !credited(s) ? -Number.MAX_VALUE : (s.usd ?? 0) + s.tokens * 1e-12;
+      // No figure from Meko sorts last.
+      const m = p.meko.mekoSaved;
+      return m.searches + m.seeds === 0 ? -1 : m.tokens;
     }
     default:
       return p[k];
   }
 };
+/** A project's Tokens saved cell: Meko's figure (`mekoSavedText`), green for a saving, or a dash. */
+function SavedCell({ saved }: { saved: MekoSaved }) {
+  const t = mekoSavedText(saved);
+  return <td className={cx('num opt', savedClass(saved), t.num === '—' && 'muted')} title={t.title}>{t.num}</td>;
+}
+
 const modelValue = (m: ModelUsage, k: ModelKey): number | string =>
   k === 'model' ? modelLabel(m) : k === 'output' ? m.usage.output : k === 'credits' ? (m.usage.credits ?? 0) : totalTokens(m.usage);
 
 /**
  * Usage across every project, closed ones included: tokens and their cost by project, model and
- * day, Meko use and its estimated savings, and what shipped (merged PRs, and commits pushed
+ * day, Meko use and the tokens Meko says it saved, and what shipped (merged PRs, and commits pushed
  * straight to a base branch). `mekoConfigured`: Meko is on, so the Meko section shows before any call.
  */
 export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; mekoConfigured: boolean }) {
@@ -152,7 +158,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                           {projectHeader('cost', 'Cost', { className: 'num opt', title: "What the tokens would cost at Anthropic's API list prices" })}
                           {showCredits && projectHeader('credits', 'Credits', { className: 'num opt', title: "What Kiro billed for its sessions' turns" })}
                           {showMeko && projectHeader('meko', 'Meko', { className: 'num opt', title: 'Meko lookups that found something, of all lookups' })}
-                          {showMeko && projectHeader('saved', 'Est. saved', { className: 'num opt', title: 'Estimated from the Meko searches that found something and the seeds Kode passed at session start' })}
+                          {showMeko && projectHeader('saved', 'Tokens saved', { className: 'num opt', title: "As Meko figures it for its searches that found something: what sending the datapack's whole knowledge base would have cost, less what each search sent" })}
                         </tr>
                       </thead>
                       <tbody>
@@ -191,14 +197,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                             </td>
                             {showCredits && <td className="num opt">{p.usage.credits ? creditsNumber(p.usage.credits) : '—'}</td>}
                             {showMeko && <td className="num opt">{p.meko.lookups > 0 ? `${p.meko.found}/${p.meko.lookups}` : '—'}</td>}
-                            {showMeko && (
-                              <td
-                                className={cx('num opt', savedClass(p.meko.savings))}
-                                title={savedTitle(p.meko.savings)}
-                              >
-                                {savedText(p.meko.savings)}
-                              </td>
-                            )}
+                            {showMeko && <SavedCell saved={p.meko.mekoSaved} />}
                           </tr>
                         ))}
                       </tbody>

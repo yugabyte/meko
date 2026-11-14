@@ -166,7 +166,7 @@ describe('Meko client', () => {
         match_type: 'hybrid', metadata_filters: {} },
       { id: 'c2', chunk_text: 'No rerank score.', document_id: 'doc1', distance: 0.4, match_type: 'semantic', metadata_filters: {} },
     ] } });
-    const hits = await client.search('deploys', { id: 'd1', name: 'dp' }, 'agent', 'conv');
+    const { results: hits } = await client.search('deploys', { id: 'd1', name: 'dp' }, 'agent', 'conv');
     expect(hits.map((h) => [h.source, h.id, h.text, h.score])).toEqual([
       ['knowledge_base', 'c1', 'Deploys need two approvals.', 0.97],
       ['knowledge_base', 'c2', 'No rerank score.', 0.4],

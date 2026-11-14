@@ -150,8 +150,9 @@ carry     (X − R) × k       cache-read price
 ```
 
 The saving is the sum, in tokens and in USD at the calling model's price. A search (or seed) on a
-model with no known price counts in the tokens but not the dollars, and the Usage page's Est.
-saved cell says in its tooltip (`savedTitle`) how many searches and seeds were left out.
+model with no known price counts in the tokens but not the dollars. No page shows this estimate:
+the usage stats report carries it ([Usage stats](usage-stats.md)), and so does the workshop tour's
+Meko line (`sessionMekoLine`). The pages show what Meko itself says it saved (below).
 An index on `usage_messages(session_id, agent, at)` keeps counting *k* cheap. A result over 6,000
 tokens makes the content and carry terms negative, and they're kept. Session, project and overall
 figures are plain sums, so the pages agree. With a context of 216k, a 1,420-token result and 10
@@ -160,6 +161,26 @@ figure is much smaller than the token count. The estimate can't show that Meko d
 why it's labelled **Est.** A comparison of sessions with and without Meko finds was tried and
 dropped: too few sessions to compare, no chance deciding which sessions used Meko, and nothing to
 compare with once every session does.
+
+**What Meko says it saved.** Each `context_search` reply carries Meko's own estimate,
+`token_savings.tokens_saved`: the datapack's whole knowledge base (1,000 tokens a chunk, or 10,000
+with none) less what the search sent (1,000 a knowledge-base result, 200 a memory, 1,000 for past
+conversations), the figure Meko's own Overview sums as context efficiency (Meko's `docs/api.md`).
+Meko leaves `tokens_saved` out for a search that sent nothing. `classifyResult` reads it
+(`tokensSavedOf` in `mekousage.ts`) into `meko_calls.tokens_saved` for every agent's calls alike: 0
+when the reply has `token_savings` without it, NULL when the reply has none (`memory_search`,
+`knowledgebase_search`, an error, plain text). A reply too large for Claude reaches the transcript
+only as Claude Code's notice, so the transcript reader reads the reply Claude Code saved, for this
+figure only (`readSavedReplySync` in `savedreply.ts`): only a file in the session's own
+`<transcripts>/<claude session>/tool-results/` folder, checked after `realpath`, and up to 8 MB;
+the outcome and sizes still describe the notice. Kode's own search at start keeps the sum of the
+figures from the datapacks it searched in `meko_preloads.tokens_saved` (`MekoClient.search`,
+`searchDatapacks`), which counts once it passed something to Claude, as a seed does. `summarizeMeko`
+sums them into `MekoUsage.mekoSaved` (`tokens`, `searches`, `seeds`), over the context_search calls
+that found something and the seeds, and counts as `unreported` the found context_search calls and
+seeds whose reply gave no figure, since Kode started keeping it (kv `meko-saved-since`, set by the
+migration that added the columns, which read no transcript again: earlier calls have no figure and
+aren't counted). Session, project and overall figures are plain sums.
 
 **What shipped.** A merged PR is the session's `merged` event, or a Done session with a PR (Merge &
 Close only ends in Done after a merge), counted once per session. A push
@@ -255,13 +276,14 @@ Kiro isn't available.
   tokens. The rail tooltip shows the project total. The project home has a **Token usage**
   section: headline numbers with **Est. cost**, a 14-day chart with a table view, the Meko section,
   the Code Reviews section, and breakdowns by session (the most recently used first, with a **Meko** column, found / lookups,
-  when any session called Meko) and by model. **Usage** in the rail (and the command palette) opens `/usage`: totals with Est.
+  when any session called Meko, whose tooltip adds the tokens Meko says the session's searches saved,
+  `sessionMekoTitle`) and by model. **Usage** in the rail (and the command palette) opens `/usage`: totals with Est.
   cost, merged PRs and commits pushed straight to a base branch, a 14-day chart, the Meko and Code
   Reviews sections for every project, and breakdowns by project (current ones first, then deleted ones, which keep
   their sessions and usage, each group the most recently used first; each row shows its repo folder
-  and when it was last active, and has **Cost**, **Meko** and **Est. saved** columns, which a phone
-  leaves out; Est. saved is in USD, or tokens when no model had a price, green for a saving, and a
-  dash means no search found anything and no session was seeded) and by model. Every column header of the Usage page's tables, and of the project
+  and when it was last active, and has **Cost**, **Meko** and **Tokens saved** columns, which a phone
+  leaves out; Tokens saved is what Meko says the project's searches saved (`mekoSaved`, as the tile
+  has it), green for a saving, and a dash means no reply gave a figure yet) and by model. Every column header of the Usage page's tables, and of the project
   home's table by session, sorts its table; tapping it again reverses the order. The tables by session and by project show about 10 rows and scroll inside
   their box for the rest, as the project home's Recent activity does, with their header row kept
   in view (`.rows-scroll` in `styles.css`).
@@ -271,7 +293,9 @@ Kiro isn't available.
   more line, `Seeded ≈ 3.3k · Searched ≈ 12k`, or `Seeded none yet` before Kode's search at
   start has run in any of them; a dash before any first turn has ended; the
   tooltip says how many sessions the search at start ran in; `firstTurnText` in
-  `src/web/util.ts`) and tokens found, then two tiles for the [learn step](recall-and-learn.md#the-learn-step)
+  `src/web/util.ts`), tokens found, and **Tokens saved** (what Meko says the searches and the
+  search at start saved, `≈ 212k`, with a tooltip naming it Meko's figure, what counted and how many
+  replies gave none; a dash before any did; `mekoSavedText` in `src/web/util.ts`), then two tiles for the [learn step](recall-and-learn.md#the-learn-step)
   (`MekoLearning`, from `meko_learns` and the steps' own `usage_messages` rows; `learningText` in
   `src/web/util.ts`): **Learned**, the memories it saved, with `2 corrected · 3 steps` on the line
   under it and a tooltip that adds the facts found already known, the steps that didn't finish and

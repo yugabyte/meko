@@ -237,9 +237,9 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   its mod in Claude, it also answers the open questions that session found out, its own and other
   sessions'.
 - **Meko usage**: the Meko lookups and saves each session made, how many sessions had something
-  from Meko in their first turn, and what the learn step saved (memories added and corrected) and
-  the tokens it used, on the project home and the Usage page, whose table by project also estimates
-  what Meko searches saved. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
+  from Meko in their first turn, the tokens Meko says its searches saved, and what the learn step
+  saved (memories added and corrected) and the tokens it used, on the project home and the Usage
+  page, whose table by project shows each project's tokens saved too. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
   and when they reset, and once you've run a session on Kiro, the Kiro credits your plan has used.
 
 ## Ask Kode and the work queue

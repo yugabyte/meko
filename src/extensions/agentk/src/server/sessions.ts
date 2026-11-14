@@ -2821,7 +2821,7 @@ export class SessionManager {
       search: async (q) => {
         const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
         if (s.searched && s.failed === s.searched) throw s.error;
-        return s.results;
+        return { results: s.results, tokensSaved: s.tokensSaved };
       },
     });
     work.catch((e) => this.core.log.warn(`the Meko search at start failed for ${r.id}`, errMsg(e)));

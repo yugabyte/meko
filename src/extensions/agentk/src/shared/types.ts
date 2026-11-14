@@ -418,6 +418,24 @@ export interface MekoUsage {
   /** About how many tokens the calls sent to Meko (their input, characters ÷ 4). */
   sentTokens: number;
   savings: MekoSavings;
+  /** What Meko itself says the searches saved. */
+  mekoSaved: MekoSaved;
+}
+
+/**
+ * The tokens Meko says its searches saved: each context_search reply's `token_savings.tokens_saved`,
+ * the datapack's whole knowledge base (1,000 tokens a chunk, or 10,000 with none) less what the
+ * search sent. Only searches that found something, and Kode's search at start when it passed
+ * something to Claude, count.
+ */
+export interface MekoSaved {
+  tokens: number;
+  /** Searches whose reply gave a figure. */
+  searches: number;
+  /** Kode's searches at session start whose replies gave one. */
+  seeds: number;
+  /** Searches (and searches at start) since Kode kept the figure whose reply gave none: a reply too large to read, or an older Meko. */
+  unreported: number;
 }
 
 /**
@@ -479,7 +497,7 @@ export interface SessionUsage {
   stage: Stage;
   archived: boolean;
   usage: TokenUsage;
-  meko: { lookups: number; found: number; saves: number };
+  meko: { lookups: number; found: number; saves: number; mekoSaved: MekoSaved };
 }
 
 export interface DailyUsage {
@@ -2049,6 +2067,12 @@ export interface SearchResult {
   datapackName: string | null;
   /** The datapack's id, for a design to cite the item by. */
   datapackId?: string;
+}
+
+/** What a search of Meko found, and the tokens Meko says it saved (null when its reply gave no figure). */
+export interface MekoSearch {
+  results: SearchResult[];
+  tokensSaved: number | null;
 }
 
 export interface Settings {

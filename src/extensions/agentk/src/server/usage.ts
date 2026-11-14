@@ -13,6 +13,7 @@ import {
 } from './mekousage.js';
 import { parseKiroMekoCalls, type KiroTurn } from './kiro.js';
 import { parseOpenCodeMekoCalls, parseOpenCodeMessages } from './opencode.js';
+import { readSavedReplySync } from './savedreply.js';
 import type { SessionRow } from './store.js';
 
 export const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
@@ -194,6 +195,8 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
   const pending = new Map<string, PendingCall>(
     all<{ tool_use_id: string } & PendingCall>(db, 'SELECT tool_use_id, kind, tool FROM meko_calls WHERE session_id = ? AND outcome IS NULL', sessionId)
       .map((r) => [r.tool_use_id, { kind: r.kind, tool: r.tool }]));
+  // A reply too large for Claude is in a file of the session's own; only Meko's figure is read from it.
+  const saved = (notice: string) => readSavedReplySync(notice, mainTranscript);
   for (const { path, agent } of transcriptFiles(mainTranscript)) {
     const prev = get<{ offset: number }>(db, 'SELECT offset FROM usage_files WHERE session_id = ? AND path = ?', sessionId, path);
     let offset = prev?.offset ?? 0;
@@ -240,7 +243,7 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
             calls.push(c);
             pending.set(c.toolUseId, { kind: c.kind, tool: c.tool });
           }
-          for (const res of parseMekoResults(line, pending)) {
+          for (const res of parseMekoResults(line, pending, saved)) {
             results.push(res);
             pending.delete(res.toolUseId);
           }
@@ -289,8 +292,8 @@ export function recordMekoCalls(db: Db, sessionId: string, agent: string | null,
     if (Number(r.changes)) added.add(c.toolUseId);
   }
   for (const r of results) {
-    run(db, 'UPDATE meko_calls SET outcome = ?, results = ?, result_chars = ? WHERE session_id = ? AND tool_use_id = ?',
-      r.outcome, r.results, r.resultChars, sessionId, r.toolUseId);
+    run(db, 'UPDATE meko_calls SET outcome = ?, results = ?, result_chars = ?, tokens_saved = ? WHERE session_id = ? AND tool_use_id = ?',
+      r.outcome, r.results, r.resultChars, r.tokensSaved, sessionId, r.toolUseId);
   }
   return added;
 }
