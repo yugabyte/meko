@@ -49,6 +49,10 @@ var headingCases = []struct {
 	{"multi-line setext", "line one\nline two\n===\n", []string{"1:line one line two"}},
 	{"quote then heading", "> quote\n## H\n", []string{"2:H"}},
 	{"link definition then ===", "[a]: /url\n===\n", []string{"1:[a]: /url"}},
+	{"link definition then ---", "[a]: /url\n---\n", []string{"2:[a]: /url"}},
+	{"link definition in a setext heading", "[a]: /url\nfoo\n===\n", []string{"1:[a]: /url foo"}},
+	{"rule in a quote, then a setext heading", "> " + strings.TrimSpace(strings.Repeat("- ", 40)) + "\nTitle\n===\n",
+		[]string{"1:Title"}},
 	{"empty heading", "#\ntext\n# A\n", []string{"1:A"}},
 	{"list over a rule", "- item\n---\n", nil},
 	{"heading in a list item", "- # Title\n", nil},
@@ -97,6 +101,10 @@ func TestFrontMatter(t *testing.T) {
 		{"---\ntitle: \"Runbook\"\ntags:\n  - ops\n# a comment\n---\n# A\n", "Runbook", "# A\n"},
 		{"---\ntitle: x\n...\nbody", "x", "body"},
 		{"---\nSome prose here.\n---\n# A\n", "", "---\nSome prose here.\n---\n# A\n"}, // a rule over prose
+		{"---\nSteps to follow: install it\n---\n# A\n", "", "---\nSteps to follow: install it\n---\n# A\n"},
+		{"---\n  indented prose\n---\n# A\n", "", "---\n  indented prose\n---\n# A\n"},
+		{"---\nNote: read this first.\n---\n# A\n", "", "# A\n"}, // valid YAML, so taken
+		{"---\n\"my key\": x\nlist:\n  - a\n- b\n---\nbody", "", "body"},
 		{"---\ntitle: x\nno end", "", "---\ntitle: x\nno end"},
 		{"# no front matter\n", "", "# no front matter\n"},
 	} {
