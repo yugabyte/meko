@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	gmtext "github.com/yuin/goldmark/text"
 )
 
 // headingCases are Markdown snippets and the top-level headings CommonMark finds in them, as
@@ -51,6 +49,9 @@ var headingCases = []struct {
 	{"link definition then ===", "[a]: /url\n===\n", []string{"1:[a]: /url"}},
 	{"link definition then ---", "[a]: /url\n---\n", []string{"2:[a]: /url"}},
 	{"link definition in a setext heading", "[a]: /url\nfoo\n===\n", []string{"1:[a]: /url foo"}},
+	// commonmark.js starts an HTML block at a lone closing pre, script or style tag; goldmark
+	// doesn't, so the heading after it counts (accepted: found in no real file).
+	{"lone closing pre", "</pre>\n# H\n", []string{"1:H"}},
 	{"rule in a quote, then a setext heading", "> " + strings.TrimSpace(strings.Repeat("- ", 40)) + "\nTitle\n===\n",
 		[]string{"1:Title"}},
 	{"empty heading", "#\ntext\n# A\n", []string{"1:A"}},
@@ -96,6 +97,18 @@ func TestMarkdownSections(t *testing.T) {
 	}
 }
 
+// A section of only thematic breaks, such as a leading "---" that isn't front matter, makes no
+// chunk.
+func TestRuleOnlySection(t *testing.T) {
+	got, err := Chunks(context.Background(), "notes.md", []byte("---\n# Install\nRun make install.\n"))
+	if err != nil || len(got) != 1 || got[0] != "Document: notes\nSection: Install\n\nRun make install." {
+		t.Errorf("a leading rule: %q %v", got, err)
+	}
+	if got := sectionText("text\n---\n"); got != "text\n---\n" {
+		t.Errorf("a section with text and a rule: %q", got)
+	}
+}
+
 func TestFrontMatter(t *testing.T) {
 	for _, c := range []struct{ md, title, rest string }{
 		{"---\ntitle: \"Runbook\"\ntags:\n  - ops\n# a comment\n---\n# A\n", "Runbook", "# A\n"},
@@ -103,7 +116,9 @@ func TestFrontMatter(t *testing.T) {
 		{"---\nSome prose here.\n---\n# A\n", "", "---\nSome prose here.\n---\n# A\n"}, // a rule over prose
 		{"---\nSteps to follow: install it\n---\n# A\n", "", "---\nSteps to follow: install it\n---\n# A\n"},
 		{"---\n  indented prose\n---\n# A\n", "", "---\n  indented prose\n---\n# A\n"},
-		{"---\nNote: read this first.\n---\n# A\n", "", "# A\n"}, // valid YAML, so taken
+		{"---\nNote: read this first.\n---\n# A\n", "", "# A\n"},                            // valid YAML, so taken
+		{"---\ntitle: Notes\nDate Created: 2024-01-01\n---\n# Body\n", "Notes", "# Body\n"}, // Obsidian
+		{"---\nDate Created: 2024-01-01\n---\n# A\n", "", "---\nDate Created: 2024-01-01\n---\n# A\n"},
 		{"---\n\"my key\": x\nlist:\n  - a\n- b\n---\nbody", "", "body"},
 		{"---\ntitle: x\nno end", "", "---\ntitle: x\nno end"},
 		{"# no front matter\n", "", "# no front matter\n"},
@@ -154,8 +169,8 @@ func TestLimitNesting(t *testing.T) {
 	}
 }
 
-// A line paragraphOnly accepts can only be paragraph text; a window filled by one paragraph restarts
-// at such a line.
+// A line paragraphOnly accepts can only be paragraph text, so a quote of one paragraph restarts at
+// one after "> ".
 func TestParagraphOnly(t *testing.T) {
 	for line, want := range map[string]bool{
 		"plain text\n": true, "#tag": true, "####### seven": true, "*draft* line": true, "*a_": true,
@@ -168,12 +183,32 @@ func TestParagraphOnly(t *testing.T) {
 			t.Errorf("paragraphOnly(%q) = %v", line, got)
 		}
 	}
-	for _, unit := range []string{"*a_ word\n", "#x word\n", "-x\n=y\n``z\n"} {
-		md := strings.Repeat(unit, 1000)
-		src := []byte(md[:4096])
-		doc := mdParser.Parse(gmtext.NewReader(src))
-		if off, inPara := restartInside(doc.FirstChild(), src); off <= 0 || !inPara {
-			t.Errorf("a paragraph of %q has no restart point", unit)
+}
+
+// A paragraph or a code or HTML block bigger than a window never makes the window grow: it carries
+// a line into the next window instead, whatever its lines look like, and finds the same headings as
+// a whole-file parse.
+func TestMarkdownWindowStaysBounded(t *testing.T) {
+	const window = 1 << 10
+	shapes := map[string]string{
+		"paragraph of tags":           "<b>x</b>\n",
+		"paragraph of numbered lines": "2. x\n",
+		"paragraph of indented lines": "    x\n",
+		"paragraph of symbols":        "*a_\n#x\n-x\n",
+		"fenced code":                 "code line\n",
+		"html comment":                "text line\n",
+	}
+	heads := map[string]string{"fenced code": "```\n", "html comment": "<!--\n"}
+	for name, unit := range shapes {
+		md := "# A\npara\n" + heads[name] + strings.Repeat(unit, (64<<10)/len(unit)) + "\n# B\n===\n"
+		largest := 0
+		onParse = func(n int) { largest = max(largest, n) }
+		got, err := findHeadings(context.Background(), md, window)
+		onParse = nil
+		whole, _ := findHeadings(context.Background(), md, len(md)+1)
+		if err != nil || largest > window+64 || !reflect.DeepEqual(got, whole) {
+			t.Errorf("%s: largest parse %d bytes (window %d), headings %q, whole-file %q",
+				name, largest, window, headingStrings(got), headingStrings(whole))
 		}
 	}
 }
@@ -249,6 +284,7 @@ func FuzzMarkdownHeadings(f *testing.F) {
 	f.Add("- a\n- b\n\n  c\n- d\n# H\n", uint8(3))
 	f.Add("> a\n> b\nlazy\n> c\n## H\n", uint8(1))
 	f.Add(strings.Repeat("*a_\n#x\n-x\n=x\n``x\n", 8)+"===\n# A\n", uint8(2))
+	f.Add("para\n"+strings.Repeat("<b>x</b>\n2. x\n    x\n", 12)+"===\n# A\n", uint8(4))
 	f.Fuzz(func(t *testing.T, md string, w uint8) {
 		window := 8 + int(w)
 		whole, err := findHeadings(context.Background(), md, len(md)+1)

@@ -39,6 +39,9 @@ var (
 	// yamlKey is a front matter line that starts a key: a bare key without spaces, or a quoted one,
 	// then ':' and a space or the line's end. "Steps to follow: install it" isn't one.
 	yamlKey = regexp.MustCompile(`^(?:[^\s#:"'-][^\s:]*|"[^"]*"|'[^']*'):(?:[ \t].*)?$`)
+	// yamlSpacedKey is a key line whose bare key holds spaces ("Date Created: 2024-01-01"), which
+	// counts only in a block that also has a yamlKey: alone, it reads as a sentence.
+	yamlSpacedKey = regexp.MustCompile(`^[^\s#:"'-][^:]*[^\s:]:(?:[ \t].*)?$`)
 	// yamlMore is a front matter line that only follows a key: a list item or an indented
 	// continuation.
 	yamlMore = regexp.MustCompile(`^(?:[ \t]*-(?:[ \t].*)?|[ \t]+\S.*)$`)
@@ -68,25 +71,39 @@ func markdownSections(ctx context.Context, text string) (title string, sections 
 	var h headings
 	cur, prev := section{}, 0
 	for _, x := range hs {
-		cur.text = text[prev:x.start]
+		cur.text = sectionText(text[prev:x.start])
 		sections = append(sections, cur)
 		cur, prev = section{path: h.enter(x.level, x.text)}, x.end
 	}
-	cur.text = text[prev:]
+	cur.text = sectionText(text[prev:])
 	return title, append(sections, cur), nil
 }
 
+// sectionText is a section's text, or "" when it holds only thematic breaks and blank lines (a
+// leading "---" that isn't front matter), so it makes no chunk.
+func sectionText(text string) string {
+	for rest := text; rest != ""; {
+		line, after, _ := strings.Cut(rest, "\n")
+		if strings.TrimSpace(line) != "" && !isRule([]byte(line)) {
+			return text // stops at the first line of text, so a long section costs nothing
+		}
+		rest = after
+	}
+	return ""
+}
+
 // frontMatter takes a leading "---" block that reads as YAML off text, closed by "---" or "...",
-// and returns its title: comments, and key lines ("key: value", no spaces in a bare key) each
-// followed by any list items or indented lines. Anything else, such as a "---" rule over a sentence
-// or an indented line, is left as Markdown; a rule over a single "Note: read this first." line
-// is valid YAML, so it is taken.
+// and returns its title: comments, and key lines ("key: value") each followed by any list items or
+// indented lines. A key with spaces ("Date Created:", common in Obsidian notes) counts once the
+// block has a key without them ("title:"). Anything else, such as a "---" rule over a sentence
+// ("Steps to follow: install it") or an indented line, is left as Markdown; a rule over a single
+// "Note: read this first." line is valid YAML, so it is taken.
 func frontMatter(text string) (title, rest string) {
 	first, body, ok := strings.Cut(text, "\n")
 	if !ok || strings.TrimSpace(first) != "---" {
 		return "", text
 	}
-	sawKey := false
+	sawKey, plainKey, spacedKey := false, false, false
 	for off := 0; off < len(body); {
 		line, next := body[off:], len(body)
 		if i := strings.IndexByte(line, '\n'); i >= 0 {
@@ -94,6 +111,9 @@ func frontMatter(text string) (title, rest string) {
 		}
 		switch t := strings.TrimSpace(line); {
 		case t == "---" || t == "...":
+			if spacedKey && !plainKey {
+				return "", text
+			}
 			for _, l := range strings.Split(body[:off], "\n") {
 				if m := titleLine.FindStringSubmatch(l); m != nil {
 					title = strings.Trim(m[1], `"'`)
@@ -102,7 +122,9 @@ func frontMatter(text string) (title, rest string) {
 			return title, body[next:]
 		case t == "" || yamlComment.MatchString(line):
 		case yamlKey.MatchString(line):
-			sawKey = true
+			sawKey, plainKey = true, true
+		case yamlSpacedKey.MatchString(line):
+			sawKey, spacedKey = true, true
 		case !sawKey || !yamlMore.MatchString(line):
 			return "", text
 		}
@@ -111,17 +133,25 @@ func frontMatter(text string) (title, rest string) {
 	return "", text
 }
 
+// paragraphCarry is the line put before the next window when a paragraph fills a window: any
+// plain text keeps goldmark inside a paragraph, and a paragraph goes on the same way whatever its
+// text (no tables or link definitions are read).
+const paragraphCarry = "x\n"
+
+// onParse, when set (by tests), is told how many bytes each parse is given.
+var onParse func(n int)
+
 // findHeadings returns text's top-level headings, parsing window bytes at a time. Each window is
 // cut at a line end and parsed alone; its blocks are trusted up to the last one that a parse can
-// restart at, and the next window starts there. A window one block fills is restarted inside that
-// block: at its last list item or quoted block, or a line of its paragraph; for a code or HTML
-// block, the next window starts at the window's end, after the block's opening line again, which is
-// all goldmark needs to read on as that block. Otherwise the window doubles. It checks ctx before
-// each parse.
+// restart at, and the next window starts there. A code or HTML block still open at a window's end
+// carries its opening line into the next window, and a paragraph that fills a window carries a
+// line of plain text (paragraphCarry): that's all goldmark needs to read on as that block, so the
+// next window starts at this one's end. A list or quote that fills a window restarts at one of its
+// items. Otherwise the window doubles. It checks ctx before each parse.
 func findHeadings(ctx context.Context, text string, window int) ([]heading, error) {
 	var hs []heading
-	para := -1  // where the paragraph the last window was restarted inside starts, else -1
-	carry := "" // the opening line of the code or HTML block the last window ended inside
+	para := -1  // where the paragraph the last window ended inside starts, else -1
+	carry := "" // the line put before the window: a code or HTML block's opening, or paragraphCarry
 	for start := 0; start < len(text); {
 		for w := window; ; w *= 2 {
 			if err := ctx.Err(); err != nil {
@@ -138,6 +168,9 @@ func findHeadings(ctx context.Context, text string, window int) ([]heading, erro
 			src = append(append(src, carry...), text[start:end]...)
 			base := start - len(carry) // text's offset of src[0], as if carry were there
 			limitNesting(src)
+			if onParse != nil {
+				onParse(len(src))
+			}
 			var kids []ast.Node
 			for k := mdParser.Parse(gmtext.NewReader(src)).FirstChild(); k != nil; k = k.NextSibling() {
 				kids = append(kids, k)
@@ -163,18 +196,20 @@ func findHeadings(ctx context.Context, text string, window int) ([]heading, erro
 					keep, next = r, base+blockStart(kids[r], src)
 				case n != 1:
 					continue
+				case kids[0].Kind() == ast.KindParagraph && src[len(src)-1] == '\n':
+					if !openAtEnd(src, n) { // a blank line ended it
+						break
+					}
+					keep, nextCarry, nextPara = 0, paragraphCarry, base+blockStart(kids[0], src)
+					if carry == paragraphCarry {
+						nextPara = para // still the same paragraph
+					}
 				default:
-					off, inPara := restartInside(kids[0], src)
+					off := restartInside(kids[0], src)
 					if off <= 0 {
 						continue
 					}
 					keep, next = 0, base+off
-					if inPara {
-						nextPara = base + blockStart(kids[0], src)
-						if para >= 0 && nextPara == start {
-							nextPara = para // still the same paragraph
-						}
-					}
 				}
 			}
 			for i, k := range kids[:keep] {
@@ -183,7 +218,7 @@ func findHeadings(ctx context.Context, text string, window int) ([]heading, erro
 					continue
 				}
 				x := toHeading(h, src, base)
-				if i == 0 && para >= 0 && x.start == start && x.setext {
+				if i == 0 && para >= 0 && x.start == base && x.setext {
 					// The setext heading underlines the whole paragraph the last window ended in.
 					x.start, x.text = para, joinLines(text[para:x.textEnd(text)])
 				}
@@ -205,7 +240,8 @@ func isLeaf(n ast.Node) bool {
 	return false
 }
 
-// openAtEnd says whether the last of src's n blocks is still open after src's last line: parsed
+// openAtEnd says whether the last of src's n blocks is still open after src's last line (a code,
+// HTML or paragraph block that a blank line or its end marker hasn't closed): parsed
 // with a line of plain text after it, it takes that line in instead of ending before it.
 func openAtEnd(src []byte, n int) bool {
 	probe := make([]byte, 0, len(src)+2)
@@ -256,23 +292,15 @@ func restartAt(kids []ast.Node, src []byte) int {
 	return -1
 }
 
-// restartInside is where a parse can start inside a block that fills its window: the last of its
-// list items or quoted blocks, after the first, that opens on its first line; in a paragraph, its
-// last line, after the first, that can only be paragraph text (paragraphOnly); in a quote of one
-// paragraph, such a line after "> ". It's 0 when there's none.
-func restartInside(b ast.Node, src []byte) (off int, inPara bool) {
-	switch b.(type) {
-	case *ast.List, *ast.Blockquote:
+// restartInside is where a parse can start inside a list or quote that fills its window: the last
+// of its items or quoted blocks, after the first, that opens on its first line; in a quote of one
+// paragraph, a line after "> " that can only be paragraph text (paragraphOnly). It's 0 when there's
+// none.
+func restartInside(b ast.Node, src []byte) int {
+	if _, ok := b.(*ast.List); ok || b.Kind() == ast.KindBlockquote {
 		for c := b.LastChild(); c != nil && c != b.FirstChild(); c = c.PreviousSibling() {
 			if s := blockStart(c, src); s > 0 && opensOnFirstLine(c, src) {
-				return s, false
-			}
-		}
-	case *ast.Paragraph:
-		lines := b.Lines()
-		for i := lines.Len() - 1; i >= 1; i-- {
-			if s := lineStart(src, lines.At(i).Start); s > 0 && paragraphOnly(src[s:lineEnd(src, s)]) {
-				return s, true
+				return s
 			}
 		}
 	}
@@ -284,11 +312,11 @@ func restartInside(b ast.Node, src []byte) (off int, inPara bool) {
 			line := src[s:lineEnd(src, s)]
 			if t := bytes.TrimLeft(line, " "); s > 0 && len(line)-len(t) < 4 && len(t) > 1 && t[0] == '>' &&
 				paragraphOnly(bytes.TrimPrefix(t[1:], []byte(" "))) {
-				return s, false
+				return s
 			}
 		}
 	}
-	return 0, false
+	return 0
 }
 
 // paragraphOnly says whether a line can only be paragraph text, wherever a parse starts: at most 3
