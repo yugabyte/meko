@@ -137,7 +137,7 @@ type Syncer struct {
 	// minutes and 2 seconds.
 	Poll, Timeout, Retry time.Duration
 	// Upload posts the export to Meko Cloud's upload link; nil is an HTTP multipart POST.
-	Upload func(ctx context.Context, link string, fields map[string]string, file io.Reader) error
+	Upload func(ctx context.Context, link string, fields map[string]string, file io.Reader, size int64) error
 
 	mu   sync.Mutex
 	runs map[string]*Run
@@ -273,7 +273,7 @@ func (s *Syncer) sync(ctx context.Context, run *Run) {
 	s.mu.Lock()
 	run.Upload = Progress{Total: size}
 	s.mu.Unlock()
-	if err = upload(ctx, offer.Upload, offer.Fields, &progressReader{r: f, s: s, run: run}); err != nil {
+	if err = upload(ctx, offer.Upload, offer.Fields, &progressReader{r: f, s: s, run: run}, size); err != nil {
 		s.fail(ctx, run, offer.ImportID, shown("Uploading it to Meko Cloud failed.", err))
 		return
 	}
@@ -583,34 +583,34 @@ func (s *Syncer) warn(msg, id string, err error) {
 }
 
 // postFile posts the export to a presigned upload link: the fields first, then the file as "file",
-// as Meko Cloud's knowledge-base uploads take it.
-func postFile(ctx context.Context, link string, fields map[string]string, file io.Reader) error {
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
-	// Built before the writer starts: a request that can't be made leaves nothing blocked on the pipe.
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, link, pr)
+// as Meko Cloud's knowledge-base uploads take it. The body's length is sent up front: S3 answers a
+// chunked POST with 411 MissingContentLength, so the multipart head and tail are built first and the
+// file streams between them.
+func postFile(ctx context.Context, link string, fields map[string]string, file io.Reader, size int64) error {
+	var head, tail bytes.Buffer
+	mw := multipart.NewWriter(&head)
+	for k, v := range fields {
+		if err := mw.WriteField(k, v); err != nil {
+			return err
+		}
+	}
+	if _, err := mw.CreateFormFile("file", "datapack.zip"); err != nil {
+		return err
+	}
+	ctype := mw.FormDataContentType()
+	n := head.Len()
+	if err := mw.Close(); err != nil { // writes the closing boundary after the head; it's the tail
+		return err
+	}
+	tail.Write(head.Bytes()[n:])
+	head.Truncate(n)
+	body := io.MultiReader(&head, io.LimitReader(file, size), &tail)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, link, body)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	go func() {
-		werr := func() error {
-			for k, v := range fields {
-				if ferr := mw.WriteField(k, v); ferr != nil {
-					return ferr
-				}
-			}
-			part, perr := mw.CreateFormFile("file", "datapack.zip")
-			if perr != nil {
-				return perr
-			}
-			if _, perr = io.Copy(part, file); perr != nil {
-				return perr
-			}
-			return mw.Close()
-		}()
-		_ = pw.CloseWithError(werr)
-	}()
+	req.Header.Set("Content-Type", ctype)
+	req.ContentLength = int64(head.Len()) + size + int64(tail.Len())
 	res, err := http.DefaultClient.Do(req) //nolint:gosec // G107: the link Meko Cloud's import gave
 	if err != nil {
 		return err

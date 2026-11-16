@@ -106,7 +106,7 @@ func setup(t *testing.T) *harness {
 	h := &harness{e: testenv.Start(t, testenv.Options{}), cloud: newFakeCloud()}
 	h.s = &cloudsync.Syncer{Service: h.e.Service, Cloud: h.cloud, Version: "test", TempDir: t.TempDir(),
 		Poll: 5 * time.Millisecond, Timeout: 5 * time.Second, Retry: time.Millisecond,
-		Upload: func(_ context.Context, _ string, _ map[string]string, f io.Reader) error {
+		Upload: func(_ context.Context, _ string, _ map[string]string, f io.Reader, _ int64) error {
 			if h.fail != nil {
 				return h.fail
 			}
