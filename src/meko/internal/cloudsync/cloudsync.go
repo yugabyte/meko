@@ -325,6 +325,9 @@ func (s *Syncer) finish(ctx context.Context, run *Run, importID string) {
 			s.mu.Unlock()
 			return
 		case st.Status == cloudFailed:
+			if st.Step != "" {
+				s.phase(run, st.Step) // a failure between polls is shown in the step it happened in
+			}
 			msg := st.Error
 			if msg == "" {
 				msg = "Meko Cloud couldn't import it"

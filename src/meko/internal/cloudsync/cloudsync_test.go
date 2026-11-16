@@ -82,7 +82,11 @@ func (f *fakeCloud) Pass(_ context.Context, method, path string, body io.Reader,
 	case method == "GET" && path == "/datapacks/import/imp-1":
 		select {
 		case <-f.release:
-			return reply(200, map[string]any{"status": f.result, "web_url": "https://cloud.example/datapacks/x"}), nil
+			st := map[string]any{"status": f.result, "web_url": "https://cloud.example/datapacks/x"}
+			if f.result == "failed" {
+				st["step"] = "knowledge_files"
+			}
+			return reply(200, st), nil
 		default:
 			return reply(200, map[string]any{"status": "importing", "step": "knowledge_files"}), nil
 		}
@@ -265,6 +269,9 @@ func TestSyncThatFails(t *testing.T) {
 	}
 	if run := h.wait(t, h.e.DatapackID); run.State != cloudsync.StateFailed || !h.exists(t, h.e.DatapackID) {
 		t.Errorf("a failed import: %+v", run)
+	} else if n := len(run.Phases); n == 0 || run.Phases[n-1].Name != "knowledge_files" {
+		// Failed before a poll saw the step: still shown in Meko Cloud's step, not in the wait for it.
+		t.Errorf("a failed import's phases: %+v", run.Phases)
 	}
 	if _, err := h.e.Service.PutArtifact(context.Background(), h.e.DatapackID, "a", "n.txt", "text/plain",
 		[]byte("x")); err != nil {
