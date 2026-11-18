@@ -113,7 +113,8 @@ func cutRunes(text string, size, overlap int) []string {
 
 // packer packs pieces of text joined by sep into chunks of at most size characters, each starting
 // with the last pieces of the one before that fit in overlap. A piece is held as its place in
-// text, and a chunk is sliced out of text, so packing makes no string per piece and no copy.
+// text, and a chunk is sliced out of text, so packing makes no string per piece. The one copy is a
+// chunk whose pieces aren't consecutive in text (see chunk), one string per chunk, not per piece.
 // Chunks are trimmed, and blank ones dropped.
 type packer struct {
 	text, sep     string
@@ -174,7 +175,8 @@ func (p *packer) emit() {
 }
 
 // chunk is the pieces being packed, joined by sep. Pieces with just sep between them in text are
-// a slice of it. A CSV line whose trailing \r was trimmed isn't, and those pieces are joined.
+// a slice of it. A CSV line whose trailing \r was trimmed isn't, and those pieces are joined. That's
+// only a stray \r: extract turns \r\n into \n before packLines, so a CRLF file is sliced too.
 func (p *packer) chunk() string {
 	for i := 1; i < len(p.cur); i++ {
 		if p.cur[i-1].end+len(p.sep) != p.cur[i].start {

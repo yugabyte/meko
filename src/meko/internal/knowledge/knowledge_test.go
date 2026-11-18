@@ -262,10 +262,19 @@ func FuzzPackLines(f *testing.F) {
 // string per character: about 4.5 GB on a 50 MiB file, and on 1 MiB about 4,100 allocations and
 // 148 MB. Single characters between spaces or newlines did the same one level up: on 1 MiB about
 // 3,600 allocations and 71 MB. Packing by position takes a few dozen, whatever the pieces. The
-// chunks are checked against the reference on 64 KiB, since the reference is the slow splitter.
+// chunks are checked against the reference on 64 KiB, since the reference is the slow splitter. A
+// CRLF CSV goes through extract, which turns \r\n into \n, so its chunks are sliced, not joined.
 func TestSplitTextAllocs(t *testing.T) {
 	split := func(text string) []string { return splitText(text, ChunkSize, ChunkOverlap) }
 	refSplit := func(text string) []string { return refSplitText(text, ChunkSize, ChunkOverlap) }
+	csv := func(text string) []string {
+		chunks, err := extract(context.Background(), "a.csv", []byte(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return chunks
+	}
+	refCSV := func(text string) []string { return refPackLines(strings.ReplaceAll(text, "\r\n", "\n")) }
 	for _, c := range []struct {
 		name      string
 		unit      string // repeated to make the text
@@ -276,6 +285,7 @@ func TestSplitTextAllocs(t *testing.T) {
 		{"a character, then a newline", "[\n", split, refSplit},
 		{"short words", "abcd ", split, refSplit},
 		{"CSV of one-character lines", "[\n", packLines, refPackLines},
+		{"CRLF CSV of one-character lines", "[\r\n", csv, refCSV},
 	} {
 		text := func(size int) string { return strings.Repeat(c.unit, size/len(c.unit)) }
 		small := text(1 << 16)
