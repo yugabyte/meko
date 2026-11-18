@@ -39,71 +39,156 @@ func splitText(text string, size, overlap int) []string {
 	return splitWith(text, separators, size, overlap)
 }
 
+// splitWith cuts text at the first of seps it contains, packs the pieces that fit into chunks,
+// and cuts each piece longer than a chunk at the separators after that one. With no separator in
+// text, or "" reached, it cuts between characters (cutRunes). Pieces are found as it goes and held
+// by position, so no level makes a string per piece: text made of millions of tiny pieces took
+// gigabytes that way.
 func splitWith(text string, seps []string, size, overlap int) []string {
-	sep, rest := seps[len(seps)-1], []string(nil)
-	for i, s := range seps {
-		if s == "" || strings.Contains(text, s) {
-			sep, rest = s, seps[i+1:]
+	for i, sep := range seps {
+		if sep == "" {
 			break
 		}
-	}
-	var pieces []string
-	if sep == "" {
-		pieces = strings.Split(text, "")
-	} else {
-		pieces = strings.Split(text, sep)
-	}
-	var out, fit []string
-	for _, p := range pieces {
-		if runes(p) <= size {
-			fit = append(fit, p)
+		if !strings.Contains(text, sep) {
 			continue
 		}
-		out = append(out, merge(fit, sep, size, overlap)...)
-		fit = nil
-		if len(rest) == 0 {
-			out = append(out, p)
-		} else {
-			out = append(out, splitWith(p, rest, size, overlap)...)
-		}
+		rest := seps[i+1:]
+		p := newPacker(text, sep, size, overlap)
+		eachPiece(text, sep, func(start, end int) {
+			if n := runes(text[start:end]); n <= size {
+				p.add(start, end, n)
+				return
+			}
+			p.flush()
+			p.out = append(p.out, splitWith(text[start:end], rest, size, overlap)...)
+		})
+		p.flush()
+		return p.out
 	}
-	return append(out, merge(fit, sep, size, overlap)...)
+	return cutRunes(text, size, overlap)
 }
 
-// merge packs pieces joined by sep into chunks of at most size characters, each starting with the
-// last pieces of the one before that fit in overlap.
-func merge(pieces []string, sep string, size, overlap int) []string {
-	sepLen := runes(sep)
-	var out, cur []string
-	total := 0
-	emit := func() {
-		if c := strings.TrimSpace(strings.Join(cur, sep)); c != "" {
-			out = append(out, c)
+// eachPiece calls f with the start and end of each piece of text between seps, the pieces
+// strings.Split would make, without making them.
+func eachPiece(text, sep string, f func(start, end int)) {
+	for start := 0; ; {
+		i := strings.Index(text[start:], sep)
+		if i < 0 {
+			f(start, len(text))
+			return
 		}
+		f(start, start+i)
+		start += i + len(sep)
 	}
-	joined := func(n int) int { // what adding a piece of n characters costs
-		if len(cur) > 0 {
-			return n + sepLen
-		}
-		return n
-	}
-	for _, p := range pieces {
-		n := runes(p)
-		if total+joined(n) > size && len(cur) > 0 {
-			emit()
-			for total > 0 && (total > overlap || total+joined(n) > size) {
-				total -= runes(cur[0])
-				if len(cur) > 1 {
-					total -= sepLen
-				}
-				cur = cur[1:]
+}
+
+// cutRunes cuts text that has no separator into windows of size characters, each starting with
+// the last overlap characters of the one before (at most size-1), as packing it one character at a
+// time would. It slices the windows out of text instead of making a string per character, which
+// took gigabytes on a large file with no spaces or newlines. Windows are trimmed after they're
+// cut, so a chunk can lose some of its overlap, and blank ones are dropped. size must be at least
+// 1: a smaller one is taken as 1, where the old splitter kept every character, blank ones too.
+func cutRunes(text string, size, overlap int) []string {
+	size = max(size, 1)
+	step := size - min(max(overlap, 0), size-1) // characters from one window's start to the next's
+	var out []string
+	for start := 0; ; {
+		end, next := start, start
+		for i := 0; i < size && end < len(text); i++ {
+			_, w := utf8.DecodeRuneInString(text[end:])
+			end += w
+			if i+1 == step {
+				next = end
 			}
 		}
-		total += joined(n)
-		cur = append(cur, p)
+		if c := strings.TrimSpace(text[start:end]); c != "" {
+			out = append(out, c)
+		}
+		if end == len(text) { // this window reached the end: the next would only repeat its tail
+			return out
+		}
+		start = next
 	}
-	emit()
-	return out
+}
+
+// packer packs pieces of text joined by sep into chunks of at most size characters, each starting
+// with the last pieces of the one before that fit in overlap. A piece is held as its place in
+// text, and a chunk is sliced out of text, so packing makes no string per piece and no copy.
+// Chunks are trimmed, and blank ones dropped.
+type packer struct {
+	text, sep     string
+	sepLen        int // sep's length in characters
+	size, overlap int
+	cur           []span // the pieces of the chunk being filled, consecutive in text
+	total         int    // the chunk's length in characters, separators included
+	out           []string
+}
+
+// span is a piece of text: where it starts and ends, in bytes, and its length in characters.
+type span struct{ start, end, n int }
+
+func newPacker(text, sep string, size, overlap int) *packer {
+	return &packer{text: text, sep: sep, sepLen: runes(sep), size: size, overlap: overlap}
+}
+
+// joinCost is what joining a piece to a chunk of pieces costs: the separator, unless it's the first.
+func (p *packer) joinCost(pieces int) int {
+	if pieces > 0 {
+		return p.sepLen
+	}
+	return 0
+}
+
+// add adds text[start:end], of n characters. When it doesn't fit, the chunk is emitted and its
+// first pieces dropped until what's left fits in overlap and leaves room for the new piece.
+func (p *packer) add(start, end, n int) {
+	if len(p.cur) > 0 && p.total+n+p.joinCost(len(p.cur)) > p.size {
+		p.emit()
+		k := 0 // pieces dropped
+		for p.total > 0 && (p.total > p.overlap || p.total+n+p.joinCost(len(p.cur)-k) > p.size) {
+			p.total -= p.cur[k].n
+			if len(p.cur)-k > 1 {
+				p.total -= p.sepLen
+			}
+			k++
+		}
+		p.cur = p.cur[:copy(p.cur, p.cur[k:])] // reuse the buffer, so it grows only to one chunk
+	}
+	p.total += n + p.joinCost(len(p.cur))
+	p.cur = append(p.cur, span{start, end, n})
+}
+
+// flush emits the chunk being filled and starts packing afresh.
+func (p *packer) flush() {
+	p.emit()
+	p.cur, p.total = p.cur[:0], 0
+}
+
+func (p *packer) emit() {
+	if len(p.cur) == 0 {
+		return
+	}
+	if c := strings.TrimSpace(p.chunk()); c != "" {
+		p.out = append(p.out, c)
+	}
+}
+
+// chunk is the pieces being packed, joined by sep. Pieces with just sep between them in text are
+// a slice of it. A CSV line whose trailing \r was trimmed isn't, and those pieces are joined.
+func (p *packer) chunk() string {
+	for i := 1; i < len(p.cur); i++ {
+		if p.cur[i-1].end+len(p.sep) != p.cur[i].start {
+			var b strings.Builder
+			for j, s := range p.cur {
+				if j > 0 {
+					b.WriteString(p.sep)
+				}
+				b.WriteString(p.text[s.start:s.end])
+			}
+			return b.String()
+		}
+	}
+	return p.text[p.cur[0].start:p.cur[len(p.cur)-1].end]
 }
 
 func runes(s string) int { return utf8.RuneCountInString(s) }
@@ -112,22 +197,18 @@ func runes(s string) int { return utf8.RuneCountInString(s) }
 // ChunkOverlap, as Meko Cloud's line splitter does (the header isn't repeated). A line longer than
 // a chunk is split like text.
 func packLines(text string) []string {
-	var out, fit []string
-	flush := func() {
-		out = append(out, merge(fit, "\n", ChunkSize, ChunkOverlap)...)
-		fit = nil
-	}
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if runes(line) <= ChunkSize {
-			fit = append(fit, line)
-			continue
+	p := newPacker(text, "\n", ChunkSize, ChunkOverlap)
+	eachPiece(text, "\n", func(start, end int) {
+		line := strings.TrimRight(text[start:end], "\r")
+		if n := runes(line); n <= ChunkSize {
+			p.add(start, start+len(line), n)
+			return
 		}
-		flush()
-		out = append(out, splitText(line, ChunkSize, ChunkOverlap)...)
-	}
-	flush()
-	return out
+		p.flush()
+		p.out = append(p.out, splitText(line, ChunkSize, ChunkOverlap)...)
+	})
+	p.flush()
+	return p.out
 }
 
 // section is a run of a document's text under one heading path ("" for the text before the first
