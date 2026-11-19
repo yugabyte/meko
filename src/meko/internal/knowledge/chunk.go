@@ -120,9 +120,11 @@ type packer struct {
 	text, sep     string
 	sepLen        int // sep's length in characters
 	size, overlap int
-	cur           []span // the pieces of the chunk being filled, consecutive in text
-	total         int    // the chunk's length in characters, separators included
-	out           []string
+	// cur is the pieces of the chunk being filled, in order. They're sep apart in text unless
+	// packLines trimmed a \r, so a chunk can't always be sliced from the first to the last.
+	cur   []span
+	total int // the chunk's length in characters, separators included
+	out   []string
 }
 
 // span is a piece of text: where it starts and ends, in bytes, and its length in characters.
