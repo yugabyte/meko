@@ -2263,7 +2263,7 @@ export class SessionManager {
       this.contextFill.delete(id);
       this.forgetClaude(id, `${name} was stopped for sitting idle`);
       const idle = hours === 1 ? '1 hour' : `${hours} hours`;
-      this.setStatus(id, 'exited', `Stopped after ${idle} idle to free memory. Resume to pick up where it left off.`);
+      this.setStatus(id, 'exited', `Paused after ${idle} idle to free memory. Resume to pick up where it left off.`);
       this.event(id, 'idle-stopped', `${name} stopped after ${idle} idle`);
       this.core.log.info(`stopped ${id}'s ${name}: idle for ${idle}`);
     } finally {

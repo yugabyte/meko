@@ -1227,7 +1227,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
 
     await stopIdleIn(2 * HOUR);
     const stopped = env.core.sessions.get(s.id);
-    expect(stopped).toMatchObject({ status: 'exited', statusDetail: 'Stopped after 1 hour idle to free memory. Resume to pick up where it left off.' });
+    expect(stopped).toMatchObject({ status: 'exited', statusDetail: 'Paused after 1 hour idle to free memory. Resume to pick up where it left off.' });
     expect(stopped.idleStoppedAt).not.toBeNull();
     expect(await live()).toBe(false);
     expect(events(s.id).at(-1)).toEqual({ kind: 'idle-stopped', text: 'Claude stopped after 1 hour idle' });

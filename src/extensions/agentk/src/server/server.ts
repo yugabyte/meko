@@ -617,7 +617,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       throw new HttpError(400, `Days to keep an unused idle worktree must be a whole number from 0 to ${MAX_IDLE_DAYS}.`);
     }
     if (b.idleStopHours !== undefined && (!Number.isInteger(b.idleStopHours) || b.idleStopHours < 0 || b.idleStopHours > MAX_IDLE_STOP_HOURS)) {
-      throw new HttpError(400, `Hours before an idle agent is stopped must be a whole number from 0 to ${MAX_IDLE_STOP_HOURS}.`);
+      throw new HttpError(400, `Hours before an idle agent is paused must be a whole number from 0 to ${MAX_IDLE_STOP_HOURS}.`);
     }
     // eslint-disable-next-line no-control-regex
     if (b.serverName !== undefined && (typeof b.serverName !== 'string' || b.serverName.trim().length > 64 || /[\u0000-\u001f\u007f]/.test(b.serverName))) {

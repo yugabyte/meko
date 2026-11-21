@@ -78,13 +78,13 @@ describe('HTTP API: origin checks, projects', () => {
     expect((await put(good)).json()[key]).toEqual(good);
   });
 
-  it('stops idle agents after 24 hours until Settings changes it, as a whole number of hours from 0 to 720', async () => {
+  it('pauses idle agents after 24 hours until Settings changes it, as a whole number of hours from 0 to 720', async () => {
     const put = (idleStopHours: unknown) => app.inject({ method: 'PUT', url: '/api/settings', payload: { idleStopHours } });
     expect((await app.inject({ url: '/api/settings' })).json().idleStopHours).toBe(24);
     for (const bad of [-1, 721, 1.5, '4']) {
       const res = await put(bad);
       expect(res.statusCode).toBe(400);
-      expect(res.json().error).toBe('Hours before an idle agent is stopped must be a whole number from 0 to 720.');
+      expect(res.json().error).toBe('Hours before an idle agent is paused must be a whole number from 0 to 720.');
     }
     expect((await put(0)).json().idleStopHours).toBe(0);
     expect(env.core.config.sessions.idleStopHours).toBe(0);

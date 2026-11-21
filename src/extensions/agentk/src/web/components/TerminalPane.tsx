@@ -134,7 +134,7 @@ export function TerminalPane({ session, onAsk, onResume, mekoTo }: { session: Se
         )}
         {stopped && (
           <div className="term-overlay">
-            {agentName(session)} was stopped while idle, to free memory. Resume, or type here, to pick up where it left off.
+            {agentName(session)} was paused while idle, to free memory. Resume, or type here, to pick up where it left off.
             {onResume && (
               <button className="btn small primary" onClick={onResume}>
                 Resume

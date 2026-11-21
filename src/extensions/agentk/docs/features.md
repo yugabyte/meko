@@ -96,11 +96,11 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   worktrees when sessions end).
 - **Survives restarts:** after a host reboot, every open session is brought back with
   `claude --resume`, and sessions that were mid-turn are told to continue. A session whose agent
-  was stopped for sitting idle stays stopped until it's needed.
-- **Stops idle agents:** a session's agent idle for 24 hours is stopped to free its memory; the
-  session, its worktree and conversation stay. It starts again with `--resume` when you resume it,
-  type in its terminal, take an action that sends it a prompt, or Kode has work for it. Change
-  the hours, or turn it off with 0, in Settings › General.
+  was paused for sitting idle stays paused until it's needed.
+- **Pauses idle agents:** a session's agent idle for 24 hours is paused: its process is stopped to
+  free its memory, and the session, its worktree and conversation stay. It starts again with
+  `--resume` when you resume it, type in its terminal, take an action that sends it a prompt, or
+  Kode has work for it. Change the hours, or turn it off with 0, in Settings › General.
 
 ## Design, code review and PRs
 

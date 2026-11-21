@@ -209,9 +209,9 @@ comes back. **Auto-continue is on by default**, with guards:
 
 An idle agent spends no tokens but keeps its memory: measured on Linux, about 350–510 MB for each
 idle `claude`, plus its session-tools MCP server (#445). So Kode stops a session's agent once it
-has sat idle for `[sessions] idle_stop_hours` (24 by default; Settings › General; 0 never stops
-one), and starts it again with `--resume` when it's needed. The session keeps its stage, worktree,
-branch and conversation (`SessionManager.stopIdle`, `src/server/sessions.ts`, on Core's one-minute
+has sat idle for `[sessions] idle_stop_hours` (24 by default; Settings › General, "Pause idle agents
+after"; 0 never stops one), and starts it again with `--resume` when it's needed: the page calls
+this pausing it. The session keeps its stage, worktree, branch and conversation (`SessionManager.stopIdle`, `src/server/sessions.ts`, on Core's one-minute
 timer).
 
 - **Only what's truly idle.** The session is between turns (*idle* or *recovered*: never *needs
@@ -223,9 +223,10 @@ timer).
 - **The stop.** Its usage and transcript reach Meko first, as at an archive; the session is checked
   again (any activity meanwhile keeps it running); then `sessions.idle_stopped_at` is set and its
   pane killed, and the stop waits up to 5 s for that agent's `SessionEnd`, so a late one can't end
-  the agent a wake starts next. The status is *exited* with "Stopped after 24 hours idle…", an
+  the agent a wake starts next. The status is *exited* with "Paused after 24 hours idle…", an
   `idle-stopped` event is logged, and nobody is notified. The page shows a paused dot (a thin grey
-  ring with ‖ inside), ranked under idle, and the terminal says it was stopped, with **Resume**.
+  ring with ‖ inside), ranked under idle, and the terminal says it was paused while idle, with
+  **Resume**.
 - **Stopped stays stopped.** `recoverable()` leaves a session with `idle_stopped_at` out, so
   neither reconcile nor recovery after a host restart relaunches it (a plain kill would be back
   within 5 s). Any launch clears it.

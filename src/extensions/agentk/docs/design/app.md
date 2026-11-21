@@ -110,7 +110,7 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
-- **Agent stopped while idle:** Kode stopped the session's agent after `[sessions] idle_stop_hours`
+- **Agent paused while idle:** Kode stopped the session's agent after `[sessions] idle_stop_hours`
   idle to free its memory (`Session.idleStoppedAt`; [Stopping idle agents](recovery.md#stopping-idle-agents)).
   A thin grey ring with a pause sign (‖) inside, still: the rail ranks it under idle. Needs you shows over it while
   something only you can clear waits (`Session.waitsOnYou`). The terminal says so, with

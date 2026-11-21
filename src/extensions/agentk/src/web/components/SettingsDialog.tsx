@@ -537,11 +537,11 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
         </Field>
       </div>
       <Field
-        label="Stop idle agents after (hours)"
+        label="Pause idle agents after (hours)"
         info={{
           for: 'set-idle-stop-hours',
           text:
-            'A session’s agent idle this long is stopped to free its memory. The session, its worktree and its conversation stay, ' +
+            'A session’s agent idle this long is paused to free its memory. The session, its worktree and its conversation stay, ' +
             'and the agent starts again when you resume it, type in its terminal, or Kode needs it. 0 keeps agents running.',
         }}
       >

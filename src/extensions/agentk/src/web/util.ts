@@ -311,7 +311,7 @@ export const STATUS_TEXT: Record<DotState, string> = {
   queued: 'queued',
   background: 'running in the background',
   meko: 'calling Meko',
-  stopped: 'agent stopped while idle',
+  stopped: 'agent paused while idle',
 };
 
 /** What a session has running in the background, in words: each task's line, with how many more past three. */
