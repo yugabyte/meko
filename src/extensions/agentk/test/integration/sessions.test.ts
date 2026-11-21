@@ -1230,7 +1230,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(stopped).toMatchObject({ status: 'exited', statusDetail: 'Paused after 1 hour idle to free memory. Resume to pick up where it left off.' });
     expect(stopped.idleStoppedAt).not.toBeNull();
     expect(await live()).toBe(false);
-    expect(events(s.id).at(-1)).toEqual({ kind: 'idle-stopped', text: 'Claude stopped after 1 hour idle' });
+    expect(events(s.id).at(-1)).toEqual({ kind: 'idle-stopped', text: 'Claude paused after 1 hour idle' });
 
     // Neither reconcile nor a recovery after the host restarted brings it back.
     const launches = argvLog(env).length;

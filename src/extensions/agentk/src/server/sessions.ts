@@ -2261,10 +2261,10 @@ export class SessionManager {
       this.hookless.delete(id);
       this.awaitingStart.delete(id);
       this.contextFill.delete(id);
-      this.forgetClaude(id, `${name} was stopped for sitting idle`);
+      this.forgetClaude(id, `${name} was paused for sitting idle`);
       const idle = hours === 1 ? '1 hour' : `${hours} hours`;
       this.setStatus(id, 'exited', `Paused after ${idle} idle to free memory. Resume to pick up where it left off.`);
-      this.event(id, 'idle-stopped', `${name} stopped after ${idle} idle`);
+      this.event(id, 'idle-stopped', `${name} paused after ${idle} idle`);
       this.core.log.info(`stopped ${id}'s ${name}: idle for ${idle}`);
     } finally {
       this.idleStopping.delete(id);
@@ -2310,7 +2310,7 @@ export class SessionManager {
       }
       while (sessionRow(this.db, id)?.status === 'starting' && Date.now() < until) await sleep(100);
       const now = this.row(id);
-      if (now.status === 'starting') throw new HttpError(409, `${agentName(now)} is still starting again after it was stopped for sitting idle. Try again in a moment.`);
+      if (now.status === 'starting') throw new HttpError(409, `${agentName(now)} is still starting again after it was paused for sitting idle. Try again in a moment.`);
       if (now.status === 'exited') throw new HttpError(409, now.status_detail ?? `${agentName(now)} exited as it started again.`);
     })();
     this.waking.set(id, w);
