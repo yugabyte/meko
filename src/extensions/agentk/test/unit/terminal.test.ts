@@ -164,6 +164,40 @@ describe('terminal socket', () => {
     }
   });
 
+  it('sends the output before a size change ahead of it, so the browser never draws it at the new width', async () => {
+    // A host stream the test drives: output, then the pane's new size, as the host sends them.
+    let data: (d: Buffer) => void = () => {};
+    let control: (m: { type: 'size'; cols: number; rows: number; active: boolean }) => void = () => {};
+    const stream = {
+      onData: (f: typeof data) => (data = f),
+      onControl: (f: typeof control) => (control = f),
+      onClose: () => {},
+      write: () => {},
+      resize: () => {},
+      active: () => {},
+      pause: () => {},
+      resume: () => {},
+      close: () => {},
+    };
+    const core = Object.assign(coreFor(), { host: { attach: async () => stream } }) as unknown as Core;
+    const ws = fakeSocket();
+    attachTerminal(core, ws as unknown as WebSocket, 's1', { cols: '100', rows: '30' });
+    try {
+      await waitFor(() => ws.sent.length, (n) => n > 0);
+      // The stream is open once the screen message is out and the attach has resolved.
+      await new Promise((r) => setTimeout(r, 0));
+      data(Buffer.from('drawn at 100 columns'));
+      control({ type: 'size', cols: 80, rows: 30, active: true });
+      const order = ws.sent.map((m) => (m instanceof Buffer ? m.toString('utf8') : JSON.parse(String(m)).type));
+      expect(order.slice(-2)).toEqual(['drawn at 100 columns', 'size']);
+      // Nothing is left to go out after it.
+      await new Promise((r) => setTimeout(r, 40));
+      expect(ws.sent.at(-1)).toContain('"cols":80');
+    } finally {
+      ws.close();
+    }
+  });
+
   it('stops reading terminal output while the browser has a backlog, and resumes once it drains', async () => {
     await host.spawn('x', home, ['/bin/sh', '-c', 'yes']);
     const ws = fakeSocket();

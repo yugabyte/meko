@@ -6,7 +6,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { WebglAddon } from '@xterm/addon-webgl';
-import { MAX_PASTE_BYTES, SCREEN_IDLE_MS, type ScreenName, type ScreenState, type TermClientMessage, type TermServerMessage } from '../shared/types';
+import { MAX_PASTE_BYTES, SCREEN_IDLE_MS, TERM_SCROLLBACK, type ScreenName, type ScreenState, type TermClientMessage, type TermServerMessage } from '../shared/types';
 import { api, errorMessage, wsUrl } from './api';
 import { checkSignIn, WS_ABNORMAL, WS_UNAUTHORIZED } from './signin';
 import { copyText, decodeOsc52, pastedFiles, readClipboardImages } from './clipboard';
@@ -79,7 +79,7 @@ function storedFont(): number | null {
 }
 
 /**
- * Finger travel, in rows, per mouse-wheel step. When Claude Code runs full screen it takes the
+ * Finger travel, in rows, per mouse-wheel step. A program running full screen (OpenCode) takes the
  * mouse, gets the steps and decides how far each one scrolls; otherwise the terminal scrolls itself.
  */
 const SWIPE_ROWS = 2.5;
@@ -235,11 +235,11 @@ class SessionTerminal {
       lineHeight: 1.15,
       cursorBlink: true,
       allowProposedApi: true,
-      scrollback: 10000,
+      scrollback: TERM_SCROLLBACK,
       ...termOptions(currentTermTheme()),
       macOptionIsMeta: true,
-      // While Claude has the mouse, a plain drag goes to Claude; Shift-drag, or Option-drag on a
-      // Mac, selects in the browser instead.
+      // While a full-screen program (OpenCode) has the mouse, a plain drag goes to it; Shift-drag,
+      // or Option-drag on a Mac, selects in the browser instead.
       macOptionClickForcesSelection: true,
     });
     this.term.loadAddon(this.fit);
@@ -266,7 +266,7 @@ class SessionTerminal {
     });
     this.setTyping(false);
     // Capture, so a swipe is ours before xterm sees it.
-    // Not passive: in select mode a touch is prevented, so no tap reaches Claude as a mouse click.
+    // Not passive: in select mode a touch is prevented, so no tap reaches the program as a mouse click.
     this.el.addEventListener('touchstart', this.touchStart, { capture: true, passive: false });
     this.el.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
     this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: false });
@@ -715,6 +715,11 @@ class SessionTerminal {
     return this.conn === 'open' && this.ws?.readyState === WebSocket.OPEN && this.screen === 'here';
   }
 
+  /** Whether the session's output reaches this terminal, which then takes its size from the host. */
+  private get sizedByHost(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN && this.screen === 'here';
+  }
+
   /** Why typing can't reach Claude now; `kept`: the compose box keeps the message. */
   cantType(kept = false): string {
     if (this.conn === 'open' && this.screen !== 'here') return ELSEWHERE;
@@ -819,10 +824,16 @@ class SessionTerminal {
           return;
         }
         if (msg.type === 'size') {
-          // The session's size: this terminal's own while it's active, else another viewer's.
+          // The session's size: this terminal's own while it's active, else another viewer's. It
+          // comes in order with the output, and is applied in order with it too: writes are parsed
+          // later, so a resize done now would parse output drawn for the old width at the new one.
           this.active = msg.active;
-          if (msg.active) this.refit();
-          else if (this.term.cols !== msg.cols || this.term.rows !== msg.rows) this.term.resize(msg.cols, msg.rows);
+          this.term.write('', () => {
+            if (this.ws !== ws) return;
+            if (this.term.cols !== msg.cols || this.term.rows !== msg.rows) this.term.resize(msg.cols, msg.rows);
+            // The box may have changed since the size this answers was asked for.
+            if (msg.active) this.refit();
+          });
         } else if (msg.type === 'screen') this.setScreen(msg);
         else if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting', true);
         else if (msg.type === 'error') {
@@ -1130,7 +1141,7 @@ class SessionTerminal {
     this.flingFrame = 0;
   }
 
-  /** Sends wheel steps at most once a frame, together, so Claude redraws once for several. */
+  /** Sends wheel steps at most once a frame, together, so a full-screen program redraws once for several. */
   private queueSteps(steps: number) {
     if (!steps) return;
     this.pendingSteps += steps;
@@ -1264,8 +1275,11 @@ class SessionTerminal {
   refit() {
     const want = this.wantedSize();
     if (!want) return;
-    // Only the active terminal fits its box; another shows the session at its size.
-    if (this.active) {
+    // Only the active terminal fits its box; another shows the session at its size. While the
+    // session's output reaches it, it only asks, and takes the size when the host's answer comes
+    // (`size`): Claude Code's main-screen output moves the cursor by rows at its own width, and
+    // drawn at another one it leaves repeated and broken lines in the scrollback.
+    if (this.active && !this.sizedByHost) {
       try {
         this.fit.fit();
       } catch {

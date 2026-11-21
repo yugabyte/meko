@@ -260,7 +260,7 @@ agent choice and sign-in check:
 | | Claude Code | OpenCode | Kiro |
 |---|---|---|---|
 | Launch | `claude --settings … --session-id/--resume … [--model <model>] …` | `opencode --standalone [--session=<id>] [--prompt=<prompt>]` with `OPENCODE_CONFIG_CONTENT` (the session's `model` there: no `--model` in the TUI), and `OPENCODE_CLI_CONFIG_CONTENT` for session tabs off | `kiro-cli chat --agent agentk\|kode-trusted [--trust-tools=*] [--model <model>] [--resume-id <id>] [prompt]` |
-| Hooks | `run/hooks.json` via `--settings` | Kode's plugin, `run/opencode/kode-plugin-<hash>/` | the `kode` agent's inline hooks |
+| Hooks | `run/hooks.json` via `--settings` (with `"tui": "default"`: the main screen, so the terminal keeps its scrollback) | Kode's plugin, `run/opencode/kode-plugin-<hash>/` | the `kode` agent's inline hooks |
 | System prompt | `--append-system-prompt` | an `instructions` file written at each launch | printed by the context hook at every `agentSpawn` |
 | Design guard | JSON deny | the plugin throws the reason | `kiro-guard.sh`: exit 2, the reason on stderr |
 | Conversation id | chosen (`--session-id`) | OpenCode's, from the plugin's events | Kiro's, from its hooks' `session_id`, else its session store |

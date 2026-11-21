@@ -160,7 +160,12 @@ export function attachTerminal(
           flushTimer ??= setTimeout(flush, 16);
         });
         s.onControl((m) => {
-          if (stream === s && m.type === 'size') send({ type: 'size', cols: m.cols, rows: m.rows, active: m.active });
+          if (stream !== s || m.type !== 'size') return;
+          // The output before it first: the browser's terminal takes the new size as this comes,
+          // and output drawn at the old width would land at the new one.
+          if (flushTimer) clearTimeout(flushTimer);
+          flush();
+          send({ type: 'size', cols: m.cols, rows: m.rows, active: m.active });
         });
         s.onClose(() => {
           // A stream let go of because the session moved to another screen isn't the pane ending.

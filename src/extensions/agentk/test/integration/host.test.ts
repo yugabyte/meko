@@ -5,6 +5,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
+import xtermHeadless from '@xterm/headless';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLOSE_WAIT_MS, startHost, type HostHandle } from '../../src/server/host/host.js';
 import { MIN_PROTOCOL, type HostControl } from '../../src/server/host/protocol.js';
@@ -12,6 +13,8 @@ import { HostRequestError, NoHostError, SessionHost, type HostStream } from '../
 import { getPaths, type Paths } from '../../src/server/paths.js';
 import type { ServiceManager } from '../../src/server/service.js';
 import { tempDir, waitFor } from '../helpers.js';
+
+const { Terminal } = xtermHeadless;
 
 /** A viewer attached to a pane: everything it was sent, as text, and its size messages. */
 async function viewer(host: SessionHost, name: string, size: { cols?: number; rows?: number } = {}) {
@@ -182,6 +185,128 @@ describe('session host (real ptys)', () => {
     phone.stream.close();
     await waitFor(() => lastSize(desk), (s) => s?.active === true && s.cols === 120, 5000, 'desktop back');
   });
+
+  it('sends a screen copy larger than a frame in parts, once, while the program keeps printing', async () => {
+    // 10,000 wide rows of colored text with box characters: a copy of well over MAX_FRAME (8 MB).
+    const prog = `setTimeout(() => {
+      let s = '';
+      for (let i = 1; i <= 10100; i++) {
+        let row = 'wide ' + i + ' ';
+        for (let j = 0; j < 20; j++) row += '\\x1b[38;2;' + ((i * 7 + j) % 256) + ';' + (j * 6) + ';90m' + '─'.repeat(11);
+        s += row + '\\x1b[0m\\r\\n';
+      }
+      process.stdout.write(s + 'done-wide\\r\\n');
+      setInterval(() => process.stdout.write('tick\\r\\n'), 5);
+    }, 300);`;
+    await host.spawn('ak-wide', home, [process.execPath, '-e', prog]);
+    const sizer = await viewer(host, 'ak-wide', { cols: 500, rows: 50 });
+    streams.push(sizer.stream);
+    await waitFor(() => host.capture('ak-wide'), (t) => t.includes('tick'), 30_000, 'rows printed');
+
+    const v = await viewer(host, 'ak-wide');
+    streams.push(v.stream);
+    await waitFor(() => v.out, (o) => o.includes('done-wide') && o.lastIndexOf('tick') > o.indexOf('done-wide'), 30_000, 'screen copy, then output');
+    expect(Buffer.byteLength(v.out)).toBeGreaterThan(8 * 1024 * 1024);
+    // Row 101 of 10,100: the host keeps as many lines as the browser (TERM_SCROLLBACK), past the
+    // 5,000 it used to, and sends a new viewer all of them.
+    expect(v.out).toContain('wide 101 ');
+    // Live output follows the copy instead of making the host send it again and again.
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(v.closed).toBe(false);
+    expect(v.out.split('\x1bc').length - 1).toBe(1);
+  }, 60_000);
+
+  it('shows a viewer that attaches while the host is still behind each line once', async () => {
+    // A burst the host's terminal takes a while to parse, then a line every millisecond: a viewer
+    // attached meanwhile gets lines held for it while the copy waits for the parser.
+    const prog = `let n = 0;
+      const line = () => 'line ' + ++n + ' ' + 'x'.repeat(40) + '\\r\\n';
+      let s = '';
+      for (let i = 0; i < 60000; i++) s += line();
+      process.stdout.write(s);
+      setInterval(() => process.stdout.write(line()), 1);
+      setTimeout(() => process.stdout.write('done-lines\\r\\n'), 1500);`;
+    await host.spawn('ak-busy', home, [process.execPath, '-e', prog]);
+    // A first viewer hears the burst start, as the host's terminal gets it to parse.
+    const first = await viewer(host, 'ak-busy', { cols: 80, rows: 24 });
+    streams.push(first.stream);
+    await waitFor(() => first.out, (o) => o.includes('line 1 '), 10_000, 'output started');
+    const v = await viewer(host, 'ak-busy', { cols: 80, rows: 24 });
+    streams.push(v.stream);
+    await waitFor(() => v.out, (o) => o.includes('done-lines'), 30_000, 'screen copy, then output');
+    // Played into a terminal as the browser's would be, every line shows once.
+    const term = new Terminal({ cols: 80, rows: 24, scrollback: 100_000, allowProposedApi: true });
+    await new Promise<void>((r) => term.write(v.out, r));
+    const b = term.buffer.active;
+    const seen = new Map<string, number>();
+    for (let y = 0; y < b.length; y++) {
+      const m = /^line (\d+) /.exec(b.getLine(y)?.translateToString(true) ?? '');
+      if (m) seen.set(m[1], (seen.get(m[1]) ?? 0) + 1);
+    }
+    term.dispose();
+    expect(seen.size).toBeGreaterThan(1000);
+    expect([...seen].filter(([, c]) => c > 1).map(([n]) => n)).toEqual([]);
+  }, 60_000);
+
+  it('lays out output in its copy at the width it was drawn for, when the size changes with output not parsed yet', async () => {
+    // Lines that end at the last column (CSI 999 C): drawn at 80 columns and reflowed to 40, such
+    // a line takes two rows; parsed at 40, it takes one.
+    const prog = `let n = 0;
+      const timer = setInterval(() => {
+        let s = '';
+        for (let i = 0; i < 5; i++) s += 'L' + ++n + '\\x1b[999C|\\r\\n';
+        process.stdout.write(s);
+        if (n >= 3000) {
+          clearInterval(timer);
+          process.stdout.write('done-lines\\r\\n');
+          setInterval(() => {}, 1000);
+        }
+      }, 2);`;
+    await host.spawn('ak-reflow', home, [process.execPath, '-e', prog]);
+    const sizer = await viewer(host, 'ak-reflow', { cols: 80, rows: 24 });
+    streams.push(sizer.stream);
+    await waitFor(() => sizer.out, (o) => o.includes('L500'), 20_000, 'lines started');
+    // The lines the host passed on ahead of the size are the ones it had before resizing.
+    let before = '';
+    sizer.stream.onControl((m) => {
+      if (m.type === 'size' && m.cols === 40 && !before) before = sizer.out;
+    });
+    // This process runs the host too: blocked, it leaves output waiting on the pty, then reads it
+    // and the resize in one go, with the output written to its terminal but not parsed yet.
+    const block = (ms: number) => {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {
+        /* busy */
+      }
+    };
+    block(100);
+    sizer.stream.resize(40, 24);
+    block(100);
+    await waitFor(() => before, (b) => !!b, 10_000, 'new size');
+    const last = Math.max(...[...before.matchAll(/L(\d+)/g)].map((m) => Number(m[1])));
+    await waitFor(() => host.capture('ak-reflow'), (t) => t.includes('done-lines'), 30_000, 'lines printed');
+    const v = await viewer(host, 'ak-reflow');
+    streams.push(v.stream);
+    await waitFor(() => v.out, (o) => o.includes('done-lines'), 30_000, 'screen copy');
+    const term = new Terminal({ cols: 40, rows: 24, scrollback: 20_000, allowProposedApi: true });
+    await new Promise<void>((r) => term.write(v.out, r));
+    const b = term.buffer.active;
+    let seen = 0;
+    const wrong: number[] = [];
+    for (let y = 0; y < b.length; y++) {
+      const row = b.getLine(y)?.translateToString(true) ?? '';
+      const m = /^L(\d+)/.exec(row);
+      if (!m) continue;
+      const n = Number(m[1]);
+      seen++;
+      // The line cut by the resize may be either. Before it: two rows, the | on the second. After: one.
+      if (n === last) continue;
+      if (row.endsWith('|') !== n > last) wrong.push(n);
+    }
+    term.dispose();
+    expect(seen).toBe(3000);
+    expect(wrong.slice(0, 5)).toEqual([]);
+  }, 90_000);
 
   it("never makes the program wait on a viewer that stopped reading, and sends it the screen afresh once it reads again", async () => {
     await host.spawn('ak-yes', home, ['/bin/sh', '-c', 'yes']);
