@@ -1386,8 +1386,11 @@ export class SessionManager {
     if (opts.prompt) this.launchPrompt.add(row.id);
     else this.launchPrompt.delete(row.id);
     try {
-      // The program's color queries get the terminal colors it starts with.
-      await this.core.host.spawn(row.tmux_name, claudePath(row.worktree_path), ['/bin/sh', script], TERM_COLORS[termTheme]);
+      // The program's color queries get the terminal colors it starts with. It starts at the size its
+      // screen last asked for: narrowed once Claude has drawn, its first rows would repeat (TermSizes).
+      // A new pane without one takes the latest any screen asked for, likely from this browser; a
+      // relaunched one keeps its last size.
+      await this.core.host.spawn(row.tmux_name, claudePath(row.worktree_path), ['/bin/sh', script], TERM_COLORS[termTheme], this.core.termSizes.for(row.id, !pane));
     } catch (e) {
       this.awaitingStart.delete(row.id);
       throw e;

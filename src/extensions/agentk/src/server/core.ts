@@ -59,6 +59,7 @@ import { CallHomeService } from './callhome.js';
 import { ClaudeCode } from './claudecode.js';
 import { GhService, ghNeededMessage } from './ghstatus.js';
 import { SessionHost } from './hostclient.js';
+import { TermSizes } from './terminal.js';
 import { legacyTmuxPanes } from './legacytmux.js';
 import { servicesFor, type ServiceManager } from './service.js';
 import { ZERO_USAGE, addUsage } from './usage.js';
@@ -156,6 +157,8 @@ export class Core extends EventEmitter {
   readonly meko: MekoClient;
   readonly capture: TranscriptCapture;
   readonly host: SessionHost;
+  /** The size browser terminals last asked for, which a session's pane starts at. */
+  readonly termSizes = new TermSizes();
   readonly services: () => ServiceManager | null;
   readonly legacyTmuxPanes: () => Promise<Set<string>>;
   readonly log: Logger;

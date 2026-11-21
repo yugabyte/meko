@@ -104,7 +104,16 @@ server sends the output it's holding before passing that answer on. The host's o
 screen and the browser's terminal each apply a size behind the output written to them before it,
 since both parse what they're given later: Claude Code's main-screen
 output moves the cursor by rows at the pty's width, and drawn at another width it leaves repeated
-or broken lines in the scrollback for good. Any input counts as use, mouse and focus reports included, since programs turn them on: Claude Code
+or broken lines in the scrollback for good. A pane starts at the size the screen that had its
+session last asked for (`TermSizes` in `src/server/terminal.ts`, kept in memory). Without one, a
+new pane starts at the latest size any screen asked for, a screen waiting for a session held
+elsewhere included. That is usually the browser that started the session, but it can be another
+device that opened or resized a terminal since. Only before any screen asked does a new pane
+start at the host's 200×50. A relaunched pane keeps its last size. That way, the browser that
+attaches next doesn't narrow the pane once Claude has drawn. On a narrower terminal, xterm
+reflows the wider rows into more rows, pushing the screen's top rows into the scrollback, and
+Claude's redraw after a resize then reprints the last screenful, those rows included, so they
+show twice (the logo at the top of a new session, two or three times). Any input counts as use, mouse and focus reports included, since programs turn them on: Claude Code
 focus reports, and a full-screen program such as OpenCode mouse reports too.
 
 **One screen per session.** Two browsers taking a session's size from each other made the pane

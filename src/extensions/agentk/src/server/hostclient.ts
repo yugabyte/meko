@@ -182,11 +182,12 @@ export class SessionHost {
 
   /**
    * Starts `argv` in pane `name` (new, or in place of a dead one). Refused while the pane is live.
-   * `colors` answer the program's color queries (OSC 10/11).
+   * `colors` answer the program's color queries (OSC 10/11). `size` is the one a new pane starts at,
+   * or one with no viewer (the active viewer's wins); without it, the pane's last or the host's default.
    */
-  async spawn(name: string, cwd: string, argv: string[], colors?: TermColors): Promise<void> {
+  async spawn(name: string, cwd: string, argv: string[], colors?: TermColors, size?: { cols: number; rows: number }): Promise<void> {
     await this.ensureServer();
-    await this.request({ op: 'spawn', name, cwd, argv, ...(colors ? { colors } : {}) });
+    await this.request({ op: 'spawn', name, cwd, argv, ...(colors ? { colors } : {}), ...(size ? { cols: size.cols, rows: size.rows } : {}) });
   }
 
   async kill(name: string): Promise<void> {

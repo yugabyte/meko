@@ -17,6 +17,49 @@ const sizeOf = (v: unknown, clamp: (n: number) => number): number | undefined =>
 /** Page and browser ids from the socket URL: short and plain, or none. */
 const idOf = (v: unknown): string => (typeof v === 'string' && /^[\w-]{1,64}$/.test(v) ? v : '');
 
+/** Sessions whose last asked-for size `TermSizes` keeps, the oldest dropped first. */
+const SIZES_KEPT = 500;
+
+export interface TermSize {
+  cols: number;
+  rows: number;
+}
+
+/**
+ * The size the screen that has a session last asked for, per session, and the latest any screen
+ * asked for, a screen waiting for a session held elsewhere included: the size a session's pane
+ * starts at (`SessionManager.launch`), so the browser that then attaches doesn't resize it. A pane
+ * started at another size and narrowed once Claude has drawn leaves rows repeated in the
+ * scrollback: Claude's main-screen redraw reprints the last screenful, and xterm has already
+ * reflowed the wider rows into more, pushing the top ones into the scrollback. Kept in memory
+ * only: after a server restart the browsers' reconnects tell it again.
+ */
+export class TermSizes {
+  private readonly bySession = new Map<string, TermSize>();
+  private latest: TermSize | null = null;
+
+  /** The screen that has the session asked for `size`. */
+  asked(sessionId: string, size: TermSize): void {
+    this.bySession.delete(sessionId);
+    this.bySession.set(sessionId, size);
+    if (this.bySession.size > SIZES_KEPT) this.bySession.delete(this.bySession.keys().next().value!);
+    this.latest = size;
+  }
+
+  /** A screen that doesn't have its session asked for `size`: the latest, for panes not started yet. */
+  seen(size: TermSize): void {
+    this.latest = size;
+  }
+
+  /**
+   * The session's own size; for a pane the host doesn't have yet (`newPane`), else the latest any
+   * screen asked for. None leaves the host its choice: a relaunched pane's last size, or its default.
+   */
+  for(sessionId: string, newPane: boolean): TermSize | undefined {
+    return this.bySession.get(sessionId) ?? (newPane ? this.latest ?? undefined : undefined);
+  }
+}
+
 /** A number per terminal socket, so the log tells screens of one session apart. */
 let viewerCount = 0;
 
@@ -102,6 +145,15 @@ export function attachTerminal(
   // The size this browser last asked for: the pane takes it while this screen has the session.
   let cols = sizeOf(query.cols, clampCols);
   let rows = sizeOf(query.rows, clampRows);
+  /**
+   * While this screen has the session, its size is the one the session's pane starts at next; any
+   * screen's is the latest, which a session not started yet takes.
+   */
+  const keepSize = () => {
+    if (!cols || !rows) return;
+    if (here) core.termSizes.asked(sessionId, { cols, rows });
+    else core.termSizes.seen({ cols, rows });
+  };
 
   const flush = () => {
     flushTimer = null;
@@ -197,6 +249,7 @@ export function attachTerminal(
       send({ type: 'screen', ...state });
       if (state.state === 'here' && !here) {
         here = true;
+        keepSize();
         startStream();
       } else if (state.state !== 'here' && here) {
         here = false;
@@ -221,6 +274,7 @@ export function attachTerminal(
       if (!Number.isFinite(m.cols) || !Number.isFinite(m.rows)) return;
       cols = clampCols(m.cols);
       rows = clampRows(m.rows);
+      keepSize();
     }
     // Only the screen that has the session reaches Claude; another one's size is kept for later.
     if (!here) return;
@@ -265,4 +319,6 @@ export function attachTerminal(
   reportTheme(query.theme);
   // A page from before screens (no id) always asks, as every viewer used to take the session.
   b.join(screen, query.claim === '1' || !idOf(query.screen));
+  // A screen that didn't get the session still tells the size this browser shows sessions at.
+  if (!here) keepSize();
 }

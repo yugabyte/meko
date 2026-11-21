@@ -174,6 +174,29 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(env.core.state().projects[0].usage.messages).toBe(2); // archived sessions still count
   });
 
+  it("starts a session's pane at the size its browser asked for, else the latest any browser asked for", async () => {
+    const p = await newProject();
+    // A browser showing the new session asked before Claude started (its id is the project's and the name's).
+    env.core.termSizes.asked('demo-repo--sized', { cols: 61, rows: 33 });
+    env.core.termSizes.asked('elsewhere', { cols: 57, rows: 32 });
+    const own = await env.core.sessions.create(p.id, { name: 'Sized', prompt: 'hi', kind: 'quick' });
+    const other = await env.core.sessions.create(p.id, { name: 'Unsized', prompt: 'hi', kind: 'quick' });
+    expect(own.id).toBe('demo-repo--sized');
+    await waitFor(() => env.core.host.panes(), (m) => m.has(own.paneName) && m.has(other.paneName), 10000, 'both panes');
+    // A viewer with no size of its own watches without resizing, and is told the pane's (frames wait for both listeners).
+    const sizeOf = async (pane: string) => {
+      const s = await env.core.host.attach(pane);
+      try {
+        s.onData(() => {});
+        return await new Promise((resolve) => s.onControl((m) => m.type === 'size' && resolve({ cols: m.cols, rows: m.rows })));
+      } finally {
+        s.close();
+      }
+    };
+    expect(await sizeOf(own.paneName)).toEqual({ cols: 61, rows: 33 });
+    expect(await sizeOf(other.paneName)).toEqual({ cols: 57, rows: 32 });
+  });
+
   it("keeps what Claude's turn left running in the background until the next Stop, or Claude's exit", async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Background', prompt: 'run the tests BACKGROUND', kind: 'quick' });

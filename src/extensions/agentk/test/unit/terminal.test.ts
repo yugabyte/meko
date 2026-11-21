@@ -7,7 +7,7 @@ import type { Core } from '../../src/server/core.js';
 import { startHost, type HostHandle } from '../../src/server/host/host.js';
 import { SessionHost } from '../../src/server/hostclient.js';
 import { getPaths } from '../../src/server/paths.js';
-import { attachTerminal } from '../../src/server/terminal.js';
+import { attachTerminal, TermSizes } from '../../src/server/terminal.js';
 import { tempDir, testLockDeps, waitFor } from '../helpers.js';
 
 /** A socket stand-in: records what the server sends, and lets the test play the browser. */
@@ -38,7 +38,7 @@ describe('terminal socket', () => {
   });
 
   const coreFor = (lines: string[] = []) =>
-    ({ sessions: { row: () => ({ desired: 'running', tmux_name: 'x' }), typed: () => {} }, host, log: { info: (m: string) => lines.push(m), warn: () => {}, error: () => {} } }) as unknown as Core;
+    ({ sessions: { row: () => ({ desired: 'running', tmux_name: 'x' }), typed: () => {} }, host, termSizes: new TermSizes(), log: { info: (m: string) => lines.push(m), warn: () => {}, error: () => {} } }) as unknown as Core;
   const text = (ws: ReturnType<typeof fakeSocket>) => ws.sent.filter((m): m is Buffer => m instanceof Buffer).map((b) => b.toString('utf8')).join('');
   const sizeMessage = (ws: ReturnType<typeof fakeSocket>) => ws.sent.find((m): m is string => typeof m === 'string' && m.includes('"size"'));
 
@@ -162,6 +162,47 @@ describe('terminal socket', () => {
       laptop.close();
       phone.close();
     }
+  });
+
+  it("keeps the size the screen that has the session asks for, and any screen's as the latest for new panes", async () => {
+    await host.spawn('x', home, ['/bin/sh', '-c', 'sleep 5']);
+    const core = coreFor();
+    const input = (ws: ReturnType<typeof fakeSocket>, m: object) => ws.emit('message', Buffer.from(JSON.stringify(m)), false);
+    const laptop = fakeSocket();
+    const phone = fakeSocket();
+    expect(core.termSizes.for('s1', true)).toBeUndefined();
+    attachTerminal(core, laptop as unknown as WebSocket, 's1', { cols: '100', rows: '30', screen: 'lap', claim: '1' });
+    try {
+      expect(core.termSizes.for('s1', false)).toEqual({ cols: 100, rows: 30 });
+      input(laptop, { type: 'resize', cols: 90, rows: 28 });
+      expect(core.termSizes.for('s1', false)).toEqual({ cols: 90, rows: 28 });
+      input(laptop, { type: 'input', data: 'a' });
+      // The phone waits for the session: its size isn't the session's, but it's the latest a new pane takes.
+      attachTerminal(core, phone as unknown as WebSocket, 's1', { cols: '40', rows: '20', screen: 'ph', claim: '1' });
+      expect(core.termSizes.for('new', true)).toEqual({ cols: 40, rows: 20 });
+      input(phone, { type: 'resize', cols: 41, rows: 20 });
+      expect(core.termSizes.for('s1', false)).toEqual({ cols: 90, rows: 28 });
+      expect(core.termSizes.for('new', true)).toEqual({ cols: 41, rows: 20 });
+      // Moved to the phone, the session takes its size.
+      input(phone, { type: 'move' });
+      expect(core.termSizes.for('s1', false)).toEqual({ cols: 41, rows: 20 });
+    } finally {
+      laptop.close();
+      phone.close();
+    }
+  });
+
+  it('TermSizes keeps the last 500 sessions asked for; one without its size gets the latest only for a new pane', () => {
+    const sizes = new TermSizes();
+    sizes.asked('a', { cols: 120, rows: 40 });
+    sizes.asked('b', { cols: 57, rows: 32 });
+    sizes.asked('a', { cols: 121, rows: 40 });
+    for (let i = 0; i < 499; i++) sizes.asked(`s${i}`, { cols: 80, rows: 24 });
+    // b was dropped: a new pane takes the latest any session asked for, a relaunched one keeps its own last.
+    expect(sizes.for('b', true)).toEqual({ cols: 80, rows: 24 });
+    expect(sizes.for('b', false)).toBeUndefined();
+    // a, asked again after b, is kept.
+    expect(sizes.for('a', false)).toEqual({ cols: 121, rows: 40 });
   });
 
   it('sends the output before a size change ahead of it, so the browser never draws it at the new width', async () => {
