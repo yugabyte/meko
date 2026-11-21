@@ -105,6 +105,53 @@ const DETACH_RELEASE_MS = 5000;
  */
 const RECLAIM_MS = 3000;
 
+type WebglModule = typeof import('@xterm/addon-webgl');
+/** The WebGL renderer's chunk once it has loaded, so a terminal can switch to it at once. */
+let webglModule: WebglModule | null = null;
+let webglChunk: Promise<WebglModule | null> | null = null;
+
+/**
+ * Fetches the WebGL renderer's chunk, once; null when it didn't load (offline, or a new version
+ * replaced it), and the next call tries again. Desktops never call it, so never download it.
+ */
+function loadWebgl(): Promise<WebglModule | null> {
+  webglChunk ??= import('@xterm/addon-webgl').then(
+    (m) => (webglModule = m),
+    () => {
+      webglChunk = null;
+      return null;
+    },
+  );
+  return webglChunk;
+}
+// Fetched as the page loads, so it's in hand by the time the first terminal measures itself.
+if (matches(TOUCH_QUERY)) void loadWebgl();
+
+/** The longest a terminal opened as the page starts waits for what changes its cells' size. */
+const START_WAIT_MS = 1500;
+/** The page's start wait is over (`startReady`): terminals attached from now on connect at once. */
+let startSettled = false;
+let startWait: Promise<void> | null = null;
+
+/**
+ * What changes a terminal's cells' size as the page starts: the terminal font (cells measured with
+ * a fallback font have another size) and, on a touch screen, the WebGL chunk. A terminal that
+ * started before them would ask for one size and then another. One wait for the page, at most
+ * START_WAIT_MS, after which terminals start with what they have; a chunk that comes later still
+ * switches the renderer (`enableWebgl`). Started by the first terminal, not as the module loads:
+ * the module is also imported outside a browser, by server-rendered components in tests.
+ */
+function startReady(): Promise<void> {
+  const settle = () => {
+    startSettled = true;
+  };
+  startWait ??= Promise.race([
+    Promise.all([document.fonts?.load(`13px ${FONT}`).catch(() => undefined), matches(TOUCH_QUERY) ? loadWebgl() : null]),
+    new Promise((r) => setTimeout(r, START_WAIT_MS)),
+  ]).then(settle, settle);
+  return startWait;
+}
+
 /** Why the pty behind a terminal exited, in words (the UI adds the dots while it reconnects). */
 const EXIT_REASONS: Record<string, string> = {
   detached: 'The terminal was detached. Reconnecting',
@@ -284,9 +331,7 @@ class SessionTerminal {
     // cells were measured with a fallback font and the rows no longer fit: re-measure and refit.
     document.fonts?.load(`13px ${FONT}`).then(
       () => {
-        if (this.disposed || !document.fonts.check(`13px ${FONT}`)) return;
-        this.term.options.fontFamily = `${FONT}, monospace`;
-        this.term.options.fontFamily = FONT;
+        if (this.disposed || !this.measureFont()) return;
         this.refit();
       },
       () => undefined,
@@ -1171,37 +1216,58 @@ class SessionTerminal {
   }
 
   /**
+   * Measures the cells again once the terminal font has loaded (setting the family makes xterm
+   * measure); false while it hasn't.
+   */
+  private measureFont(): boolean {
+    if (!document.fonts?.check(`13px ${FONT}`)) return false;
+    this.term.options.fontFamily = `${FONT}, monospace`;
+    this.term.options.fontFamily = FONT;
+    return true;
+  }
+
+  /**
    * On touch screens the terminal on screen draws with WebGL: full-screen redraws are much cheaper.
-   * The renderer is its own chunk, fetched the first time, so desktops never download it.
+   * WebGL rounds a cell's width down to whole device pixels and the DOM renderer doesn't, so the
+   * same box holds more columns with WebGL (60 instead of 57 on a 3x phone). A size measured with
+   * the DOM renderer then narrows the session's pty for a moment, and Claude Code's redraw at the
+   * narrower width repeats rows in the scrollback for good. So WebGL goes on, from the chunk
+   * already in hand, before the terminal measures itself: when it's attached, before it connects
+   * or asks for the session.
    */
   private enableWebgl() {
-    if (this.webgl || this.webglFailed || this.webglLoading || !matches(TOUCH_QUERY)) return;
+    if (this.webgl || this.webglFailed || !matches(TOUCH_QUERY)) return;
+    if (webglModule) {
+      this.startWebgl(webglModule);
+      return;
+    }
+    if (this.webglLoading) return;
     this.webglLoading = true;
-    import('@xterm/addon-webgl').then(
-      ({ WebglAddon }) => {
-        this.webglLoading = false;
-        // Detached or disposed while it loaded: the next attach tries again.
-        if (this.disposed || this.webgl || !this.el.isConnected) return;
-        try {
-          const gl = new WebglAddon();
-          gl.onContextLoss(() => {
-            gl.dispose();
-            if (this.webgl === gl) this.webgl = null;
-          });
-          this.term.loadAddon(gl);
-          this.webgl = gl;
-          // Two frames on, the canvas has been sized: check it before trusting it.
-          requestAnimationFrame(() => requestAnimationFrame(() => this.checkWebgl(gl)));
-        } catch {
-          // No WebGL2 here: the DOM renderer carries on.
-          this.webglFailed = true;
-        }
-      },
-      () => {
-        // The chunk didn't load (offline, or a new version replaced it): keep the DOM renderer.
-        this.webglLoading = false;
-      },
-    );
+    void loadWebgl().then((m) => {
+      this.webglLoading = false;
+      // Detached or disposed while it loaded: the next attach tries again.
+      if (!m || this.disposed || this.webgl || !this.el.isConnected) return;
+      this.startWebgl(m);
+      this.refit();
+    });
+  }
+
+  private startWebgl({ WebglAddon }: WebglModule) {
+    if (!this.el.isConnected) return;
+    try {
+      const gl = new WebglAddon();
+      gl.onContextLoss(() => {
+        gl.dispose();
+        if (this.webgl === gl) this.webgl = null;
+      });
+      this.term.loadAddon(gl);
+      this.webgl = gl;
+      // Two frames on, the canvas has been sized: check it before trusting it.
+      requestAnimationFrame(() => requestAnimationFrame(() => this.checkWebgl(gl)));
+    } catch {
+      // No WebGL2 here: the DOM renderer carries on.
+      this.webglFailed = true;
+    }
   }
 
   /**
@@ -1229,13 +1295,23 @@ class SessionTerminal {
     if (this.el.parentElement !== container) container.appendChild(this.el);
     if (this.releaseTimer) clearTimeout(this.releaseTimer);
     this.releaseTimer = null;
+    // The renderer first: connecting and asking for the session both measure the terminal.
+    this.enableWebgl();
     if (!this.started) {
       this.paused = false;
-      this.connect();
+      // As the page starts, a terminal waits (a bounded while) for the font and the WebGL chunk
+      // before it starts at its size; otherwise it narrows the session right after.
+      if (!startSettled)
+        void startReady().then(() => {
+          if (this.disposed || this.started || !this.el.isConnected) return;
+          this.measureFont();
+          this.enableWebgl();
+          this.connect();
+        });
+      else this.connect();
     } else this.resume();
     // Switched back to it: ask for the session (a socket still connecting asks as it opens).
     this.show();
-    this.enableWebgl();
     this.resizeObs?.disconnect();
     this.resizeObs = new ResizeObserver(() => this.scheduleRefit());
     this.resizeObs.observe(container);

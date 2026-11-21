@@ -585,7 +585,7 @@ Keyboard; those pasted into the box are held above it), then Enter; Send works w
 and if the terminal isn't connected, the text and the held files stay. Swiping scrolls through mouse-wheel reports to a program running full screen while it has the mouse
 (OpenCode), and through the terminal's own scrollback otherwise (Claude Code, on the main screen). The steps are sent together once a frame, a flick keeps
 coasting and slows down until it stops or a new touch lands, and the terminal on screen draws with
-WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL is missing, loses
+WebGL (fetched only on touch screens, as the page loads, and switched on before the terminal measures its size; it falls back to the DOM renderer if WebGL is missing, loses
 its context, or sizes its canvas wrongly). In select mode (it puts the keyboard away) a drag
 selects whole lines instead of scrolling, and lifting the finger copies them; no touch reaches Claude
 as a mouse click meanwhile. Tapping a link opens it in a new tab, the whole URL even when Claude

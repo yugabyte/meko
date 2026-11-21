@@ -113,7 +113,15 @@ start at the host's 200×50. A relaunched pane keeps its last size. That way, th
 attaches next doesn't narrow the pane once Claude has drawn. On a narrower terminal, xterm
 reflows the wider rows into more rows, pushing the screen's top rows into the scrollback, and
 Claude's redraw after a resize then reprints the last screenful, those rows included, so they
-show twice (the logo at the top of a new session, two or three times). Any input counts as use, mouse and focus reports included, since programs turn them on: Claude Code
+show twice (the logo at the top of a new session, two or three times). For the same reason a
+browser terminal measures itself only once it draws the way it will stay (`attach()` in
+`src/web/terminals.ts`): on a touch screen, xterm's WebGL renderer rounds a cell's width down to
+whole device pixels and the DOM renderer doesn't, so on a 3× phone one box holds 60 columns with
+WebGL and 57 without. So the WebGL chunk is fetched as the page loads and switched on before the
+terminal connects or asks for its session. A terminal attached as the page starts also waits for
+the terminal font (its glyphs are a different width from the fallback's) and the WebGL chunk: one
+wait for the page, 1.5 s at most (`startReady()`), after which every terminal connects with what
+it has, and a chunk that arrives later still switches it to WebGL. Any input counts as use, mouse and focus reports included, since programs turn them on: Claude Code
 focus reports, and a full-screen program such as OpenCode mouse reports too.
 
 **One screen per session.** Two browsers taking a session's size from each other made the pane
