@@ -13,7 +13,9 @@ import { HeadlessReview, ReviewFailed, noUsage, readStepResult, type HeadlessSte
 import { moreSweeps } from '../../src/server/review/merge.js';
 import { strategyFor } from '../../src/server/review/strategies.js';
 import type { Diff, FileChange, ReviewContext } from '../../src/server/review/types.js';
-import { UsageError, dollars, duration, formatFindings, parseReviewArgs, progressText, stepEnv, untrustedPr, type CliPr } from '../../src/server/reviewcli.js';
+import {
+  UsageError, dollars, duration, formatFindings, parseReviewArgs, progressText, readPriorRounds, stepEnv, untrustedPr, type CliPr,
+} from '../../src/server/reviewcli.js';
 import { reviewUsage } from '../../src/server/usage.js';
 import { tempDir } from '../helpers.js';
 
@@ -23,7 +25,54 @@ describe('meko kode review: the command line', () => {
     expect(parseReviewArgs(['--base', 'dev', '--depth=3', '--strategy', 'sirius-1.0', '--json'])).toEqual({ base: 'dev', depth: 3, strategy: 'sirius-1.0', json: true, help: false });
     expect(parseReviewArgs(['--pr', '41'])).toMatchObject({ pr: '41' });
     expect(parseReviewArgs(['--description=Adds a login page.'])).toMatchObject({ description: 'Adds a login page.' });
+    expect(parseReviewArgs(['--prior', 'rounds.json'])).toMatchObject({ prior: 'rounds.json' });
     expect(parseReviewArgs(['--help']).help).toBe(true);
+  });
+
+  it("reads --prior's earlier rounds, numbering those without a number by their place", () => {
+    const rounds = readPriorRounds(JSON.stringify([
+      { round: 3, findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number.', outcome: { status: 'declined', note: 'Callers want one.' } }] },
+      { findings: [
+        { file: 'src/b.ts', line: 0, severity: 'minor', comment: 'Typo.', outcome: { status: 'fixed' } },
+        { file: 'src/c.ts', line: 7, severity: 'blocker', comment: 'Leaks the token.', dismissed: true, note: 'Test-only code.' },
+      ] },
+      { round: 5, findings: [] },
+    ]));
+    expect(rounds).toEqual([
+      { round: 3, findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number.', outcome: { status: 'declined', note: 'Callers want one.' }, dismissed: false, note: '' }] },
+      { round: 2, findings: [
+        { file: 'src/b.ts', line: 0, severity: 'minor', comment: 'Typo.', outcome: { status: 'fixed', note: '' }, dismissed: false, note: '' },
+        { file: 'src/c.ts', line: 7, severity: 'blocker', comment: 'Leaks the token.', outcome: null, dismissed: true, note: 'Test-only code.' },
+      ] },
+      { round: 5, findings: [] },
+    ]);
+    expect(readPriorRounds('[]')).toEqual([]);
+  });
+
+  it("says what is wrong with --prior's file", () => {
+    const refused = (raw: string) => {
+      try {
+        readPriorRounds(raw);
+      } catch (e) {
+        expect(e).toBeInstanceOf(UsageError);
+        return (e as Error).message;
+      }
+      throw new Error(`accepted ${raw}`);
+    };
+    const finding = { file: 'src/a.ts', line: 2, severity: 'major', comment: 'c' };
+    const one = (f: object) => JSON.stringify([{ findings: [finding, { ...finding, ...f }] }]);
+    expect(refused('{')).toMatch(/^--prior: the file isn't JSON \(/);
+    expect(refused('{"findings": []}')).toBe('--prior: the file holds a JSON array of rounds. See: meko kode review --help');
+    expect(refused('[[]]')).toBe('--prior: round 1: a round is an object. See: meko kode review --help');
+    expect(refused('[{"findings": ["x"]}]')).toBe('--prior: round 1, finding 1: a finding is an object. See: meko kode review --help');
+    expect(refused('[{"round": 0, "findings": []}]')).toBe('--prior: round 1: round is a whole number from 1. See: meko kode review --help');
+    expect(refused('[{"round": 1}]')).toBe('--prior: round 1: findings is an array. See: meko kode review --help');
+    expect(refused(one({ severity: 'critical' }))).toBe('--prior: round 1, finding 2: severity is blocker, major or minor. See: meko kode review --help');
+    expect(refused(one({ line: '2' }))).toBe('--prior: round 1, finding 2: line is a whole number. See: meko kode review --help');
+    expect(refused(one({ file: '' }))).toBe('--prior: round 1, finding 2: file is a path. See: meko kode review --help');
+    expect(refused(one({ comment: ' ' }))).toBe('--prior: round 1, finding 2: comment is text. See: meko kode review --help');
+    expect(refused(one({ outcome: { status: 'wontfix' } }))).toBe('--prior: round 1, finding 2: outcome.status is fixed or declined. See: meko kode review --help');
+    expect(refused(one({ dismissed: 'yes' }))).toBe('--prior: round 1, finding 2: dismissed is true or false. See: meko kode review --help');
   });
 
   it('says what is wrong with a command line it refuses', () => {

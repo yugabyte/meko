@@ -354,11 +354,12 @@ no task, session or server: a person, a plain Claude Code session or a script ca
 checkout (`src/server/reviewcli.ts`). It reads the change from where it left its base to the working
 tree, uncommitted and untracked files included, as a task's review does, prints what it kept and
 exits 0; it exits 1 when it couldn't review (bad options, not a git folder, no Claude Code, no base,
-a `--pr` gh can't read, no pass reporting, or Ctrl+C). It only reports: one round, no fix prompt,
-no triage, no PR, no line. Whoever ran it fixes what it found and runs it again.
+a `--pr` gh can't read, a `--prior` file it can't read or take, no pass reporting, or Ctrl+C). It
+only reports: one round, no fix prompt, no triage, no PR, no line. Whoever ran it fixes what it
+found and runs it again, with `--prior` for what came of the earlier runs.
 
 ```
-meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--depth 1-5] [--strategy <id>] [--json]
+meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--prior <file>] [--depth 1-5] [--strategy <id>] [--json]
 ```
 
 - **What it reviews against.** `--base`, origin's copy of the branch first (as `baseRefIn` reads a
@@ -376,8 +377,16 @@ meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--depth 1
   passes, with the user's Meko token, at datapacks of its author's choosing: the review runs
   without them and says so (`untrustedPr`), as Kode runs a session on such a PR's head without the
   repo's config ([Code from public repos](security.md#code-from-public-repos)).
+- **Earlier rounds.** `--prior` names a JSON file of the earlier runs on this change, as a task's
+  next round is told about its earlier ones (`PriorRound`, `priorRounds` in the base prompt): an
+  array of `{ round?, findings: [{ file, line, severity, comment, outcome?: { status: fixed |
+  declined, note? }, dismissed?, note? }] }`, a round without a number numbered by its place in
+  the array (`readPriorRounds`). The passes check those findings instead of raising them again;
+  the prompt carries the newest of them, as a task's does (`trimPriorRounds`). A file that isn't
+  one stops the review before anything is recorded, saying which round and finding is wrong.
 - **Settings.** Strategy and depth are `[code_review]`'s, or `--strategy` and `--depth`; strategy
-  Off runs the default, as **Run code review** does. Re-review rounds and the check don't apply.
+  Off runs the default, as **Run code review** does. Re-review rounds and the check don't apply:
+  a script that runs it again passes what came of the earlier runs with `--prior`.
 - **Output.** stdout gets the kept findings, worst first, each with its comment (and **Caught with
   Meko** with the gotchas it credits), the passes' notes, then one line: the counts or `LGTM`, how
   long it took and what Claude Code says it cost. `--json` gives `{ repo, branch, base, head,

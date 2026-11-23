@@ -148,6 +148,31 @@ describe('meko kode review', () => {
     expect(records()).toMatchObject([{ state: 'done', pr: true }]);
   });
 
+  it("tells the passes about --prior's earlier rounds, and refuses a file it can't read, recording nothing", async () => {
+    fake('review-reports.json', LEDGERS);
+    const file = join(home, 'rounds.json');
+    writeFileSync(file, JSON.stringify([
+      { round: 1, findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number where a session is expected.', outcome: { status: 'declined', note: 'Callers read a number: see src/main.ts:4.' } }] },
+    ]));
+    expect(await runReview(paths, ['--prior', file], io())).toBe(0);
+    const prompt = steps()[0].file;
+    expect(prompt).toContain('## Already reviewed — earlier rounds of this review');
+    expect(prompt).toContain('### Round 1');
+    expect(prompt).toContain('- **src/a.ts:2** (major)');
+    expect(prompt).toContain('  > Returns a number where a session is expected.');
+    expect(prompt).toContain('  - the author declined it:\n    > Callers read a number: see src/main.ts:4.');
+    expect(records()).toMatchObject([{ state: 'done' }]);
+
+    err = [];
+    expect(await runReview(paths, ['--prior', join(home, 'nope.json')], io())).toBe(1);
+    expect(err.join('')).toContain(`Couldn't read --prior's file ${join(home, 'nope.json')}: `);
+    err = [];
+    writeFileSync(file, '{}');
+    expect(await runReview(paths, ['--prior', file], io())).toBe(1);
+    expect(err.join('')).toBe('--prior: the file holds a JSON array of rounds. See: meko kode review --help\n');
+    expect(records()).toHaveLength(1);
+  });
+
   it('says so when nothing changed', async () => {
     g('checkout', '-q', 'main');
     execFileSync('rm', [join(repo, 'src', 'b.ts')]);

@@ -8,12 +8,13 @@
  */
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
-  DEFAULT_STRATEGY, MAX_DEPTH, STRATEGIES, countsText, noCounts, strategyName, totalCount, type CodeReviewFinding, type ReviewStrategyId,
+  DEFAULT_STRATEGY, MAX_DEPTH, SEVERITIES, STRATEGIES, countsText, noCounts, strategyName, totalCount, type CodeReviewFinding, type FindingOutcome,
+  type ReviewStrategyId, type Severity,
 } from '../shared/codereview.js';
 import { parsePrInput } from '../shared/github-refs.js';
 import { REVIEW_MEKO_SERVER, signInSettings } from './claude.js';
@@ -32,7 +33,7 @@ import {
 } from './review/headless.js';
 import { basePrompt } from './review/prompt.js';
 import { strategyFor } from './review/strategies.js';
-import type { Tier } from './review/types.js';
+import type { PriorRound, Tier } from './review/types.js';
 import { TOOLS_SERVER } from './tooldefs.js';
 import { toolsCommand } from './tools.js';
 
@@ -49,6 +50,8 @@ it found and exits 0; 1 when it couldn't review.
   --pr <pr>              The PR this change is for (a number, owner/name#number or a link): its
                          title and description go to the review, which checks the change against them
   --description <text>   What the change is meant to do, for the review to check it against
+  --prior <file>         Earlier rounds of this review and what was done about each finding, as
+                         JSON, so this one checks them instead of raising them again
   --depth <1-5>          Sweeps in a deep review (default: [code_review] depth)
   --strategy <id>        sagittarius-3.0 or sirius-1.0 (default: [code_review] strategy)
   --json                 Print the result as JSON`;
@@ -58,6 +61,8 @@ export interface ReviewArgs {
   base?: string;
   pr?: string;
   description?: string;
+  /** The file `--prior` names, as given. */
+  prior?: string;
   depth?: number;
   strategy?: ReviewStrategyId;
   json: boolean;
@@ -67,7 +72,7 @@ export interface ReviewArgs {
 /** A mistake on the command line, in words. */
 export class UsageError extends Error {}
 
-const VALUED = ['--base', '--pr', '--description', '--depth', '--strategy'] as const;
+const VALUED = ['--base', '--pr', '--description', '--prior', '--depth', '--strategy'] as const;
 
 /** The command line read, or a UsageError saying what's wrong. `--flag value` and `--flag=value` both work. */
 export function parseReviewArgs(args: string[]): ReviewArgs {
@@ -85,6 +90,7 @@ export function parseReviewArgs(args: string[]): ReviewArgs {
       if (name === '--base') a.base = value.trim();
       else if (name === '--pr') a.pr = value.trim();
       else if (name === '--description') a.description = value;
+      else if (name === '--prior') a.prior = value.trim();
       else if (name === '--depth') {
         const n = Number(value);
         if (!Number.isInteger(n) || n < 1 || n > MAX_DEPTH) throw new UsageError(`--depth takes a number from 1 to ${MAX_DEPTH}.`);
@@ -100,6 +106,52 @@ export function parseReviewArgs(args: string[]): ReviewArgs {
   }
   if (a.pr !== undefined && a.description !== undefined) throw new UsageError('Use --pr or --description, not both.');
   return a;
+}
+
+/**
+ * The earlier rounds `--prior`'s file holds, or a UsageError saying what's wrong with it: a JSON array
+ * of rounds, each `{ round?, findings: [{ file, line, severity, comment, outcome?, dismissed?, note? }] }`,
+ * as a task's next round is told about its earlier ones (`PriorRound`). A round without a number is
+ * numbered by its place in the array.
+ */
+export function readPriorRounds(raw: string): PriorRound[] {
+  const bad = (what: string) => new UsageError(`--prior: ${what}. See: meko kode review --help`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw bad(`the file isn't JSON (${errMsg(e)})`);
+  }
+  if (!Array.isArray(parsed)) throw bad('the file holds a JSON array of rounds');
+  const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+  return parsed.map((r: unknown, i): PriorRound => {
+    const at = `round ${i + 1}`;
+    if (!isObj(r)) throw bad(`${at}: a round is an object`);
+    if (r.round !== undefined && (!Number.isInteger(r.round) || (r.round as number) < 1)) throw bad(`${at}: round is a whole number from 1`);
+    if (!Array.isArray(r.findings)) throw bad(`${at}: findings is an array`);
+    const findings = r.findings.map((f: unknown, j): PriorRound['findings'][number] => {
+      const where = `${at}, finding ${j + 1}`;
+      if (!isObj(f)) throw bad(`${where}: a finding is an object`);
+      if (typeof f.file !== 'string' || !f.file.trim()) throw bad(`${where}: file is a path`);
+      if (!Number.isInteger(f.line) || (f.line as number) < 0) throw bad(`${where}: line is a whole number`);
+      if (!SEVERITIES.includes(f.severity as Severity)) throw bad(`${where}: severity is blocker, major or minor`);
+      if (typeof f.comment !== 'string' || !f.comment.trim()) throw bad(`${where}: comment is text`);
+      let outcome: FindingOutcome | null = null;
+      if (f.outcome !== undefined && f.outcome !== null) {
+        const o = f.outcome;
+        if (!isObj(o) || (o.status !== 'fixed' && o.status !== 'declined')) throw bad(`${where}: outcome.status is fixed or declined`);
+        if (o.note !== undefined && typeof o.note !== 'string') throw bad(`${where}: outcome.note is text`);
+        outcome = { status: o.status, note: (o.note as string | undefined) ?? '' };
+      }
+      if (f.dismissed !== undefined && typeof f.dismissed !== 'boolean') throw bad(`${where}: dismissed is true or false`);
+      if (f.note !== undefined && typeof f.note !== 'string') throw bad(`${where}: note is text`);
+      return {
+        file: f.file, line: f.line as number, severity: f.severity as Severity, comment: f.comment, outcome,
+        dismissed: (f.dismissed as boolean | undefined) ?? false, note: (f.note as string | undefined) ?? '',
+      };
+    });
+    return { round: (r.round as number | undefined) ?? i + 1, findings };
+  });
 }
 
 /**
@@ -314,8 +366,17 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
   const depth = a.depth ?? cfg.codeReview.depth;
 
   // Before anything is recorded: what to review, and what to review it with.
-  let folder: string, base: string, pr: CliPr | null = null;
+  let folder: string, base: string, pr: CliPr | null = null, prior: PriorRound[] = [];
   try {
+    if (a.prior) {
+      let raw: string;
+      try {
+        raw = readFileSync(resolve(io.cwd, a.prior), 'utf8');
+      } catch (e) {
+        throw new UsageError(`Couldn't read --prior's file ${a.prior}: ${errMsg(e)}`);
+      }
+      prior = readPriorRounds(raw);
+    }
     folder = await git(io.cwd, 'rev-parse', '--show-toplevel').catch(() => {
       throw new UsageError("This folder isn't in a git repo. Run meko kode review in the repo whose change you want reviewed.");
     });
@@ -370,7 +431,7 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     const prDescription = pr ? `${pr.title}\n\n${pr.body ?? ''}`.trim() : a.description?.trim() || null;
     const { ctx, diff } = await readChange({
       folder, repo: folder, base, dir, branch, title: pr?.title || branch, prDescription, description: '', design: null,
-      meko: !!meko, issues: async () => [], prior: [],
+      meko: !!meko, issues: async () => [], prior,
     });
     if (!diff.files.length) {
       finish('done', { detail: 'nothing changed against the base' });
