@@ -17,6 +17,7 @@ import {
   type ReviewStrategyId, type Severity,
 } from '../shared/codereview.js';
 import { parsePrInput } from '../shared/github-refs.js';
+import { checkModel } from '../shared/harnesses.js';
 import { REVIEW_MEKO_SERVER, signInSettings } from './claude.js';
 import { loadConfig, type Config } from './config.js';
 import { git } from './git.js';
@@ -55,6 +56,8 @@ it found and exits 0; 1 when it couldn't review.
                          JSON, so this one checks them instead of raising them again
   --depth <1-5>          Sweeps in a deep review (default: [code_review] depth)
   --strategy <id>        sagittarius-3.0 or sirius-1.0 (default: [code_review] strategy)
+  --model [<tier>=]<m>   The model a tier's steps run on, large without a tier; again for another
+                         tier (default: [code_review.models.claude])
   --json                 Print the result as JSON`;
 
 /** What the command line asked for. */
@@ -66,14 +69,18 @@ export interface ReviewArgs {
   prior?: string;
   depth?: number;
   strategy?: ReviewStrategyId;
+  /** `--model`'s models, by tier. */
+  models?: Partial<Record<Tier, string>>;
   json: boolean;
   help: boolean;
 }
 
+const TIERS: Tier[] = ['large', 'mid', 'small'];
+
 /** A mistake on the command line, in words. */
 export class UsageError extends Error {}
 
-const VALUED = ['--base', '--pr', '--description', '--prior', '--depth', '--strategy'] as const;
+const VALUED = ['--base', '--pr', '--description', '--prior', '--depth', '--strategy', '--model'] as const;
 
 /** The command line read, or a UsageError saying what's wrong. `--flag value` and `--flag=value` both work. */
 export function parseReviewArgs(args: string[]): ReviewArgs {
@@ -92,7 +99,14 @@ export function parseReviewArgs(args: string[]): ReviewArgs {
       else if (name === '--pr') a.pr = value.trim();
       else if (name === '--description') a.description = value;
       else if (name === '--prior') a.prior = value.trim();
-      else if (name === '--depth') {
+      else if (name === '--model') {
+        const v = value.trim();
+        const [tier, model] = (v.includes('=') ? [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)] : ['large', v]) as [Tier, string];
+        if (!TIERS.includes(tier)) throw new UsageError(`--model takes a model, or <tier>=<model> with a tier of ${TIERS.join(', ')}.`);
+        const bad = checkModel(model);
+        if (bad) throw new UsageError(`--model: ${bad}`);
+        a.models = { ...a.models, [tier]: model };
+      } else if (name === '--depth') {
         const n = Number(value);
         if (!Number.isInteger(n) || n < 1 || n > MAX_DEPTH) throw new UsageError(`--depth takes a number from 1 to ${MAX_DEPTH}.`);
         a.depth = n;
@@ -376,6 +390,7 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
   const cfg = loadConfig(paths, (m) => io.err(`${m}\n`));
   const strategy = strategyFor(a.strategy ?? (cfg.codeReview.strategy === 'off' ? DEFAULT_STRATEGY : cfg.codeReview.strategy));
   const depth = a.depth ?? cfg.codeReview.depth;
+  const models: Record<Tier, string> = { ...cfg.codeReview.models.claude, ...a.models };
 
   // Before anything is recorded: what to review, and what to review it with.
   let folder: string, base: string, pr: CliPr | null = null, prior: PriorRound[] = [];
@@ -449,7 +464,7 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
       finish('done', { detail: 'nothing changed against the base' });
       if (a.json) {
         io.out(JSON.stringify({
-          repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, files: 0, counts: noCounts(), findings: [], notes: '',
+          repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, models, files: 0, counts: noCounts(), findings: [], notes: '',
           passes: [], scoring: { steps: 0, reported: 0, costUsd: 0 }, seconds: Math.round((io.now() - started) / 1000), costUsd: 0,
         }));
       }
@@ -480,7 +495,7 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     if (meko && ctx.datapacks.length) servers[REVIEW_MEKO_SERVER] = { type: 'http', url: meko.url, headers: { Authorization: `Bearer ${meko.token}` } };
     writeFileSync(mcpConfig, `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`, { mode: 0o600 });
     const make = io.steps ?? claudeSteps;
-    const runStep = make({ command: cfg.claude.command, models: cfg.codeReview.models.claude, mcpConfig, runDir: dir, cwd: folder, env: stepEnv(io.env), signIn: signInSettings() });
+    const runStep = make({ command: cfg.claude.command, models, mcpConfig, runDir: dir, cwd: folder, env: stepEnv(io.env), signIn: signInSettings() });
     const r = new HeadlessReview({
       strategy, depth, ctx, diff, base: prompt, dir, signal: controller.signal, runStep,
       progress: (p) => {
@@ -499,7 +514,7 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     const seconds = Math.round((io.now() - started) / 1000);
     if (a.json) {
       io.out(JSON.stringify({
-        repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, files: diff.files.length, counts: result.counts,
+        repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, models, files: diff.files.length, counts: result.counts,
         findings: result.kept.map(jsonFinding), notes: result.notes, passes: result.passes.map(jsonPass),
         scoring: { steps: result.scoring.steps, reported: result.scoring.reported, costUsd: cents(result.scoring.usage.costUsd) }, seconds, costUsd: cents(result.usage.costUsd),
       }));

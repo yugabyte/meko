@@ -179,6 +179,20 @@ describe('meko kode review', () => {
     expect(records()).toHaveLength(1);
   });
 
+  it("runs each tier's steps on --model's model, the config's for the rest", async () => {
+    fake('review-reports.json', {
+      ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number.', gotchas: [] }] },
+    });
+    expect(await runReview(paths, ['--json', '--model', 'sonnet'], io())).toBe(0);
+    const model = (x: Step) => x.args[x.args.indexOf('--model') + 1];
+    const byStep = Object.fromEntries(steps().map((x) => [x.file.match(/"step": "([^"]+)"/)![1], model(x)]));
+    // The four large passes on sonnet; diff and the scorer stay on the small tier's haiku.
+    expect(byStep).toEqual({
+      'r1s1:guide': 'sonnet', 'r1s1:dependents': 'sonnet', 'r1s1:history': 'sonnet', 'r1s1:claims': 'sonnet', 'r1s1:diff': 'haiku', r1c1: 'haiku',
+    });
+    expect(JSON.parse(out.join('\n')).models).toEqual({ large: 'sonnet', mid: 'sonnet', small: 'haiku' });
+  });
+
   it('says which pass never reported, so a review short of one is not taken for a whole one', async () => {
     fake('review-reports.json', LEDGERS);
     fake('review-skip', ['r1s1:history']);

@@ -359,7 +359,7 @@ only reports: one round, no fix prompt, no triage, no PR, no line. Whoever ran i
 found and runs it again, with `--prior` for what came of the earlier runs.
 
 ```
-meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--prior <file>] [--depth 1-5] [--strategy <id>] [--json]
+meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--prior <file>] [--depth 1-5] [--strategy <id>] [--model [<tier>=]<model>]... [--json]
 ```
 
 - **What it reviews against.** `--base`, origin's copy of the branch first (as `baseRefIn` reads a
@@ -385,13 +385,15 @@ meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--prior <
   the prompt carries the newest of them, as a task's does (`trimPriorRounds`). A file that isn't
   one stops the review before anything is recorded, saying which round and finding is wrong.
 - **Settings.** Strategy and depth are `[code_review]`'s, or `--strategy` and `--depth`; strategy
-  Off runs the default, as **Run code review** does. Re-review rounds and the check don't apply:
+  Off runs the default, as **Run code review** does. Each tier's model is
+  `[code_review.models.claude]`'s, or `--model`'s: a model for the large tier, or `<tier>=<model>`
+  for any (`large`, `mid`, `small`), once per tier, checked as a session's model is (`checkModel`). Re-review rounds and the check don't apply:
   a script that runs it again passes what came of the earlier runs with `--prior`.
 - **Output.** stdout gets the kept findings, worst first, each with its comment (and **Caught with
   Meko** with the gotchas it credits), the passes' notes and a note for each pass that never
   reported (`missedPass`: the review went on without it, so it isn't taken for a whole one), then
   one line: the counts or `LGTM`, how long it took and what Claude Code says it cost. `--json`
-  gives `{ repo, branch, base, head, strategy, depth, files, counts, findings: [{ key, file, line,
+  gives `{ repo, branch, base, head, strategy, depth, models, files, counts, findings: [{ key, file, line,
   severity, comment, confidence, passes, credits }], notes, passes: [{ name, sweep, reported,
   findings, costUsd, error }], scoring: { steps, reported, costUsd }, seconds, costUsd }` instead:
   each sweep's passes with what each raised and spent, its ask-again included, and why one that

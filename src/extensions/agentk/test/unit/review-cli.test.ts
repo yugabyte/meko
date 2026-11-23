@@ -26,6 +26,8 @@ describe('meko kode review: the command line', () => {
     expect(parseReviewArgs(['--pr', '41'])).toMatchObject({ pr: '41' });
     expect(parseReviewArgs(['--description=Adds a login page.'])).toMatchObject({ description: 'Adds a login page.' });
     expect(parseReviewArgs(['--prior', 'rounds.json'])).toMatchObject({ prior: 'rounds.json' });
+    expect(parseReviewArgs(['--model', 'sonnet', '--model=small=claude-haiku-4-5', '--model', 'mid=opus[1m]']))
+      .toMatchObject({ models: { large: 'sonnet', small: 'claude-haiku-4-5', mid: 'opus[1m]' } });
     expect(parseReviewArgs(['--help']).help).toBe(true);
   });
 
@@ -91,6 +93,8 @@ describe('meko kode review: the command line', () => {
     expect(refused(['--strategy', 'orion'])).toBe('--strategy takes sagittarius-3.0 or sirius-1.0.');
     expect(refused(['--base'])).toBe('--base needs a value. See: meko kode review --help');
     expect(refused(['--fast'])).toBe('Unknown option: --fast. See: meko kode review --help');
+    expect(refused(['--model', 'huge=opus'])).toBe('--model takes a model, or <tier>=<model> with a tier of large, mid, small.');
+    expect(refused(['--model', 'small=op us'])).toBe("--model: op us isn't a model name: use letters, digits and . _ : / @ [ ] - only.");
     expect(refused(['src/'])).toContain('reviews the folder it runs in');
   });
 
