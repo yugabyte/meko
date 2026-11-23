@@ -359,7 +359,7 @@ only reports: one round, no fix prompt, no triage, no PR, no line. Whoever ran i
 found and runs it again, with `--prior` for what came of the earlier runs.
 
 ```
-meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--prior <file>] [--depth 1-5] [--strategy <id>] [--model [<tier>=]<model>]... [--json]
+meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--issue <issue>]... [--prior <file>] [--depth 1-5] [--strategy <id>] [--model [<tier>=]<model>]... [--json]
 ```
 
 - **What it reviews against.** `--base`, origin's copy of the branch first (as `baseRefIn` reads a
@@ -377,6 +377,12 @@ meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--prior <
   passes, with the user's Meko token, at datapacks of its author's choosing: the review runs
   without them and says so (`untrustedPr`), as Kode runs a session on such a PR's head without the
   repo's config ([Code from public repos](security.md#code-from-public-repos)).
+- **Linked issues.** `--issue` (a number in the reviewed repo, `owner/name#n` or an issue link; once
+  per issue) is read with gh into the run folder and listed for the passes to read, as a task's
+  linked issues are (`writeIssue`, `linkedIssues` in the base prompt): what the change was meant to
+  do, from someone other than its author. One gh can't read goes to them by its link only, saying so
+  on stderr; a bare number in a folder whose origin isn't on GitHub stops the review before anything
+  is recorded.
 - **Earlier rounds.** `--prior` names a JSON file of the earlier runs on this change, as a task's
   next round is told about its earlier ones (`PriorRound`, `priorRounds` in the base prompt): an
   array of `{ round?, findings: [{ file, line, severity, comment, outcome?: { status: fixed |
@@ -394,7 +400,7 @@ meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--prior <
   reported (`missedPass`: the review went on without it, so it isn't taken for a whole one), then
   one line: the counts or `LGTM`, how long it took and what Claude Code says it cost. `--json`
   gives `{ repo, branch, base, head, strategy, depth, models, files, counts, findings: [{ key, file, line,
-  severity, comment, confidence, passes, credits }], notes, passes: [{ name, sweep, reported,
+  severity, comment, confidence, passes, credits }], notes, issues: [{ url, title, read }], passes: [{ name, sweep, reported,
   findings, costUsd, error }], scoring: { steps, reported, costUsd }, seconds, costUsd }` instead:
   each sweep's passes with what each raised and spent, its ask-again included, and why one that
   failed didn't report (`PassRun`), then the scorers together (with `files: 0`, no findings and no

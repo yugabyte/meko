@@ -162,7 +162,7 @@ describe('meko kode review', () => {
     ]));
     expect(await runReview(paths, ['--prior', file], io())).toBe(0);
     const prompt = steps()[0].file;
-    expect(prompt).toContain('## Already reviewed — earlier rounds of this review');
+    expect(prompt).toContain('## Already reviewed \u2014 earlier rounds of this review');
     expect(prompt).toContain('### Round 1');
     expect(prompt).toContain('- **src/a.ts:2** (major)');
     expect(prompt).toContain('  > Returns a number where a session is expected.');
@@ -177,6 +177,32 @@ describe('meko kode review', () => {
     expect(await runReview(paths, ['--prior', file], io())).toBe(1);
     expect(err.join('')).toBe('--prior: the file holds a JSON array of rounds. See: meko kode review --help\n');
     expect(records()).toHaveLength(1);
+  });
+
+  it("gives the passes --issue's issues to read, or their links when gh can't read them", async () => {
+    fake('review-reports.json', LEDGERS);
+    const asked: string[] = [];
+    const issue = async (_cwd: string, repo: string, n: number) => {
+      asked.push(`${repo}#${n}`);
+      if (n === 8) throw new Error('HTTP 404: Not Found\n(more)');
+      return { title: 'Sign in with a token', body: 'Tokens expire after an hour.', url: `https://github.com/${repo}/issues/${n}` };
+    };
+    expect(await runReview(paths, ['--json', '--issue', 'acme/demo-repo#7', '--issue', 'https://github.com/acme/auth/issues/8'], io({ issue }))).toBe(0);
+    expect(asked).toEqual(['acme/demo-repo#7', 'acme/auth#8']);
+    expect(err.join('')).toContain("Couldn't read acme/auth#8 with gh (HTTP 404: Not Found); the review gets its link only.");
+    const prompt = steps()[0].file;
+    expect(prompt).toContain('## Linked issues');
+    expect(prompt).toMatch(/ {2}- `[^`]*issues\/acme-demo-repo-7\.md` \u2014 Sign in with a token/);
+    expect(prompt).toContain('  - acme/auth#8 (https://github.com/acme/auth/issues/8)');
+    expect(JSON.parse(out.join('\n')).issues).toEqual([
+      { url: 'https://github.com/acme/demo-repo/issues/7', title: 'Sign in with a token', read: true },
+      { url: 'https://github.com/acme/auth/issues/8', title: 'acme/auth#8', read: false },
+    ]);
+
+    // A bare number is this repo's, and this one's origin isn't on GitHub.
+    err = [];
+    expect(await runReview(paths, ['--issue', '7'], io({ issue }))).toBe(1);
+    expect(err.join('')).toBe("--issue 7 names no repo, and this folder's origin isn't on GitHub: use owner/name#number.\n");
   });
 
   it("runs each tier's steps on --model's model, the config's for the rest", async () => {

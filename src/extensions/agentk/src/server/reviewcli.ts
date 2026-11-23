@@ -16,26 +16,26 @@ import {
   DEFAULT_STRATEGY, MAX_DEPTH, SEVERITIES, STRATEGIES, countsText, noCounts, strategyName, totalCount, type CodeReviewFinding, type FindingOutcome,
   type ReviewStrategyId, type Severity,
 } from '../shared/codereview.js';
-import { parsePrInput } from '../shared/github-refs.js';
+import { isRepoName, parseGithubRef, parsePrInput } from '../shared/github-refs.js';
 import { checkModel } from '../shared/harnesses.js';
 import { REVIEW_MEKO_SERVER, signInSettings } from './claude.js';
 import { loadConfig, type Config } from './config.js';
 import { git } from './git.js';
-import { repoVisibility } from './github.js';
+import { issueOrPr, repoVisibility } from './github.js';
 import { SESSION_MARKERS } from './launcher.js';
 import { errMsg } from './log.js';
 import { probeLocalMeko, type LocalMeko } from './mekolocal.js';
 import { mekoDirOf } from './movehome.js';
 import { claudePath, type Paths } from './paths.js';
 import { cliReviewsDir, sweepOldRecords, writeCliRecord, CLI_RECORD_V, type CliReviewRecord } from './review/clirecords.js';
-import { baseRefIn, commitRef, readChange, repoNameOf } from './review/context.js';
+import { baseRefIn, commitRef, readChange, repoNameOf, writeIssue } from './review/context.js';
 import {
   HeadlessReview, ReviewFailed, claudeSteps, noUsage, serveTools, toolsToken, type HeadlessProgress, type HeadlessResult, type PassRun, type StepRunner,
   type StepUsage,
 } from './review/headless.js';
 import { basePrompt } from './review/prompt.js';
 import { strategyFor } from './review/strategies.js';
-import type { PriorRound, Tier } from './review/types.js';
+import type { PriorRound, ReviewIssue, Tier } from './review/types.js';
 import { TOOLS_SERVER } from './tooldefs.js';
 import { toolsCommand } from './tools.js';
 
@@ -52,6 +52,8 @@ it found and exits 0; 1 when it couldn't review.
   --pr <pr>              The PR this change is for (a number, owner/name#number or a link): its
                          title and description go to the review, which checks the change against them
   --description <text>   What the change is meant to do, for the review to check it against
+  --issue <issue>        An issue the change is for (a number in this repo, owner/name#number or a
+                         link): read with gh for the review to check the change against; again for more
   --prior <file>         Earlier rounds of this review and what was done about each finding, as
                          JSON, so this one checks them instead of raising them again
   --depth <1-5>          Sweeps in a deep review (default: [code_review] depth)
@@ -65,6 +67,8 @@ export interface ReviewArgs {
   base?: string;
   pr?: string;
   description?: string;
+  /** `--issue`'s issues, as given. */
+  issues?: string[];
   /** The file `--prior` names, as given. */
   prior?: string;
   depth?: number;
@@ -80,7 +84,10 @@ const TIERS: Tier[] = ['large', 'mid', 'small'];
 /** A mistake on the command line, in words. */
 export class UsageError extends Error {}
 
-const VALUED = ['--base', '--pr', '--description', '--prior', '--depth', '--strategy', '--model'] as const;
+const VALUED = ['--base', '--pr', '--description', '--issue', '--prior', '--depth', '--strategy', '--model'] as const;
+
+/** A bare issue number, for the reviewed repo. */
+const BARE_ISSUE = /^#?(\d{1,7})$/;
 
 /** The command line read, or a UsageError saying what's wrong. `--flag value` and `--flag=value` both work. */
 export function parseReviewArgs(args: string[]): ReviewArgs {
@@ -99,7 +106,14 @@ export function parseReviewArgs(args: string[]): ReviewArgs {
       else if (name === '--pr') a.pr = value.trim();
       else if (name === '--description') a.description = value;
       else if (name === '--prior') a.prior = value.trim();
-      else if (name === '--model') {
+      else if (name === '--issue') {
+        const v = value.trim();
+        const ref = parseGithubRef(v);
+        if (!(BARE_ISSUE.test(v) && Number(v.replace('#', '')) > 0) && !(ref && ref.kind !== 'pr')) {
+          throw new UsageError('--issue takes an issue number, owner/name#number or an issue link.');
+        }
+        a.issues = [...(a.issues ?? []), v];
+      } else if (name === '--model') {
         const v = value.trim();
         const [tier, model] = (v.includes('=') ? [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)] : ['large', v]) as [Tier, string];
         if (!TIERS.includes(tier)) throw new UsageError(`--model takes a model, or <tier>=<model> with a tier of ${TIERS.join(', ')}.`);
@@ -263,6 +277,25 @@ async function mainCheckout(folder: string): Promise<string> {
   }
 }
 
+/**
+ * `--issue`'s issues for the passes, as a task's linked issues are: each read with gh into the run
+ * folder, or, when it can't be read, named by its link only, saying so on stderr.
+ */
+async function readIssues(folder: string, dir: string, refs: { repo: string; number: number }[], io: ReviewIo): Promise<ReviewIssue[]> {
+  const out: ReviewIssue[] = [];
+  for (const { repo, number } of refs) {
+    const name = `${repo}#${number}`;
+    try {
+      const issue = await (io.issue ?? issueOrPr)(folder, repo, number);
+      out.push({ title: issue.title || name, path: writeIssue(dir, repo, number, issue), url: issue.url });
+    } catch (e) {
+      io.err(`Couldn't read ${name} with gh (${errMsg(e).split('\n')[0]}); the review gets its link only.\n`);
+      out.push({ title: name, path: null, url: `https://github.com/${repo}/issues/${number}` });
+    }
+  }
+  return out;
+}
+
 /** "6m 03s", "45s". */
 export function duration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -291,6 +324,8 @@ export interface ReviewIo {
   claudeVersion: (cmd: string) => Promise<string | null>;
   /** Who can see a GitHub repo (`repoVisibility`), for `--pr`. */
   visibility?: (cwd: string, repo: string) => Promise<string>;
+  /** A GitHub issue's title and body, read with gh (`issueOrPr`), for `--issue`. */
+  issue?: (cwd: string, repo: string, number: number) => Promise<{ title: string; body: string; url: string }>;
   /** The step runner (tests swap it). */
   steps?: (o: { command: string; models: Record<Tier, string>; mcpConfig: string; runDir: string; cwd: string; env: NodeJS.ProcessEnv; signIn?: Record<string, unknown> }) => StepRunner;
 }
@@ -358,6 +393,9 @@ const jsonFinding = (f: CodeReviewFinding) => ({
   key: f.key, file: f.file, line: f.line, severity: f.severity, comment: f.comment, confidence: f.confidence, passes: f.passes, credits: f.credits,
 });
 
+/** A linked issue as `--json` gives it: `read` when the passes got its text, not only its link. */
+const jsonIssue = (i: ReviewIssue) => ({ url: i.url, title: i.title, read: !!i.path });
+
 /** A pass's run as `--json` gives it. */
 const jsonPass = (p: PassRun) => ({ name: p.pass, sweep: p.sweep, reported: p.reported, findings: p.findings, costUsd: cents(p.usage.costUsd), error: p.error });
 
@@ -394,6 +432,7 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
 
   // Before anything is recorded: what to review, and what to review it with.
   let folder: string, base: string, pr: CliPr | null = null, prior: PriorRound[] = [];
+  const issueRefs: { repo: string; number: number }[] = [];
   try {
     if (a.prior) {
       let raw: string;
@@ -412,6 +451,12 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     }
     if (a.pr) pr = await readPr(folder, a.pr, io.env);
     base = await pickBase(folder, { base: a.base, prBase: pr?.baseRefName, pr: a.pr });
+    for (const v of a.issues ?? []) {
+      const bare = BARE_ISSUE.exec(v);
+      const repo = bare ? await repoNameOf(folder) : parseGithubRef(v)!.repo;
+      if (!isRepoName(repo)) throw new UsageError(`--issue ${v} names no repo, and this folder's origin isn't on GitHub: use owner/name#number.`);
+      issueRefs.push({ repo, number: bare ? Number(bare[1]) : parseGithubRef(v)!.number });
+    }
   } catch (e) {
     return fail(errMsg(e));
   }
@@ -458,14 +503,14 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     const prDescription = pr ? `${pr.title}\n\n${pr.body ?? ''}`.trim() : a.description?.trim() || null;
     const { ctx, diff } = await readChange({
       folder, repo: folder, base, dir, branch, title: pr?.title || branch, prDescription, description: '', design: null,
-      meko: !!meko, issues: async () => [], prior,
+      meko: !!meko, issues: () => readIssues(folder, dir, issueRefs, io), prior,
     });
     if (!diff.files.length) {
       finish('done', { detail: 'nothing changed against the base' });
       if (a.json) {
         io.out(JSON.stringify({
           repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, models, files: 0, counts: noCounts(), findings: [], notes: '',
-          passes: [], scoring: { steps: 0, reported: 0, costUsd: 0 }, seconds: Math.round((io.now() - started) / 1000), costUsd: 0,
+          issues: ctx.issues.map(jsonIssue), passes: [], scoring: { steps: 0, reported: 0, costUsd: 0 }, seconds: Math.round((io.now() - started) / 1000), costUsd: 0,
         }));
       }
       else io.out(`Nothing changed against ${base}.`);
@@ -515,7 +560,7 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     if (a.json) {
       io.out(JSON.stringify({
         repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, models, files: diff.files.length, counts: result.counts,
-        findings: result.kept.map(jsonFinding), notes: result.notes, passes: result.passes.map(jsonPass),
+        findings: result.kept.map(jsonFinding), notes: result.notes, issues: ctx.issues.map(jsonIssue), passes: result.passes.map(jsonPass),
         scoring: { steps: result.scoring.steps, reported: result.scoring.reported, costUsd: cents(result.scoring.usage.costUsd) }, seconds, costUsd: cents(result.usage.costUsd),
       }));
     } else {

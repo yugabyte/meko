@@ -128,7 +128,7 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   Or run it from a terminal, on any checkout, without a session: `meko kode review` reviews the
   change in the folder it runs in against its base, on Claude Code, prints what it kept and exits
   (`--pr <number>` or `--description <text>` gives it the author's account to check the change
-  against, `--json` for scripts and agents). It only reports: you, or the agent that ran it, fix
+  against, `--issue` the issues it is for, `--json` for scripts and agents). It only reports: you, or the agent that ran it, fix
   what it found, and `--prior <file>` tells the next run what earlier runs found and what came of
   each, so it checks them rather than raising them again. Its runs count in Usage's **Code Reviews**.
   The Code gate says what its press does: **Review Changes** when it starts the code review first,
