@@ -205,6 +205,38 @@ describe('meko kode review', () => {
     expect(err.join('')).toBe("--issue 7 names no repo, and this folder's origin isn't on GitHub: use owner/name#number.\n");
   });
 
+  it('keeps the run with --keep: each step streamed to its own transcript, what the steps read, the result, never the tokens', async () => {
+    fake('review-reports.json', {
+      ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number.', gotchas: [] }] },
+    });
+    const kept = join(home, 'kept', 'run1');
+    expect(await runReview(paths, ['--json', '--keep', kept], io())).toBe(0);
+    expect(err.join('')).toContain(`Kept the run in ${kept}.`);
+    for (const x of steps()) expect(x.args[x.args.indexOf('--output-format') + 1]).toBe('stream-json');
+    const files = readdirSync(kept).sort();
+    expect(files).toEqual(expect.arrayContaining([
+      'base.md', 'r1c1.jsonl', 'r1s1-claims.jsonl', 'r1s1-dependents.jsonl', 'r1s1-diff.jsonl', 'r1s1-guide.jsonl', 'r1s1-history.jsonl',
+      'review.json', 's1-claims.md', 's1-diff.md', 'score-1.md',
+    ]));
+    expect(files).not.toContain('mcp.json');
+    const transcript = readFileSync(join(kept, 'r1s1-guide.jsonl'), 'utf8').split('\n');
+    expect(JSON.parse(transcript[0])).toMatchObject({ type: 'assistant' });
+    expect(JSON.parse(transcript[1])).toMatchObject({ type: 'result', total_cost_usd: 0.25 });
+    // The result read from the stream's last line: what each step spent still adds up.
+    const r = JSON.parse(out.join('\n'));
+    expect(r.costUsd).toBe(1.5);
+    expect(JSON.parse(readFileSync(join(kept, 'review.json'), 'utf8'))).toEqual(r);
+
+    // A folder with a run in it already, or one in the reviewed repo, is refused before anything is recorded.
+    err = [];
+    expect(await runReview(paths, ['--keep', kept], io())).toBe(1);
+    expect(err.join('')).toBe(`--keep's folder ${kept} isn't empty: name a new or empty one, so one run's files don't mix with another's.\n`);
+    err = [];
+    expect(await runReview(paths, ['--keep', 'logs/run1'], io())).toBe(1);
+    expect(err.join('')).toBe("--keep's folder logs/run1 is in the reviewed repo, whose next review would read it as part of the change: name one outside it.\n");
+    expect(records()).toHaveLength(1);
+  });
+
   it("runs each tier's steps on --model's model, the config's for the rest", async () => {
     fake('review-reports.json', {
       ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number.', gotchas: [] }] },

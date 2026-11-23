@@ -10,7 +10,7 @@
  */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { rmSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { SEVERITIES, noCounts, type CodeReviewFinding, type SeverityCounts } from '../../shared/codereview.js';
@@ -329,20 +329,63 @@ export function readStepResult(r: { stdout: string; stderr: string; code: number
   return { usage };
 }
 
+/** The last line of a `stream-json` run that is its result, or '' when it has none. */
+export function streamResult(text: string): string {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim();
+    if (!l) continue;
+    try {
+      const v = JSON.parse(l) as { type?: unknown } | null;
+      if (v && typeof v === 'object' && v.type === 'result') return l;
+    } catch {
+      /* a line cut by the tail kept */
+    }
+  }
+  return '';
+}
+
+/** A step's transcript file: its id as a file name, numbered from its second run on (ask-again). */
+export const transcriptName = (id: string, run: number) => `${id.replace(/[^A-Za-z0-9_-]+/g, '-')}${run > 1 ? `.${run}` : ''}.jsonl`;
+
 /**
  * Runs each step as one `claude -p` (`reviewStepArgs`) in `cwd`, its prompt on stdin, on its tier's
  * model, with `env` (the caller's, without any session's markers). Stopped by the signal or past
- * STEP_TIMEOUT_MS: SIGTERM, then SIGKILL 5 seconds on.
+ * STEP_TIMEOUT_MS: SIGTERM, then SIGKILL 5 seconds on. With `transcripts`, each run streams every
+ * message into its own owner-only file there (`transcriptName`), and the result is its last line.
  */
 export function claudeSteps(o: {
   command: string; models: Record<Tier, string>; mcpConfig: string; runDir: string; cwd: string; env: NodeJS.ProcessEnv; timeoutMs?: number;
   /** The sign-in part of the user's Claude Code settings (`signInSettings`). */
   signIn?: Record<string, unknown>;
+  /** A folder for each step's transcript, or none. */
+  transcripts?: string;
 }): StepRunner {
   const timeoutMs = o.timeoutMs ?? STEP_TIMEOUT_MS;
+  const stream = !!o.transcripts;
+  const runs = new Map<string, number>();
   return (step, signal) => new Promise((resolve) => {
-    const args = reviewStepArgs({ model: o.models[step.tier] ?? '', mcpConfig: o.mcpConfig, runDir: o.runDir, signIn: o.signIn });
+    const args = reviewStepArgs({ model: o.models[step.tier] ?? '', mcpConfig: o.mcpConfig, runDir: o.runDir, signIn: o.signIn, stream });
     let stdout = '', stderr = '', spawnError: string | null = null, timedOut = false, settled = false;
+    let fd: number | null = null;
+    if (o.transcripts) {
+      const run = (runs.get(step.id) ?? 0) + 1;
+      runs.set(step.id, run);
+      try {
+        fd = openSync(join(o.transcripts, transcriptName(step.id, run)), 'w', 0o600);
+      } catch {
+        fd = null; // The step runs without one, as agent-k's does.
+      }
+    }
+    const closeTranscript = () => {
+      if (fd === null) return;
+      try {
+        closeSync(fd);
+      } catch {
+        /* closed */
+      }
+      fd = null;
+    };
     // In the spelling Claude is given every other path in (the prompts, --add-dir, the MCP config),
     // as a session's launcher cds there: under /net, Read would otherwise be outside the working folder.
     const child = spawn(o.command, args, { cwd: claudePath(o.cwd), env: { ...o.env, NO_COLOR: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -362,7 +405,16 @@ export function claudeSteps(o: {
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (c: string) => {
-      if (stdout.length < OUTPUT_MAX) stdout += c;
+      if (fd !== null) {
+        try {
+          writeSync(fd, c);
+        } catch {
+          closeTranscript();
+        }
+      }
+      // A stream keeps its tail, which ends in the result; plain JSON is all result.
+      if (stream) stdout = (stdout + c).slice(-OUTPUT_MAX);
+      else if (stdout.length < OUTPUT_MAX) stdout += c;
     });
     child.stderr.on('data', (c: string) => {
       if (stderr.length < OUTPUT_MAX) stderr += c;
@@ -372,7 +424,8 @@ export function claudeSteps(o: {
       settled = true;
       clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
-      resolve(readStepResult({ stdout, stderr, code, spawnError, timedOut }, o.command));
+      closeTranscript();
+      resolve(readStepResult({ stdout: stream ? streamResult(stdout) : stdout, stderr, code, spawnError, timedOut }, o.command));
     };
     child.on('error', (e: NodeJS.ErrnoException) => {
       if (e.syscall?.startsWith('spawn')) spawnError = e.message;

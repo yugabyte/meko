@@ -495,15 +495,16 @@ export function signInSettings(dir = claudeUserDir()): Record<string, unknown> {
  * The arguments for one step of `meko kode review` (a pass or a scorer), its prompt on stdin: one
  * run of Claude Code in print mode on the step's model, with only Read, Grep and Glob of its own
  * tools, only the MCP servers in `mcpConfig` (Kode's report tools and Meko), the review's run
- * folder readable beside the reviewed folder, and the result as JSON (with its tokens and cost). No
+ * folder readable beside the reviewed folder, and the result as JSON (with its tokens and cost), or,
+ * with `stream`, every message as a line of JSON ending in that result, for a transcript. No
  * settings file is read, the user's or the repo's (`--setting-sources ''`): only the sign-in part of
  * the user's (`signIn`, from `signInSettings`), with every hook off, in the default permission mode.
  */
-export function reviewStepArgs(o: { model: string; mcpConfig: string; runDir: string; signIn?: Record<string, unknown> }): string[] {
+export function reviewStepArgs(o: { model: string; mcpConfig: string; runDir: string; signIn?: Record<string, unknown>; stream?: boolean }): string[] {
   return [
     '-p',
     ...(o.model ? ['--model', o.model] : []),
-    '--output-format', 'json',
+    ...(o.stream ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json']),
     '--tools', 'Read,Grep,Glob',
     '--mcp-config', claudePath(o.mcpConfig),
     '--strict-mcp-config',

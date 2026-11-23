@@ -9,7 +9,9 @@ import { getPaths } from '../../src/server/paths.js';
 import {
   CLI_RECORD_MAX_AGE_MS, CLI_RUN_DIR_MAX_AGE_MS, cliReviewsDir, ingestCliRecords, projectForCheckout, readCliRecord, sweepOldRecords, writeCliRecord, type CliReviewRecord,
 } from '../../src/server/review/clirecords.js';
-import { HeadlessReview, ReviewFailed, noUsage, readStepResult, type HeadlessStep, type StepRunner } from '../../src/server/review/headless.js';
+import {
+  HeadlessReview, ReviewFailed, noUsage, readStepResult, streamResult, transcriptName, type HeadlessStep, type StepRunner,
+} from '../../src/server/review/headless.js';
 import { moreSweeps } from '../../src/server/review/merge.js';
 import { strategyFor } from '../../src/server/review/strategies.js';
 import type { Diff, FileChange, ReviewContext } from '../../src/server/review/types.js';
@@ -26,6 +28,7 @@ describe('meko kode review: the command line', () => {
     expect(parseReviewArgs(['--pr', '41'])).toMatchObject({ pr: '41' });
     expect(parseReviewArgs(['--description=Adds a login page.'])).toMatchObject({ description: 'Adds a login page.' });
     expect(parseReviewArgs(['--prior', 'rounds.json'])).toMatchObject({ prior: 'rounds.json' });
+    expect(parseReviewArgs(['--keep', 'runs/1'])).toMatchObject({ keep: 'runs/1' });
     expect(parseReviewArgs(['--issue', '12', '--issue=#13', '--issue', 'acme/other#14', '--issue', 'https://github.com/acme/other/issues/15']))
       .toMatchObject({ issues: ['12', '#13', 'acme/other#14', 'https://github.com/acme/other/issues/15'] });
     expect(parseReviewArgs(['--model', 'sonnet', '--model=small=claude-haiku-4-5', '--model', 'mid=opus[1m]']))
@@ -184,6 +187,24 @@ describe('a review step on Claude Code', () => {
     expect(val('--permission-mode')).toBe('default');
     expect(val('--add-dir')).toBe('/run/r');
     expect(reviewStepArgs({ model: '', mcpConfig: '/m', runDir: '/r' })).not.toContain('--model');
+    expect(val('--output-format')).toBe('json');
+    // For a transcript: every message, then the result.
+    const stream = reviewStepArgs({ model: 'opus', mcpConfig: '/m', runDir: '/r', stream: true });
+    expect(stream[stream.indexOf('--output-format') + 1]).toBe('stream-json');
+    expect(stream).toContain('--verbose');
+    expect(stream).toContain('--no-session-persistence');
+  });
+
+  it("reads a streamed step's result from its last result line, and names its transcripts", () => {
+    const result = JSON.stringify({ type: 'result', is_error: false, total_cost_usd: 0.5 });
+    expect(streamResult(['{"type":"system"}', '{"type":"assistant","message":{}}', result, ''].join('\n'))).toBe(result);
+    // The tail kept can start mid-line.
+    expect(streamResult(`pe":"assistant"}\n${result}`)).toBe(result);
+    expect(streamResult('{"type":"assistant"}\n')).toBe('');
+    expect(readStepResult({ stdout: streamResult(result), stderr: '', code: 0, spawnError: null, timedOut: false }, 'claude').usage.costUsd).toBe(0.5);
+    expect(transcriptName('r1s1:guide', 1)).toBe('r1s1-guide.jsonl');
+    expect(transcriptName('r1s1:guide', 2)).toBe('r1s1-guide.2.jsonl');
+    expect(transcriptName('r1c12', 1)).toBe('r1c12.jsonl');
   });
 
   it('reads what a step spent and how it ended', () => {

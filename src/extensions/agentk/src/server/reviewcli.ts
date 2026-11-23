@@ -8,9 +8,9 @@
  */
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   DEFAULT_STRATEGY, MAX_DEPTH, SEVERITIES, STRATEGIES, countsText, noCounts, strategyName, totalCount, type CodeReviewFinding, type FindingOutcome,
@@ -60,6 +60,8 @@ it found and exits 0; 1 when it couldn't review.
   --strategy <id>        sagittarius-3.0 or sirius-1.0 (default: [code_review] strategy)
   --model [<tier>=]<m>   The model a tier's steps run on, large without a tier; again for another
                          tier (default: [code_review.models.claude])
+  --keep <dir>           Keep the run in this new or empty folder: each step's whole transcript, the
+                         prompts and files the steps read, and the result as review.json
   --json                 Print the result as JSON`;
 
 /** What the command line asked for. */
@@ -75,6 +77,8 @@ export interface ReviewArgs {
   strategy?: ReviewStrategyId;
   /** `--model`'s models, by tier. */
   models?: Partial<Record<Tier, string>>;
+  /** The folder `--keep` names, as given. */
+  keep?: string;
   json: boolean;
   help: boolean;
 }
@@ -84,7 +88,7 @@ const TIERS: Tier[] = ['large', 'mid', 'small'];
 /** A mistake on the command line, in words. */
 export class UsageError extends Error {}
 
-const VALUED = ['--base', '--pr', '--description', '--issue', '--prior', '--depth', '--strategy', '--model'] as const;
+const VALUED = ['--base', '--pr', '--description', '--issue', '--prior', '--depth', '--strategy', '--model', '--keep'] as const;
 
 /** A bare issue number, for the reviewed repo. */
 const BARE_ISSUE = /^#?(\d{1,7})$/;
@@ -106,6 +110,7 @@ export function parseReviewArgs(args: string[]): ReviewArgs {
       else if (name === '--pr') a.pr = value.trim();
       else if (name === '--description') a.description = value;
       else if (name === '--prior') a.prior = value.trim();
+      else if (name === '--keep') a.keep = value.trim();
       else if (name === '--issue') {
         const v = value.trim();
         const ref = parseGithubRef(v);
@@ -266,6 +271,16 @@ export async function untrustedPr(folder: string, pr: CliPr | null, visibility: 
   return v === 'public' ? `${repo} is public` : `GitHub didn't say whether ${repo} is public`;
 }
 
+/** A path's real path, through its nearest folder that exists for one that doesn't yet. */
+function realPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    const up = dirname(p);
+    return up === p ? p : join(realPath(up), basename(p));
+  }
+}
+
 /** The repo's main checkout, its real path (a worktree's too): what the server matches to a project. */
 async function mainCheckout(folder: string): Promise<string> {
   const common = await git(folder, 'rev-parse', '--path-format=absolute', '--git-common-dir').catch(() => '');
@@ -327,7 +342,9 @@ export interface ReviewIo {
   /** A GitHub issue's title and body, read with gh (`issueOrPr`), for `--issue`. */
   issue?: (cwd: string, repo: string, number: number) => Promise<{ title: string; body: string; url: string }>;
   /** The step runner (tests swap it). */
-  steps?: (o: { command: string; models: Record<Tier, string>; mcpConfig: string; runDir: string; cwd: string; env: NodeJS.ProcessEnv; signIn?: Record<string, unknown> }) => StepRunner;
+  steps?: (o: {
+    command: string; models: Record<Tier, string>; mcpConfig: string; runDir: string; cwd: string; env: NodeJS.ProcessEnv; signIn?: Record<string, unknown>; transcripts?: string;
+  }) => StepRunner;
 }
 
 export function processIo(): ReviewIo {
@@ -433,7 +450,11 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
   // Before anything is recorded: what to review, and what to review it with.
   let folder: string, base: string, pr: CliPr | null = null, prior: PriorRound[] = [];
   const issueRefs: { repo: string; number: number }[] = [];
+  const keep = a.keep ? resolve(io.cwd, a.keep) : null;
   try {
+    if (keep && existsSync(keep) && (!statSync(keep).isDirectory() || readdirSync(keep).length)) {
+      throw new UsageError(`--keep's folder ${a.keep} isn't empty: name a new or empty one, so one run's files don't mix with another's.`);
+    }
     if (a.prior) {
       let raw: string;
       try {
@@ -446,6 +467,10 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     folder = await git(io.cwd, 'rev-parse', '--show-toplevel').catch(() => {
       throw new UsageError("This folder isn't in a git repo. Run meko kode review in the repo whose change you want reviewed.");
     });
+    const inside = keep && relative(realPath(folder), realPath(keep));
+    if (keep && !inside?.startsWith('..') && !isAbsolute(inside || '')) {
+      throw new UsageError(`--keep's folder ${a.keep} is in the reviewed repo, whose next review would read it as part of the change: name one outside it.`);
+    }
     if (!(await io.claudeVersion(cfg.claude.command))) {
       throw new UsageError(`meko kode review runs on Claude Code, which isn't installed here (${cfg.claude.command}). Install it, or set [claude] command in config.toml.`);
     }
@@ -494,9 +519,15 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     if (progressShown && io.errTTY) io.err('\r\x1b[K');
     progressShown = false;
   };
+  // The result: printed with --json, and kept as review.json with --keep.
+  const summarize = (summary: object) => {
+    if (keep) writeFileSync(join(keep, 'review.json'), `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
+    if (a.json) io.out(JSON.stringify(summary));
+  };
   try {
     sweepOldRecords(paths);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (keep) mkdirSync(keep, { recursive: true, mode: 0o700 });
     const untrusted = await untrustedPr(folder, pr, io.visibility);
     if (untrusted && pr) io.err(`${untrusted}, so anyone can have written PR #${pr.number}: the review runs without the repo's MEKO.md datapacks.\n`);
     const meko = untrusted ? null : await io.meko(paths, cfg).catch(() => null);
@@ -507,13 +538,11 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     });
     if (!diff.files.length) {
       finish('done', { detail: 'nothing changed against the base' });
-      if (a.json) {
-        io.out(JSON.stringify({
-          repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, models, files: 0, counts: noCounts(), findings: [], notes: '',
-          issues: ctx.issues.map(jsonIssue), passes: [], scoring: { steps: 0, reported: 0, costUsd: 0 }, seconds: Math.round((io.now() - started) / 1000), costUsd: 0,
-        }));
-      }
-      else io.out(`Nothing changed against ${base}.`);
+      summarize({
+        repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, models, files: 0, counts: noCounts(), findings: [], notes: '',
+        issues: ctx.issues.map(jsonIssue), passes: [], scoring: { steps: 0, reported: 0, costUsd: 0 }, seconds: Math.round((io.now() - started) / 1000), costUsd: 0,
+      });
+      if (!a.json) io.out(`Nothing changed against ${base}.`);
       return 0;
     }
     const adds = diff.files.reduce((n, f) => n + f.additions, 0);
@@ -540,7 +569,9 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     if (meko && ctx.datapacks.length) servers[REVIEW_MEKO_SERVER] = { type: 'http', url: meko.url, headers: { Authorization: `Bearer ${meko.token}` } };
     writeFileSync(mcpConfig, `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`, { mode: 0o600 });
     const make = io.steps ?? claudeSteps;
-    const runStep = make({ command: cfg.claude.command, models, mcpConfig, runDir: dir, cwd: folder, env: stepEnv(io.env), signIn: signInSettings() });
+    const runStep = make({
+      command: cfg.claude.command, models, mcpConfig, runDir: dir, cwd: folder, env: stepEnv(io.env), signIn: signInSettings(), transcripts: keep ?? undefined,
+    });
     const r = new HeadlessReview({
       strategy, depth, ctx, diff, base: prompt, dir, signal: controller.signal, runStep,
       progress: (p) => {
@@ -557,15 +588,12 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     clearProgress();
     finish('done', { result });
     const seconds = Math.round((io.now() - started) / 1000);
-    if (a.json) {
-      io.out(JSON.stringify({
-        repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, models, files: diff.files.length, counts: result.counts,
-        findings: result.kept.map(jsonFinding), notes: result.notes, issues: ctx.issues.map(jsonIssue), passes: result.passes.map(jsonPass),
-        scoring: { steps: result.scoring.steps, reported: result.scoring.reported, costUsd: cents(result.scoring.usage.costUsd) }, seconds, costUsd: cents(result.usage.costUsd),
-      }));
-    } else {
-      io.out(formatFindings(result, [duration(io.now() - started), dollars(result.usage.costUsd)], io.color));
-    }
+    summarize({
+      repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, models, files: diff.files.length, counts: result.counts,
+      findings: result.kept.map(jsonFinding), notes: result.notes, issues: ctx.issues.map(jsonIssue), passes: result.passes.map(jsonPass),
+      scoring: { steps: result.scoring.steps, reported: result.scoring.reported, costUsd: cents(result.scoring.usage.costUsd) }, seconds, costUsd: cents(result.usage.costUsd),
+    });
+    if (!a.json) io.out(formatFindings(result, [duration(io.now() - started), dollars(result.usage.costUsd)], io.color));
     return 0;
   } catch (e) {
     clearProgress();
@@ -583,6 +611,15 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     // Whatever still runs (a step of a review that failed) stops with it.
     controller.abort();
     await closeTools?.().catch(() => undefined);
+    // However it ended: what the steps read beside their transcripts, never the tokens in mcp.json.
+    if (keep && existsSync(dir)) {
+      try {
+        cpSync(dir, keep, { recursive: true, filter: (src) => basename(src) !== 'mcp.json' });
+        io.err(`Kept the run in ${keep}.\n`);
+      } catch (e) {
+        io.err(`Couldn't keep the run in ${keep}: ${errMsg(e)}\n`);
+      }
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 }
