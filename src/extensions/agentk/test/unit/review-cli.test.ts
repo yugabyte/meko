@@ -124,6 +124,16 @@ describe('meko kode review: the command line', () => {
     ].join('\n'));
     expect(formatFindings({ kept: [], counts: noCounts(), notes: 'The migration has no down step.' }, [duration(45_000), dollars(0)], false))
       .toBe('Note: The migration has no down step.\n\nLGTM · 45s');
+    const pass = (name: string, sweep: number, reported: boolean, error: string | null) => ({ pass: name, sweep, reported, findings: 0, usage: noUsage(), error });
+    expect(formatFindings({
+      kept: [], counts: noCounts(), notes: '',
+      passes: [pass('guide', 1, true, null), pass('history', 1, false, 'Claude Code failed: overloaded'), pass('claims', 2, false, null)],
+    }, [duration(45_000)], false)).toBe([
+      "Note: The history pass didn't report (Claude Code failed: overloaded), so the review went on without it.",
+      "Note: The claims pass of sweep 2 didn't report, so the review went on without it.",
+      '',
+      'LGTM · 45s',
+    ].join('\n'));
   });
 
   it("uses the repo's MEKO.md only for the user's own work or a PR on a repo only people with access can push to", async () => {
@@ -270,6 +280,16 @@ describe('the headless review', () => {
     expect(r.notes).toBe('The migration has no down step.');
     expect(r.sweeps).toBe(1);
     expect(r.usage).toEqual({ input: 8, output: 16, cacheRead: 24, cacheWrite: 32, costUsd: 4 });
+    // Each pass's own run, in the strategy's order, and the scorers' together: they add up to the total.
+    const spent = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, costUsd: 0.5 };
+    expect(r.passes).toEqual([
+      { pass: 'guide', sweep: 1, reported: true, findings: 2, usage: spent, error: null },
+      { pass: 'diff', sweep: 1, reported: true, findings: 2, usage: spent, error: null },
+      { pass: 'dependents', sweep: 1, reported: true, findings: 0, usage: spent, error: null },
+      { pass: 'history', sweep: 1, reported: true, findings: 0, usage: spent, error: null },
+      { pass: 'claims', sweep: 1, reported: true, findings: 0, usage: spent, error: null },
+    ]);
+    expect(r.scoring).toEqual({ steps: 3, reported: 3, usage: { input: 3, output: 6, cacheRead: 9, cacheWrite: 12, costUsd: 1.5 } });
   });
 
   it('runs another sweep while one adds something, past the second', async () => {
@@ -295,6 +315,9 @@ describe('the headless review', () => {
     const r = await review.run();
     expect(log.filter((s) => s === 'r1s1:history')).toHaveLength(2);
     expect(r.counts).toEqual(noCounts());
+    // Said, so a review short of a pass isn't taken for a whole one.
+    expect(r.passes.filter((p) => !p.reported)).toEqual([{ pass: 'history', sweep: 1, reported: false, findings: 0, usage: noUsage(), error: 'it stopped' }]);
+    expect(r.scoring).toEqual({ steps: 0, reported: 0, usage: noUsage() });
   });
 
   it('fails when no pass reports in the first sweep, saying why', async () => {

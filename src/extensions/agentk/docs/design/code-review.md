@@ -388,11 +388,15 @@ meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--prior <
   Off runs the default, as **Run code review** does. Re-review rounds and the check don't apply:
   a script that runs it again passes what came of the earlier runs with `--prior`.
 - **Output.** stdout gets the kept findings, worst first, each with its comment (and **Caught with
-  Meko** with the gotchas it credits), the passes' notes, then one line: the counts or `LGTM`, how
-  long it took and what Claude Code says it cost. `--json` gives `{ repo, branch, base, head,
-  strategy, depth, files, counts, findings: [{ key, file, line, severity, comment, confidence,
-  passes, credits }], notes, seconds, costUsd }` instead (with `files: 0` and no findings when
-  nothing changed). stderr gets what it's reviewing and its
+  Meko** with the gotchas it credits), the passes' notes and a note for each pass that never
+  reported (`missedPass`: the review went on without it, so it isn't taken for a whole one), then
+  one line: the counts or `LGTM`, how long it took and what Claude Code says it cost. `--json`
+  gives `{ repo, branch, base, head, strategy, depth, files, counts, findings: [{ key, file, line,
+  severity, comment, confidence, passes, credits }], notes, passes: [{ name, sweep, reported,
+  findings, costUsd, error }], scoring: { steps, reported, costUsd }, seconds, costUsd }` instead:
+  each sweep's passes with what each raised and spent, its ask-again included, and why one that
+  failed didn't report (`PassRun`), then the scorers together (with `files: 0`, no findings and no
+  passes when nothing changed). stderr gets what it's reviewing and its
   progress (one line redrawn on a terminal, a line per phase elsewhere) and any error.
 
 **How it runs** (`src/server/review/headless.ts`, `HeadlessReview`). It runs headless in the CLI's

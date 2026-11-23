@@ -112,6 +112,12 @@ describe('meko kode review', () => {
       repo: 'demo-repo', branch: 'feat/login', base: 'main', strategy: 'sagittarius-3.0', depth: 1, files: 2, counts: { blocker: 0, major: 1, minor: 0 },
       findings: [{ key: '1:1', file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number where a session is expected.', confidence: 90, passes: ['diff'] }],
     });
+    // Each pass's run and the scorers', what each spent ($0.25 a step here).
+    expect(r.passes).toEqual(['guide', 'diff', 'dependents', 'history', 'claims'].map((name) => ({
+      name, sweep: 1, reported: true, findings: name === 'diff' || name === 'history' ? 1 : 0, costUsd: 0.25, error: null,
+    })));
+    expect(r.scoring).toEqual({ steps: 2, reported: 2, costUsd: 0.5 });
+    expect(r.costUsd).toBe(1.75);
     // The description reached the passes, quoted as data.
     expect(steps()[0].file).toContain('> Adds the login page.');
     // Two scorers: one per candidate.
@@ -171,6 +177,17 @@ describe('meko kode review', () => {
     expect(await runReview(paths, ['--prior', file], io())).toBe(1);
     expect(err.join('')).toBe('--prior: the file holds a JSON array of rounds. See: meko kode review --help\n');
     expect(records()).toHaveLength(1);
+  });
+
+  it('says which pass never reported, so a review short of one is not taken for a whole one', async () => {
+    fake('review-reports.json', LEDGERS);
+    fake('review-skip', ['r1s1:history']);
+    expect(await runReview(paths, [], io())).toBe(0);
+    expect(out.join('\n')).toContain("Note: The history pass didn't report, so the review went on without it.");
+    out = [];
+    expect(await runReview(paths, ['--json'], io())).toBe(0);
+    const r = JSON.parse(out.join('\n'));
+    expect(r.passes.filter((p: { reported: boolean }) => !p.reported)).toEqual([{ name: 'history', sweep: 1, reported: false, findings: 0, costUsd: 0.5, error: null }]);
   });
 
   it('says so when nothing changed', async () => {

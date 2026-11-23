@@ -29,7 +29,8 @@ import { claudePath, type Paths } from './paths.js';
 import { cliReviewsDir, sweepOldRecords, writeCliRecord, CLI_RECORD_V, type CliReviewRecord } from './review/clirecords.js';
 import { baseRefIn, commitRef, readChange, repoNameOf } from './review/context.js';
 import {
-  HeadlessReview, ReviewFailed, claudeSteps, noUsage, serveTools, toolsToken, type HeadlessProgress, type HeadlessResult, type StepRunner, type StepUsage,
+  HeadlessReview, ReviewFailed, claudeSteps, noUsage, serveTools, toolsToken, type HeadlessProgress, type HeadlessResult, type PassRun, type StepRunner,
+  type StepUsage,
 } from './review/headless.js';
 import { basePrompt } from './review/prompt.js';
 import { strategyFor } from './review/strategies.js';
@@ -313,8 +314,12 @@ export function processIo(): ReviewIo {
 
 const paint = (on: boolean, code: string, s: string) => (on ? `\x1b[${code}m${s}\x1b[0m` : s);
 
-/** The findings as text: each with its severity, place and comment, then the summary line. */
-export function formatFindings(r: Pick<HeadlessResult, 'kept' | 'counts' | 'notes'>, extra: string[], color: boolean): string {
+/** A pass that didn't report, as a note: the review went on without it. */
+export const missedPass = (p: PassRun) =>
+  `The ${p.pass} pass${p.sweep > 1 ? ` of sweep ${p.sweep}` : ''} didn't report${p.error ? ` (${p.error})` : ''}, so the review went on without it.`;
+
+/** The findings as text: each with its severity, place and comment, the notes, then the summary line. */
+export function formatFindings(r: Pick<HeadlessResult, 'kept' | 'counts' | 'notes'> & { passes?: PassRun[] }, extra: string[], color: boolean): string {
   const lines: string[] = [];
   const sev = { blocker: '31', major: '33', minor: '2' } as const;
   for (const f of r.kept) {
@@ -323,17 +328,24 @@ export function formatFindings(r: Pick<HeadlessResult, 'kept' | 'counts' | 'note
     if (f.credits.length) lines.push(`         ${paint(color, '2', `Caught with Meko (${f.credits.map((c) => c.id).join(', ')})`)}`);
     lines.push('');
   }
-  if (r.notes) lines.push(...r.notes.split('\n').map((l) => `Note: ${l.replace(/^- /, '')}`), '');
+  const notes = [...(r.notes ? r.notes.split('\n').map((l) => l.replace(/^- /, '')) : []), ...(r.passes ?? []).filter((p) => !p.reported).map(missedPass)];
+  if (notes.length) lines.push(...notes.map((l) => `Note: ${l}`), '');
   const n = totalCount(r.counts);
   const head = n ? `${n} finding${n === 1 ? '' : 's'}: ${countsText(r.counts)}` : 'LGTM';
   lines.push([head, ...extra].filter(Boolean).join(paint(color, '2', ' · ')));
   return lines.join('\n');
 }
 
+/** Dollars to the cent, as `--json` gives them. */
+const cents = (usd: number) => Math.round(usd * 100) / 100;
+
 /** A finding as `--json` gives it. */
 const jsonFinding = (f: CodeReviewFinding) => ({
   key: f.key, file: f.file, line: f.line, severity: f.severity, comment: f.comment, confidence: f.confidence, passes: f.passes, credits: f.credits,
 });
+
+/** A pass's run as `--json` gives it. */
+const jsonPass = (p: PassRun) => ({ name: p.pass, sweep: p.sweep, reported: p.reported, findings: p.findings, costUsd: cents(p.usage.costUsd), error: p.error });
 
 /** The progress line's text. */
 export function progressText(p: HeadlessProgress): string {
@@ -438,7 +450,7 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
       if (a.json) {
         io.out(JSON.stringify({
           repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, files: 0, counts: noCounts(), findings: [], notes: '',
-          seconds: Math.round((io.now() - started) / 1000), costUsd: 0,
+          passes: [], scoring: { steps: 0, reported: 0, costUsd: 0 }, seconds: Math.round((io.now() - started) / 1000), costUsd: 0,
         }));
       }
       else io.out(`Nothing changed against ${base}.`);
@@ -488,7 +500,8 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     if (a.json) {
       io.out(JSON.stringify({
         repo: rec.repo, branch, base, head: sha, strategy: strategy.id, depth, files: diff.files.length, counts: result.counts,
-        findings: result.kept.map(jsonFinding), notes: result.notes, seconds, costUsd: Math.round(result.usage.costUsd * 100) / 100,
+        findings: result.kept.map(jsonFinding), notes: result.notes, passes: result.passes.map(jsonPass),
+        scoring: { steps: result.scoring.steps, reported: result.scoring.reported, costUsd: cents(result.scoring.usage.costUsd) }, seconds, costUsd: cents(result.usage.costUsd),
       }));
     } else {
       io.out(formatFindings(result, [duration(io.now() - started), dollars(result.usage.costUsd)], io.color));

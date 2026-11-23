@@ -76,6 +76,18 @@ export type HeadlessProgress =
 /** A review that couldn't finish, with why in words. */
 export class ReviewFailed extends Error {}
 
+/** How one pass of one sweep went, its ask-again included. */
+export interface PassRun {
+  pass: string;
+  sweep: number;
+  reported: boolean;
+  /** Findings its report raised, before merging and scoring. */
+  findings: number;
+  usage: StepUsage;
+  /** Why it didn't report, when its step failed; null when it reported or just never called the tool. */
+  error: string | null;
+}
+
 export interface HeadlessResult {
   /** Every candidate as a finding, kept or dropped. */
   findings: CodeReviewFinding[];
@@ -86,6 +98,10 @@ export interface HeadlessResult {
   candidates: number;
   /** Sweeps that ran. */
   sweeps: number;
+  /** Each sweep's passes, in the strategy's order. */
+  passes: PassRun[];
+  /** The scorers: how many ran, how many reported, and what they spent. */
+  scoring: { steps: number; reported: number; usage: StepUsage };
   /** The passes' summaries worth showing (`mergeNotes`), or ''. */
   notes: string;
   usage: StepUsage;
@@ -102,6 +118,9 @@ export class HeadlessReview {
   private open = new Map<string, { pass: Pass } | { candidate: number }>();
   private reports = new Map<string, PassReport | ScoreReport>();
   private usage = noUsage();
+  /** What each step spent, its ask-again included, and its last error, by step id. */
+  private stepUsage = new Map<string, StepUsage>();
+  private stepError = new Map<string, string>();
   /** The last step's error, for a review no pass reported in. */
   private lastError = '';
   /** How far it got: the sweeps whose passes ran and the candidates they raised (for a run that stops). */
@@ -154,6 +173,7 @@ export class HeadlessReview {
     const { strategy, depth, dir } = this.o;
     let cands: Candidate[] = [];
     const notes: string[] = [];
+    const passes: PassRun[] = [];
     let sweeps = 0;
     for (let sweep = 1; sweep <= depth; sweep++) {
       const ctx = sweepContext(sweep, depth, cands);
@@ -168,6 +188,14 @@ export class HeadlessReview {
       await this.runSteps(steps, steps.length, (done) => this.o.progress?.({ phase: 'sweep', sweep, depth, done, total: steps.length }));
       this.open.clear();
       sweeps = sweep;
+      strategy.passes.forEach((pass, i) => {
+        const id = steps[i].id;
+        const report = this.reports.get(id) as PassReport | undefined;
+        passes.push({
+          pass: pass.name, sweep, reported: !!report, findings: report?.findings.length ?? 0, usage: this.stepUsage.get(id) ?? noUsage(),
+          error: report ? null : this.stepError.get(id) ?? null,
+        });
+      });
       const reports = steps.map((s) => this.reports.get(s.id)).filter((r): r is PassReport => !!r);
       if (!reports.length) {
         // Nothing from this sweep: a later one ends the sweeping; the first fails the review.
@@ -182,6 +210,7 @@ export class HeadlessReview {
       if (!moreSweeps(depth, sweep, merged.added)) break;
     }
     const scores = new Map<number, ScoreReport>();
+    const scoring = { steps: 0, reported: 0, usage: noUsage() };
     if (strategy.scored && cands.length) {
       const base = scoreBase(this.o.ctx, this.o.diff);
       const steps = cands.map((c, i) => {
@@ -197,11 +226,15 @@ export class HeadlessReview {
       steps.forEach((s, i) => {
         const r = this.reports.get(s.id);
         if (r) scores.set(i + 1, r as ScoreReport);
+        scoring.usage = addStepUsage(scoring.usage, this.stepUsage.get(s.id) ?? noUsage());
       });
+      Object.assign(scoring, { steps: steps.length, reported: scores.size });
     }
     const { findings, post } = judgeRound({ round: 1, cands, scores, diff: this.o.diff, scored: strategy.scored });
     const kept = findings.filter((f) => f.kept).sort((a, b) => rank(a) - rank(b) || a.file.localeCompare(b.file) || a.line - b.line);
-    return { findings, kept, counts: post.length ? countsOf(post) : noCounts(), candidates: cands.length, sweeps, notes: notes.join('\n'), usage: this.usage };
+    return {
+      findings, kept, counts: post.length ? countsOf(post) : noCounts(), candidates: cands.length, sweeps, passes, scoring, notes: notes.join('\n'), usage: this.usage,
+    };
   }
 
   /**
@@ -240,12 +273,18 @@ export class HeadlessReview {
     if (stop.signal.aborted || this.o.signal.aborted) throw abortError();
     const out = await this.o.runStep(s, stop.signal);
     this.usage = addStepUsage(this.usage, out.usage);
+    this.stepUsage.set(s.id, addStepUsage(this.stepUsage.get(s.id) ?? noUsage(), out.usage));
     if (this.o.signal.aborted) throw abortError();
     if (out.fatal) {
       stop.abort();
       throw new ReviewFailed(out.fatal);
     }
-    if (out.error) this.lastError = out.error;
+    if (out.error) {
+      this.lastError = out.error;
+      this.stepError.set(s.id, out.error);
+    } else {
+      this.stepError.delete(s.id);
+    }
   }
 }
 
