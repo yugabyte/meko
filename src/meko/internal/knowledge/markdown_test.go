@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -225,8 +226,10 @@ func TestMarkdownStopsOnContext(t *testing.T) {
 	}
 }
 
-// Hostile shapes take time linear in their size: 8 times the bytes take well under 16 times as
-// long (64 times, for a quadratic shape). A ratio, so a slow machine doesn't fail it.
+// Hostile shapes take time linear in their size: 8 times the bytes take about 8 times as long,
+// and a quadratic shape 64 times. The limit, 32, sits between them so a noisy CI runner (17 times
+// once at 16) doesn't fail it and a quadratic shape still does. A ratio, so a slow machine doesn't
+// fail it.
 func TestMarkdownHostileShapesLinear(t *testing.T) {
 	repeat := func(s string) func(int) string {
 		return func(n int) string { return strings.Repeat(s, n/len(s)) }
@@ -249,7 +252,7 @@ func TestMarkdownHostileShapesLinear(t *testing.T) {
 	for name, shape := range shapes {
 		small, large := shape(64<<10), shape(512<<10)
 		ts, tl := fastest(small), fastest(large)
-		if tl > 16*ts && tl > 50*time.Millisecond {
+		if tl > 32*ts && tl > 50*time.Millisecond {
 			t.Errorf("%s: %v for 64 KiB, %v for 512 KiB", name, ts, tl)
 		}
 	}
@@ -264,10 +267,12 @@ func staircase(n int) string {
 	return b.String()
 }
 
-// fastest is the least of three runs' times finding md's sections.
+// fastest is the least of five runs' times finding md's sections, each run after a garbage
+// collection so it doesn't pay for the last one's garbage.
 func fastest(md string) time.Duration {
 	best := time.Duration(1<<63 - 1)
-	for range 3 {
+	for range 5 {
+		runtime.GC()
 		start := time.Now()
 		_, _, _ = markdownSections(context.Background(), md)
 		best = min(best, time.Since(start))
