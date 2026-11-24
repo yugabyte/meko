@@ -94,6 +94,8 @@ Kode has no login. With Meko's remote access (the default over SSH), anyone who 
 
 ## Docs
 
+- [Using Kode with Meko](docs/guide.md): setting up with Meko Cloud, projects and datapacks,
+  sharing, and best practices
 - [Features](docs/features.md) and [install details](docs/install.md)
 - [Design](docs/design.md): how Kode works, one file per area
 - [Contributing](../../../CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for Kode's commands and map
