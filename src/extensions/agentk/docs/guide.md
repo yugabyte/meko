@@ -1,21 +1,53 @@
 # Using Kode with Meko
 
-A guide for teams starting with Kode: how to set it up with Meko Cloud, how to lay out projects and
-datapacks, what Kode reads from and writes to Meko at each stage of a task, and the habits that
-make the shared context worth having. The [README](../README.md) is the short version,
-[features](features.md) lists everything Kode does, and [install](install.md) has the install details.
+A guide for teams starting with Kode: what it does with projects, sessions, stages, code reviews
+and agents, how it learns with Meko, then how to set it up, lay out projects and datapacks, share
+them with your team, and the habits that make the shared context worth having. The
+[README](../README.md) is the short version, [features](features.md) lists everything Kode does,
+and [install](install.md) has the install details.
 
-## The ideas in one minute
+## What Kode does
 
-- **Kode** runs coding agents (Claude Code, OpenCode or Kiro CLI) in parallel, one git worktree
-  and branch per task, and takes each task through **Explore → Design → Code → Pull Request →
-  Merge & Close**. You approve the design, the PR and the merge.
+- **Projects.** A project is an effort on a service, feature area or migration, worked on in one
+  git repo. Each has a Meko **dedicated datapack** that holds what its sessions learn, and can
+  read any number of **shared datapacks** (team conventions, the repo's gotchas). Sharing a
+  project with your team is sharing its dedicated datapack.
+- **Sessions.** Each task is a session with its own git worktree, branch and coding agent, so
+  many tasks run at once without stepping on each other. You see the agent's real terminal in
+  your browser or on your phone, and sessions keep running when you close the page or Kode
+  updates.
+- **Stages.** Every task runs on **Explore → Design → Code → Pull Request → Merge & Close**.
+  Explore is for investigating and experiments, Design ends with a design you approve, Code ends
+  with a PR you approve opening, and Merge & Close merges it and cleans up. Start a task at
+  whichever stage fits and move it on or back between turns, or check **Run to merge** and Kode
+  passes the gates by itself, stopping only when it needs you.
+- **Code reviews.** Before a PR opens, Kode reviews the change on your computer (Sagittarius 3.0:
+  five specialist passes and a scorer for each finding; or the quicker Sirius 1.0). You check the
+  findings, keep or dismiss each with a note, and Kode fixes what you keep. The review also
+  searches the repo's gotchas in Meko, and marks what that caught **Caught with Meko**. Run it any
+  time from a session, or on any checkout with `meko kode review`. For someone else's PR, a
+  **Review a PR** session sums it up with the author's design beside it.
+- **Claude Code, OpenCode or Kiro CLI.** Each session runs on the agent you pick, with the same
+  stages, gates, design review and PR flow; pick a model per session too. Claude Code adds
+  designs as Artifacts and answering its questions in Kode; Kiro shows its credits.
+- **Learning with Meko.** When a session starts, Kode searches the project's datapacks for its
+  task and gives the agent what the team already knows, and each stage's prompt asks it to search
+  Meko before reading code. Designs go to Meko as they're approved, and the PR names them. When a
+  task merges or is discarded, Kode's **learn step** asks the session what it learned (how things
+  work, decisions and why, root causes, gotchas, measured numbers) and saves what the datapack
+  doesn't have yet, correcting what it has wrong. **Learn the project** seeds a new datapack from
+  the repo's files and its merged PRs.
+- **Self-learning.** Meko keeps the searches it couldn't answer as **Context Gaps**. When a later
+  session finds the answer, Kode's learn step (on Claude Code, through Kode's mod) saves it and
+  marks the gap taught, so the next
+  session that asks finds it in Meko. Over time the datapack fills in where agents actually got
+  stuck.
+
+## Meko in one minute
+
 - **Meko** is the context engine. Its unit is the **datapack**: memories (short facts), a
   knowledge base (documents), conversations and artifacts (files such as designs), searched
   together with `context_search`.
-- **A Kode project** is a repo plus a **dedicated datapack** that holds what the project's
-  sessions learn, plus any **shared datapacks** it reads from. Sharing a project is sharing its
-  dedicated datapack.
 - **Meko Cloud** holds datapacks your team can share. Kode always talks to the Meko on your own
   computer; once that Meko is linked to Meko Cloud, it passes each call to the side that holds
   the datapack, and new datapacks are made in Meko Cloud.
