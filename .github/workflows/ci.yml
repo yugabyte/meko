@@ -21,8 +21,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       agentk: ${{ steps.scope.outputs.agentk }}
-      backend: ${{ steps.scope.outputs.backend }}
-      presenter: ${{ steps.scope.outputs.presenter }}
+      meko: ${{ steps.scope.outputs.meko }}
+      present: ${{ steps.scope.outputs.present }}
     steps:
       # A PR runs on GitHub's merge commit, whose first parent is the base branch: two commits
       # are enough to diff it.
@@ -46,9 +46,9 @@ jobs:
           cat "$RUNNER_TEMP/scope" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/scope"
 
-  # AgentK (extensions/agentk).
+  # Kode (src/extensions/agentk).
   agentk:
-    name: AgentK (${{ matrix.os }})
+    name: Kode (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.agentk == 'true'
     strategy:
@@ -57,15 +57,15 @@ jobs:
         os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    # AgentK lives in extensions/agentk; its package.json and scripts are there.
+    # Kode lives in src/extensions/agentk; its package.json and scripts are there.
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     steps:
       - uses: actions/checkout@v7
 
-      # AgentK needs no tmux. Linux gets it only for the tests of moving older installs off
-      # it (extensions/agentk/test/integration/move-off-tmux.test.ts, skipped without tmux); drop
+      # Kode needs no tmux. Linux gets it only for the tests of moving older installs off
+      # it (src/extensions/agentk/test/integration/move-off-tmux.test.ts, skipped without tmux); drop
       # it with them.
       - name: Install system packages
         if: runner.os == 'Linux'
@@ -77,7 +77,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: extensions/agentk/package-lock.json
+          cache-dependency-path: src/extensions/agentk/package-lock.json
 
       - name: Configure git for tests
         run: |
@@ -96,11 +96,11 @@ jobs:
         env:
           TERM: xterm-256color
 
-  # Meko's Go backend (backend/). cgo builds natively on each platform, so both run here.
-  backend:
-    name: Backend (${{ matrix.os }})
+  # Meko (src/meko). cgo builds natively on each platform, so both run here.
+  meko:
+    name: Meko (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.meko == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -109,37 +109,37 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: backend
+        working-directory: src/meko
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: backend/go.mod
+          go-version-file: src/meko/go.mod
           # go.mod is always there; go.sum only once there are dependencies.
           cache-dependency-path: |
-            backend/go.mod
-            backend/go.sum
+            src/meko/go.mod
+            src/meko/go.sum
 
-      # The memory engine (backend/memory_engine) is TypeScript on Node.
+      # The context engine (src/meko/context_engine) is TypeScript on Node.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            backend/memory_engine/package-lock.json
-            backend/web_ui/package-lock.json
+            src/meko/context_engine/package-lock.json
+            src/meko/web_ui/package-lock.json
 
       # The Go end-to-end tests use the real embedding model (about 23 MB, from Hugging Face): keep it.
       - name: Cache the embedding model
         uses: actions/cache@v6
         with:
-          path: backend/memory_engine/.models
+          path: src/meko/context_engine/.models
           key: models-all-MiniLM-L6-v2-751bff3-q8-ms-marco-MiniLM-L-6-v2-a091443-q8
 
-      - run: make build memory_engine
+      - run: make build context_engine
       - run: ./bin/meko version
-      # The menu bar app (backend/menubar) is macOS's alone.
+      # The menu bar app (src/meko/menubar) is macOS's alone.
       - if: runner.os == 'macOS'
         run: make menubar && codesign --verify --strict bin/Meko.app
 
@@ -147,19 +147,19 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.14.0
-          working-directory: backend
+          working-directory: src/meko
 
       - run: go vet -tags sqlite_fts5,sqlite_vec ./...
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: npm run typecheck
-        working-directory: backend/memory_engine
+        working-directory: src/meko/context_engine
       - run: make test
 
-  # Presenter (extensions/presenter).
-  presenter:
-    name: Presenter (${{ matrix.os }})
+  # Present (src/extensions/present).
+  present:
+    name: Present (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.presenter == 'true'
+    if: needs.changes.outputs.present == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -168,7 +168,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: extensions/presenter
+        working-directory: src/extensions/present
     steps:
       - uses: actions/checkout@v7
 
@@ -176,7 +176,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: extensions/presenter/package-lock.json
+          cache-dependency-path: src/extensions/present/package-lock.json
 
       - run: npm ci
       - run: npm run typecheck
@@ -186,11 +186,11 @@ jobs:
 
   # Merging into main requires this check and `PR title` by name: renaming it means updating the
   # branch rules. It passes when every job in needs passed or was skipped, so a new component's
-  # job goes into needs (extensions/agentk/test/unit/ci-scope.test.ts checks).
+  # job goes into needs (src/extensions/agentk/test/unit/ci-scope.test.ts checks).
   gate:
     name: CI gate
     if: always()
-    needs: [changes, agentk, backend, presenter]
+    needs: [changes, agentk, meko, present]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

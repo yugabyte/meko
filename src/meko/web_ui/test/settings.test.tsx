@@ -1,0 +1,161 @@
+// @vitest-environment happy-dom
+// The Settings page's switches for the features that run the user's Claude Code, against a faked
+// /api/v1: turning one on sends only the harness, and a failed test call leaves it off with why. And
+// its Access card, which says only whether Meko takes local or remote requests, and the cards' order.
+
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, expect, test, vi } from "vitest";
+import type { AuthStatus } from "../src/lib/types";
+import { SettingsPage } from "../src/pages/SettingsPage";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const local: AuthStatus = { access: "local", local_access: true, signed_in: true };
+
+let root: Root;
+let sent: { method: string; url: string; body?: string }[];
+
+type Reply = { status?: number; data?: unknown; error?: { code: string; message: string } };
+
+function serve(routes: Record<string, (body?: string) => Reply>) {
+  sent = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const body = init?.body as string | undefined;
+      sent.push({ method, url, body });
+      const r = routes[`${method} ${url}`]?.(body) ?? { status: 404, error: { code: "NOT_FOUND", message: "no" } };
+      return Response.json({ data: r.data ?? null, error: r.error ?? null }, { status: r.status ?? 200 });
+    }),
+  );
+}
+
+function toggle(label: string): HTMLButtonElement {
+  const b = document.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`);
+  if (!b) throw new Error(`no ${label} switch in: ${document.body.textContent}`);
+  return b;
+}
+
+async function render(auth: AuthStatus = local) {
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root.render(<SettingsPage auth={auth} />));
+}
+
+afterEach(() => {
+  act(() => root.unmount());
+  document.body.innerHTML = "";
+  vi.unstubAllGlobals();
+});
+
+const extractorOff = { enabled: false, harness: "", model: "", interval_seconds: 300, queued: 0, extracted: 0 };
+
+test("turning Search answers on sends the harness alone, and shows it on", async () => {
+  let answersOn = false;
+  serve({
+    "GET /api/v1/settings/memory-extractor": () => ({ data: extractorOff }),
+    "GET /api/v1/settings/answers": () => ({
+      data: { enabled: answersOn, harness: answersOn ? "claude" : "", model: answersOn ? "haiku" : "" },
+    }),
+    "PUT /api/v1/settings/answers": () => ((answersOn = true), { data: { enabled: true } }),
+    "GET /api/v1/settings/usage-stats": () => ({ data: { enabled: true, sends: true, forced_off: false } }),
+  });
+  await render();
+  expect(toggle("Search answers").getAttribute("aria-checked")).toBe("false");
+  await act(async () => toggle("Search answers").click());
+  expect(sent.find((c) => c.method === "PUT")).toMatchObject({
+    url: "/api/v1/settings/answers",
+    body: JSON.stringify({ harness: "claude" }),
+  });
+  expect(toggle("Search answers").getAttribute("aria-checked")).toBe("true");
+  expect(document.body.textContent).toContain("claude (haiku)");
+});
+
+test("a failed test call leaves memory extraction off and says why", async () => {
+  serve({
+    "GET /api/v1/settings/memory-extractor": () => ({ data: extractorOff }),
+    "GET /api/v1/settings/answers": () => ({ data: { enabled: false, harness: "", model: "" } }),
+    "PUT /api/v1/settings/memory-extractor": () => ({
+      status: 400,
+      error: { code: "VALIDATION_ERROR", message: "a test call failed (is claude installed and signed in?)" },
+    }),
+    "GET /api/v1/settings/usage-stats": () => ({ data: { enabled: false, sends: true, forced_off: false } }),
+  });
+  await render();
+  await act(async () => toggle("Memory extraction").click());
+  expect(toggle("Memory extraction").getAttribute("aria-checked")).toBe("false");
+  expect(document.body.textContent).toContain("is claude installed and signed in?");
+});
+
+test("the Access card says only local or remote", async () => {
+  serve({});
+  await render({ access: "remote", local_access: false, signed_in: true });
+  const access = () => [...document.querySelectorAll("h3")].find((h) => h.textContent === "Access")?.parentElement?.textContent;
+  expect(access()).toBe("AccessRemote");
+  // The web UI has no login, so Settings has no account card.
+  expect(document.body.textContent).not.toContain("Account");
+  act(() => root.unmount());
+  await render(local);
+  expect(access()).toBe("AccessLocal");
+});
+
+test("Keep call contents turns on with keep alone, and clearing asks first", async () => {
+  let keep = false;
+  let calls = 3;
+  serve({
+    "GET /api/v1/settings/call-contents": () => ({ data: { keep, retention_days: 7, calls, bytes: 2048 } }),
+    "PUT /api/v1/settings/call-contents": () => ((keep = true), { data: { keep, retention_days: 7, calls, bytes: 2048 } }),
+    "DELETE /api/v1/calls/contents": () => ((calls = 0), { data: { keep, retention_days: 7, calls, bytes: 0 } }),
+  });
+  await render();
+  expect(document.body.textContent).toContain("Kept for 7 days. 3 calls kept, 2.0 KB.");
+  expect(document.querySelector<HTMLAnchorElement>('a[href="/calls"]')?.textContent).toContain("View calls");
+  await act(async () => toggle("Keep call contents").click());
+  expect(sent.find((c) => c.method === "PUT")).toMatchObject({
+    url: "/api/v1/settings/call-contents",
+    body: JSON.stringify({ keep: true }),
+  });
+  expect(toggle("Keep call contents").getAttribute("aria-checked")).toBe("true");
+  const button = (text: string) => [...document.querySelectorAll("button")].find((b) => b.textContent === text);
+  await act(async () => button("Clear contents")!.click());
+  expect(sent.some((c) => c.method === "DELETE")).toBe(false);
+  await act(async () => button("Clear")!.click());
+  expect(sent.find((c) => c.method === "DELETE")?.url).toBe("/api/v1/calls/contents");
+  expect(document.body.textContent).toContain("None kept now.");
+});
+
+test("the cards come in order: Meko Cloud, Cloud Sync, Claude Code, Access, Calls, then anonymous usage stats", async () => {
+  serve({});
+  await render();
+  const headings = [...document.querySelectorAll("h3")].map((h) => h.textContent);
+  expect(headings).toEqual([
+    "Meko Cloud",
+    "Cloud Sync",
+    "Uses your Claude Code",
+    "Access",
+    "Calls",
+    "Anonymous usage stats",
+  ]);
+});
+
+test("Cloud Sync is off until it's turned on, and asks for the API key while Meko Cloud isn't linked", async () => {
+  let on = false;
+  serve({
+    "GET /api/v1/settings/cloud-sync": () => ({ data: { enabled: on } }),
+    "PUT /api/v1/settings/cloud-sync": () => ((on = true), { data: { enabled: true } }),
+    "GET /api/v1/settings/meko-cloud": () => ({ data: { linked: false } }),
+  });
+  await render();
+  expect(toggle("Enable Cloud Sync").getAttribute("aria-checked")).toBe("false");
+  expect(document.body.textContent).not.toContain("API key");
+  await act(async () => toggle("Enable Cloud Sync").click());
+  expect(sent.find((c) => c.method === "PUT")).toMatchObject({
+    url: "/api/v1/settings/cloud-sync",
+    body: JSON.stringify({ enabled: true }),
+  });
+  expect(toggle("Enable Cloud Sync").getAttribute("aria-checked")).toBe("true");
+  expect(document.body.textContent).toContain("asks for your Meko Cloud API key");
+});

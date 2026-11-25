@@ -27,8 +27,8 @@ If one does, show it to the user and offer to comment on it or update it instead
 | Feature | Something new, or a change in behavior users will see | `Feature` | `enhancement` |
 | Task | Planned work, a chore or a checklist (a release step, a setting, a cleanup) | `Task` | none |
 
-Add a product label for each product the issue is about: `meko` (Meko, `backend/`), `agentk`
-(`extensions/agentk`), `presenter` (`extensions/presenter`). An issue about only the shared root
+Add a product label for each product the issue is about: `meko` (Meko, `src/meko`), `agentk`
+(`src/extensions/agentk`), `present` (`src/extensions/present`). An issue about only the shared root
 (CI, `scripts/`, root docs) takes none. Forms can't set these, so issues filed on the web get
 theirs when someone triages them; add a missing one when you come across it.
 
@@ -39,7 +39,7 @@ A plain sentence: what's wrong (bug), what should become possible (feature), or 
 `<type>(<component>): …` format, which is for commits and PRs. Keep it under about 90
 characters.
 
-- `AgentK update can leave existing installations without a reachable web UI`
+- `Kode update can leave existing installations without a reachable web UI`
 - `Verify release provenance in Meko's updater, pinned to the release workflow on main`
 
 ## Body
@@ -58,7 +58,7 @@ When you know more than a reporter would, add it after the form's sections (see 
 #314):
 
 - **Why**: the cause, with code pointers: the file and the function or symbol
-  (`extensions/agentk/src/server/harness/opencode.ts`, `normalizeOpenCode`). Line numbers go stale.
+  (`src/extensions/agentk/src/server/harness/opencode.ts`, `normalizeOpenCode`). Line numbers go stale.
 - **Workaround**, **Tests** (what would prove it fixed), **Out of scope**, **Open question**.
 
 Write plain, specific sentences. "Done when" items are outcomes someone can check. Logs and
@@ -74,6 +74,10 @@ contents). Say "a user" or "the reporter" instead, and use made-up values where 
 needs one (`alice@example.com`, `github.com/acme/demo-repo`). Write `~` for a home folder.
 `meko status` and many logs print the web UI's hostname, the data folder's path, and user,
 datapack and project names: cut or replace them. Screenshots need the same care.
+
+A vulnerability is never an issue: it's reported privately, as the repo root's `SECURITY.md`
+says. The issue chooser's **Report a vulnerability** link (`.github/ISSUE_TEMPLATE/config.yml`)
+points there.
 
 ## Filing
 

@@ -1,0 +1,517 @@
+import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { TranscriptMark } from './harness/types.js';
+import type { LauncherSpec } from './launcher.js';
+import { claudePath, type Paths } from './paths.js';
+import { writeScript } from './scriptfile.js';
+import { claudeAllowedTools } from './tooldefs.js';
+
+/**
+ * Markers a running Claude Code session puts in its children's environment.
+ * If Kode itself was started from inside Claude Code, these must not
+ * reach the sessions it launches (e.g. CLAUDE_CODE_CHILD_SESSION turns off
+ * transcript saving, which breaks --resume). User settings such as
+ * CLAUDE_CODE_USE_BEDROCK are deliberately kept.
+ */
+export const CLAUDE_SESSION_MARKERS = [
+  'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_BRIDGE_SESSION_ID',
+  'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID', 'CLAUDE_EFFORT',
+];
+
+/**
+ * Hook script: forwards the hook payload (stdin) to the server over its unix
+ * socket, tagged with the session's token. It must never block or fail Claude,
+ * so it always exits 0 and gives up after 3 seconds.
+ */
+const HOOK_SCRIPT = `#!/bin/sh
+# Written by Kode. Forwards Claude Code hook events to the server.
+# AK_*: their names in a session launched before Kode was called Kode.
+[ -n "\${KODE_HOOK_TOKEN:-}" ] || KODE_HOOK_TOKEN=\${AK_HOOK_TOKEN:-}
+[ -n "\${KODE_HOOK_SOCK:-}" ] || KODE_HOOK_SOCK=\${AK_HOOK_SOCK:-}
+[ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
+curl -s -o /dev/null --max-time 3 --unix-socket "$KODE_HOOK_SOCK" \\
+  -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
+  --data-binary @- http://localhost/hook >/dev/null 2>&1
+exit 0
+`;
+
+/**
+ * Guard hook for file edits: asks the server whether the edit may go ahead and prints
+ * its decision (Claude Code reads it from stdout). During Design the server denies edits
+ * inside the repo. If the server can't be reached, it prints nothing and the edit goes
+ * ahead: the guard must never leave Claude stuck.
+ */
+const GUARD_SCRIPT = `#!/bin/sh
+# Written by Kode. Asks the server whether a file edit may go ahead.
+# AK_*: their names in a session launched before Kode was called Kode.
+[ -n "\${KODE_HOOK_TOKEN:-}" ] || KODE_HOOK_TOKEN=\${AK_HOOK_TOKEN:-}
+[ -n "\${KODE_HOOK_SOCK:-}" ] || KODE_HOOK_SOCK=\${AK_HOOK_SOCK:-}
+[ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
+curl -sf --max-time 3 --unix-socket "$KODE_HOOK_SOCK" \\
+  -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
+  --data-binary @- http://localhost/guard 2>/dev/null
+exit 0
+`;
+
+/**
+ * SessionStart hook: asks the server for context to start the session with (what Kode's Meko
+ * search found, see recall.ts) and prints it for Claude Code. Like the guard, it prints nothing
+ * when the server can't be reached or has nothing, and never fails or holds up Claude for long.
+ */
+const CONTEXT_SCRIPT = `#!/bin/sh
+# Written by Kode. Asks the server for context to start the session with.
+# AK_*: their names in a session launched before Kode was called Kode.
+[ -n "\${KODE_HOOK_TOKEN:-}" ] || KODE_HOOK_TOKEN=\${AK_HOOK_TOKEN:-}
+[ -n "\${KODE_HOOK_SOCK:-}" ] || KODE_HOOK_SOCK=\${AK_HOOK_SOCK:-}
+[ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
+curl -sf --max-time 4 --unix-socket "$KODE_HOOK_SOCK" \\
+  -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
+  --data-binary @- http://localhost/context 2>/dev/null
+exit 0
+`;
+
+/**
+ * Status line: Claude Code runs it with a JSON description of the session, which includes
+ * the plan usage limits (5-hour and weekly) on Pro and Max plans. It passes those to the
+ * server in the background, then runs the user's own status line command with the same
+ * input, so the terminal looks as it would without Kode.
+ */
+const STATUSLINE_SCRIPT = `#!/bin/sh
+# Written by Kode. Reports plan usage limits, then prints the user's status line.
+input=$(cat)
+# AK_*: their names in a session launched before Kode was called Kode.
+[ -n "\${KODE_HOOK_TOKEN:-}" ] || KODE_HOOK_TOKEN=\${AK_HOOK_TOKEN:-}
+[ -n "\${KODE_HOOK_SOCK:-}" ] || KODE_HOOK_SOCK=\${AK_HOOK_SOCK:-}
+if [ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ]; then
+  case $input in
+    *'"rate_limits"'*)
+      printf '%s' "$input" | curl -s -o /dev/null --max-time 2 --unix-socket "$KODE_HOOK_SOCK" \\
+        -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
+        --data-binary @- http://localhost/statusline >/dev/null 2>&1 &
+      ;;
+  esac
+fi
+# Sessions launched before this script existed don't have KODE_USER_STATUSLINE (nor its name before,
+# AK_USER_STATUSLINE); use the saved user one.
+if [ -n "\${KODE_USER_STATUSLINE+x}" ]; then cmd=$KODE_USER_STATUSLINE
+elif [ -n "\${AK_USER_STATUSLINE+x}" ]; then cmd=$AK_USER_STATUSLINE
+else cmd=$(cat "$(dirname "$0")/user-statusline" 2>/dev/null); fi
+[ -n "$cmd" ] && printf '%s' "$input" | sh -c "$cmd"
+exit 0
+`;
+
+/** File-editing tools the Design-stage guard checks. */
+export const EDIT_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
+
+export function guardScriptPath(paths: Paths): string {
+  return join(paths.run, 'guard.sh');
+}
+
+export function contextScriptPath(paths: Paths): string {
+  return join(paths.run, 'context.sh');
+}
+
+export function hookScriptPath(paths: Paths): string {
+  return join(paths.run, 'hook.sh');
+}
+
+export function statusLineScriptPath(paths: Paths): string {
+  return join(paths.run, 'statusline.sh');
+}
+
+export interface StatusLineSetting {
+  type?: string;
+  command?: string;
+  padding?: number;
+  refreshInterval?: number;
+}
+
+/** Claude Code's user settings folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`). */
+export function claudeUserDir(): string {
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+}
+
+function readStatusLine(file: string, ours: string): StatusLineSetting | null {
+  try {
+    const sl = (JSON.parse(readFileSync(file, 'utf8')) as { statusLine?: unknown }).statusLine;
+    if (!sl || typeof sl !== 'object') return null;
+    const s = sl as StatusLineSetting;
+    // Never wrap our own script (for example, settings copied from a session): match its full path.
+    return s.type === 'command' && typeof s.command === 'string' && s.command.trim() && !s.command.includes(ours)
+      ? s
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Meko's status line script as the start of a command (optionally run by `sh`/`bash`, the path
+ * optionally quoted). It prints an optional inner command's line, then "Meko: <pinned datapack>".
+ */
+const MEKO_STATUSLINE = /^\s*(?:(?:ba)?sh\s+)?(['"]?)(?:[^'"\s]*\/)?meko-statusline\.sh\1(?=\s|$)/;
+
+/** Runs what Meko's script would run first (`--inner-cmd <cmd>`, or `MEKO_INNER_STATUSLINE`), and nothing else. */
+const MEKO_INNER_ONLY =
+  'ak_meko_inner() { if [ "${1:-}" = --inner-cmd ] && [ -n "${2:-}" ]; then eval "$2"; ' +
+  'elif [ -n "${MEKO_INNER_STATUSLINE:-}" ]; then eval "$MEKO_INNER_STATUSLINE"; fi; }; ak_meko_inner';
+
+/**
+ * Drops Meko's "Meko: <datapack>" status line suffix: sessions always use the project's
+ * datapack, and the session screen already shows it. The command it wraps still runs.
+ */
+export function withoutMekoSuffix(command: string): string {
+  return command.replace(MEKO_STATUSLINE, MEKO_INNER_ONLY);
+}
+
+/**
+ * The status line Claude Code would run without ours (`ours`, the relay's path), since ours
+ * (passed with --settings) replaces it: local project settings first, then project, then user.
+ */
+export function userStatusLine(worktree: string | null, ours: string): StatusLineSetting | null {
+  const files = [
+    ...(worktree ? [join(worktree, '.claude', 'settings.local.json'), join(worktree, '.claude', 'settings.json')] : []),
+    join(claudeUserDir(), 'settings.json'),
+  ];
+  for (const f of files) {
+    const sl = readStatusLine(f, ours);
+    if (sl) return { ...sl, command: withoutMekoSuffix(sl.command!) };
+  }
+  return null;
+}
+
+export function hooksSettingsPath(paths: Paths): string {
+  return join(paths.run, 'hooks.json');
+}
+
+/**
+ * Writes the hook script and the --settings file every session is launched with. `disabledPlugins`
+ * (plugin keys) are turned off in sessions whatever the user's own settings say.
+ */
+export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] } = {}): void {
+  mkdirSync(paths.run, { recursive: true });
+  const script = hookScriptPath(paths);
+  writeScript(script, HOOK_SCRIPT);
+  const guard = guardScriptPath(paths);
+  writeScript(guard, GUARD_SCRIPT);
+  const context = contextScriptPath(paths);
+  writeScript(context, CONTEXT_SCRIPT);
+  const statusLine = statusLineScriptPath(paths);
+  writeScript(statusLine, STATUSLINE_SCRIPT);
+  // Keep the user's layout options; their command is run by our script (KODE_USER_STATUSLINE, or
+  // this file for sessions launched before the variable existed).
+  const mine = userStatusLine(null, statusLine);
+  writeFileSync(join(paths.run, 'user-statusline'), mine?.command ?? '');
+  const cmd = { type: 'command', command: script, timeout: 5 };
+  const all = [{ hooks: [cmd] }];
+  const settings = {
+    // Claude Code's main-screen renderer, whatever the user's own `tui` says (or a rollout flag
+    // picks): its full-screen one draws on the alternate buffer, which has no scrollback, so find in
+    // the terminal, the wheel and swipes would reach only the screen. Their own terminals keep theirs.
+    tui: 'default',
+    // The design file lives outside the repo; writing it, and publishing the design as an
+    // Artifact (private by default), shouldn't stop for a permission prompt. Edit() rules cover
+    // every file-editing tool, Write included; Claude Code ignores Write() rules and warns about them.
+    // Images added in the New session dialog reach Claude as paths in its first prompt, for it to read.
+    // Claude is given these folders' local spelling (claudePath), so the rules use it too.
+    // The session tools' read-only list needs no ask; the tools that change something do.
+    permissions: {
+      allow: [`Edit(/${claudePath(paths.designs)}/**)`, 'Artifact', `Read(/${claudePath(paths.pastes)}/**)`, ...claudeAllowedTools()],
+    },
+    statusLine: {
+      type: 'command',
+      command: statusLine,
+      ...(typeof mine?.padding === 'number' ? { padding: mine.padding } : {}),
+      ...(typeof mine?.refreshInterval === 'number' ? { refreshInterval: mine.refreshInterval } : {}),
+    },
+    hooks: {
+      // The second hook prints what Kode's Meko search found for the task (recall.ts).
+      SessionStart: [{ hooks: [cmd, { type: 'command', command: context, timeout: 5 }] }],
+      UserPromptSubmit: all,
+      PreToolUse: [
+        // ExitPlanMode carries the design text for sessions that still design in plan mode.
+        { matcher: 'ExitPlanMode', hooks: [cmd] },
+        // File edits are checked by the Design-stage guard.
+        { matcher: EDIT_TOOLS.join('|'), hooks: [{ type: 'command', command: guard, timeout: 5 }] },
+      ],
+      // PostToolUse on every tool marks the session busy again after a permission prompt.
+      PostToolUse: [{ matcher: '*', hooks: [cmd] }],
+      PermissionRequest: [{ matcher: '*', hooks: [cmd] }],
+      Notification: all,
+      Stop: all,
+      SessionEnd: all,
+    },
+    ...(opts.disabledPlugins?.length ? { enabledPlugins: Object.fromEntries(opts.disabledPlugins.map((k) => [k, false])) } : {}),
+  };
+  writeFileSync(hooksSettingsPath(paths), JSON.stringify(settings, null, 2));
+}
+
+/**
+ * The oldest Claude Code Kode's mod runs in: plugins' hooks modules, `$.prompt.submit` with
+ * `asUser` (older ones frame the prompt as a plugin's message) and `session.measure` (2.1.286), and
+ * for the learn step `$.model.fork`, `$.model.complete`, `$.command.register` and `command.run`
+ * (checked in 2.1.287's declarations; 2.1.286's couldn't be).
+ */
+export const MIN_MOD_CLAUDE = '2.1.287';
+
+/**
+ * The files of Kode's mod and of its view mod, relative to each one's folder: src/mod/agentk and
+ * src/mod/agentk-view in the repo (tsx, tests), dist/mod/… in a build. Their tests stay behind.
+ */
+const MOD_FILES = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.ts'];
+const MOD_SOURCE = join(dirname(fileURLToPath(import.meta.url)), '..', 'mod', 'agentk');
+const VIEW_SOURCE = join(dirname(fileURLToPath(import.meta.url)), '..', 'mod', 'agentk-view');
+
+/** Where sessions load Kode's mod from (`--plugin-dir`). */
+export function modDirPath(paths: Paths): string {
+  return join(paths.run, 'mod', 'kode');
+}
+
+/**
+ * Where sessions load Kode's view mod from (a second `--plugin-dir`, beside the mod): it draws
+ * Kode's prompts folded, which the mod can't, since Claude Code never shows a plugin the rows of
+ * the prompts it submitted itself.
+ */
+export function viewDirPath(paths: Paths): string {
+  return join(paths.run, 'mod', 'kode-view');
+}
+
+/** Copies Kode's view mod to the run folder, as `writeModFiles` copies the mod. */
+export function writeViewFiles(paths: Paths, source = VIEW_SOURCE): boolean {
+  return writeModFiles(paths, source, viewDirPath(paths));
+}
+
+/**
+ * Copies Kode's mod to the run folder. Claude reloads a `--plugin-dir` mod when its files change,
+ * so only files that differ are written (a server restart reloads nothing), each through a temp
+ * file renamed into place (a session never reads half a module). Every source file is read first:
+ * when one is missing, or a write fails, the run copy is removed, so sessions start without the
+ * mod (`modDir()` checks for it) rather than with an old or half-updated one. False then; a failed
+ * write also throws.
+ */
+export function writeModFiles(paths: Paths, source = MOD_SOURCE, dest = modDirPath(paths)): boolean {
+  const texts: string[] = [];
+  for (const f of MOD_FILES) {
+    try {
+      texts.push(readFileSync(join(source, f), 'utf8'));
+    } catch {
+      rmSync(dest, { recursive: true, force: true });
+      return false;
+    }
+  }
+  try {
+    MOD_FILES.forEach((f, i) => {
+      const to = join(dest, f);
+      try {
+        if (readFileSync(to, 'utf8') === texts[i]) return;
+      } catch {
+        /* not there yet */
+      }
+      mkdirSync(dirname(to), { recursive: true });
+      const tmp = `${to}.${randomBytes(4).toString('hex')}.tmp`;
+      writeFileSync(tmp, texts[i]);
+      renameSync(tmp, to);
+    });
+  } catch (e) {
+    rmSync(dest, { recursive: true, force: true });
+    throw e;
+  }
+  return true;
+}
+
+/** How long `claude update` may run before it's stopped. */
+const CLAUDE_UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Runs `<command> update`, Claude Code's own updater, and resolves whether it exited 0 and what it
+ * printed (stdout, then stderr). Never rejects: a command that can't start is `ok: false`.
+ */
+export function runClaudeUpdate(command: string): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    execFile(command, ['update'], { timeout: CLAUDE_UPDATE_TIMEOUT_MS, maxBuffer: 1024 * 1024, env: { ...process.env, NO_COLOR: '1' } }, (err, stdout, stderr) => {
+      const output = [String(stdout ?? ''), String(stderr ?? '')].join('\n').trim();
+      resolve({ ok: !err, output: output || (err ? err.message : '') });
+    });
+  });
+}
+
+export interface LaunchSpec {
+  sessionId: string;
+  worktree: string;
+  claudeCommand: string;
+  claudeSessionId: string;
+  /** Resume the conversation instead of starting it. */
+  resume: boolean;
+  name: string;
+  planMode: boolean;
+  /** `--model`: an alias or a full model id; null or left out for Claude Code's default. */
+  model?: string | null;
+  /** Extra directories Claude may work in (the session's design folder). */
+  addDirs: string[];
+  /** Plugins Claude loads for the session (Kode's mod, the session tools' skill), each a `--plugin-dir`. */
+  pluginDirs?: string[];
+  /** MCP config files added to the user's servers (the session tools'), each an `--mcp-config`. */
+  mcpConfigs?: string[];
+  appendSystemPrompt: string;
+  prompt: string | null;
+  env: Record<string, string>;
+  /** Variables the session must not inherit (from the session host's environment or the user's profile). */
+  unsetEnv?: string[];
+  /**
+   * Load only the user's settings, not the repo's (`.claude/settings*.json`: hooks, permissions,
+   * env, status line, plugins) or its `.mcp.json` servers: for a PR head whose code isn't trusted.
+   */
+  userSettingsOnly?: boolean;
+  /**
+   * Subagents for the session (`--agents`), by name: a code-review session's review steps. Each runs
+   * on its model ('' the session's own).
+   */
+  agents?: { name: string; description: string; prompt: string; model: string }[];
+  /** Tools the session and its subagents may not use (`--disallowedTools`): a code-review session's writes. */
+  disallowedTools?: string[];
+}
+
+/** The tools a code-review session (and its subagents) may not use: it reads the change and changes nothing. */
+export const REVIEW_DISALLOWED_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch'];
+
+/**
+ * What a Claude Code session's launcher runs: `claude` with Kode's settings, the conversation
+ * (`--session-id` for a new one, named; `--resume` after), and every path in its local spelling
+ * (see claudePath).
+ */
+export function claudeLauncher(paths: Paths, spec: LaunchSpec): LauncherSpec {
+  const args = ['--settings', claudePath(hooksSettingsPath(paths))];
+  // Kode's --settings, its mod and the user's MCP servers still apply.
+  if (spec.userSettingsOnly) args.push('--setting-sources', 'user');
+  if (spec.resume) {
+    args.push('--resume', spec.claudeSessionId);
+  } else {
+    args.push('--session-id', spec.claudeSessionId, '--name', spec.name);
+  }
+  if (spec.model) args.push('--model', spec.model);
+  if (spec.planMode) args.push('--permission-mode', 'plan');
+  for (const d of spec.addDirs) args.push('--add-dir', claudePath(d));
+  for (const d of spec.pluginDirs ?? []) args.push('--plugin-dir', claudePath(d));
+  for (const f of spec.mcpConfigs ?? []) args.push('--mcp-config', claudePath(f));
+  if (spec.appendSystemPrompt) args.push('--append-system-prompt', spec.appendSystemPrompt);
+  if (spec.agents?.length) {
+    const agents = Object.fromEntries(spec.agents.map((a) => [a.name, { description: a.description, prompt: a.prompt, ...(a.model ? { model: a.model } : {}) }]));
+    args.push('--agents', JSON.stringify(agents));
+  }
+  if (spec.disallowedTools?.length) args.push('--disallowedTools', spec.disallowedTools.join(' '));
+  // After "--", a prompt that starts with "-" (such as "---" front matter) isn't read as an option.
+  if (spec.prompt) args.push('--', spec.prompt);
+  return { sessionId: spec.sessionId, worktree: spec.worktree, command: spec.claudeCommand, args, env: spec.env, unsetEnv: spec.unsetEnv };
+}
+
+/** The most of a transcript read past a mark: a prompt's own user message comes first in its turn. */
+const MARK_READ_MAX = 4 * 1024 * 1024;
+
+/** Where a transcript ends now (0 before it's written). */
+export function transcriptMarkOf(file: string): TranscriptMark {
+  try {
+    return { file, offset: statSync(file).size };
+  } catch {
+    return { file, offset: 0 };
+  }
+}
+
+/**
+ * True when a user message written to the transcript since `mark` holds the start of `text`: Claude
+ * Code writes a prompt's message when its turn starts. When it can't tell (the file was replaced,
+ * or can't be read), true, so a prompt is never taken as lost when it may have run.
+ */
+export function promptInTranscript(mark: TranscriptMark, text: string): boolean {
+  const first = text.split('\n').map((l) => l.trim()).find(Boolean)?.slice(0, 80);
+  if (!first) return true;
+  // As the transcript's JSON writes it.
+  const needle = JSON.stringify(first).slice(1, -1);
+  let fd: number;
+  try {
+    fd = openSync(mark.file, 'r');
+  } catch (e) {
+    // Never written: no turn. Gone since it was written: replaced, so it can't tell.
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT' || mark.offset > 0;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    if (size < mark.offset) return true;
+    const buf = Buffer.alloc(Math.min(size - mark.offset, MARK_READ_MAX));
+    readSync(fd, buf, 0, buf.length, mark.offset);
+    return buf.toString('utf8').split('\n').some((l) => l.includes('"type":"user"') && l.includes(needle));
+  } catch {
+    return true;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Where Claude Code stores a session transcript for a given cwd. Claude keys the folder on the cwd
+ * it started in: the local spelling (claudePath) for sessions launched since Kode started using
+ * it, the stored one for older sessions (a resume from the local spelling finds and keeps adding
+ * to their transcript). Whichever exists, the local one if neither does.
+ */
+export function transcriptPathFor(cwd: string, claudeSessionId: string): string {
+  const at = (dir: string) => join(claudeUserDir(), 'projects', dir.replace(/[^A-Za-z0-9]/g, '-'), `${claudeSessionId}.jsonl`);
+  const local = at(claudePath(cwd));
+  const stored = at(cwd);
+  return local === stored || existsSync(local) || !existsSync(stored) ? local : stored;
+}
+
+/** The MCP server `meko kode review` gives its steps for Meko, in the step's `--mcp-config`. */
+export const REVIEW_MEKO_SERVER = 'meko';
+
+/**
+ * The tools a `meko kode review` step may call without asking, beyond Read, Grep and Glob: the
+ * review's report tools and Meko's two searches. In `-p` anything else that asks is denied.
+ */
+export const REVIEW_STEP_ALLOWED = [
+  'mcp__kode_sessions__review_report', 'mcp__kode_sessions__review_score',
+  `mcp__${REVIEW_MEKO_SERVER}__knowledgebase_search`, `mcp__${REVIEW_MEKO_SERVER}__context_search`,
+];
+
+/**
+ * What a headless run takes from the user's Claude Code settings: only what signing in and the
+ * provider need (`env`, `apiKeyHelper`). Their allow rules, default mode and plugins stay out, so
+ * nothing they pre-allowed (an MCP server's writes, `bypassPermissions`) can run while it reads
+ * text someone else may have written (Slack messages, a PR's diff).
+ */
+export function signInSettings(dir = claudeUserDir()): Record<string, unknown> {
+  try {
+    const s = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(s).filter(([k]) => k === 'env' || k === 'apiKeyHelper'));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The arguments for one step of `meko kode review` (a pass or a scorer), its prompt on stdin: one
+ * run of Claude Code in print mode on the step's model, with only Read, Grep and Glob of its own
+ * tools, only the MCP servers in `mcpConfig` (Kode's report tools and Meko), the review's run
+ * folder readable beside the reviewed folder, and the result as JSON (with its tokens and cost). No
+ * settings file is read, the user's or the repo's (`--setting-sources ''`): only the sign-in part of
+ * the user's (`signIn`, from `signInSettings`), with every hook off, in the default permission mode.
+ */
+export function reviewStepArgs(o: { model: string; mcpConfig: string; runDir: string; signIn?: Record<string, unknown> }): string[] {
+  return [
+    '-p',
+    ...(o.model ? ['--model', o.model] : []),
+    '--output-format', 'json',
+    '--tools', 'Read,Grep,Glob',
+    '--mcp-config', claudePath(o.mcpConfig),
+    '--strict-mcp-config',
+    '--permission-mode', 'default',
+    '--allowedTools', REVIEW_STEP_ALLOWED.join(','),
+    '--setting-sources', '',
+    '--settings', JSON.stringify({ ...(o.signIn ?? {}), disableAllHooks: true }),
+    '--no-session-persistence',
+    '--add-dir', claudePath(o.runDir),
+  ];
+}

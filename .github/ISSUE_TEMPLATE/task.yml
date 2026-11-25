@@ -14,8 +14,8 @@ body:
       label: Product
       options:
         - Meko
-        - AgentK
-        - Presenter
+        - Kode
+        - Present
         - The repo (CI, scripts, docs)
   - type: textarea
     id: context

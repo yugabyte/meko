@@ -1,27 +1,31 @@
 # Sourced by the release scripts in this folder. The repo releases three products from one
 # history, each with its own tags, versions and notes:
 #
-#   agentk  AgentK (extensions/agentk): tags agentk-v<version>, and v<version> before
-#           releases were tagged by product (installed AgentKs from before read only those, so
-#           the newest v… release, which reads both, stays: prune-releases.sh never deletes it)
-#   meko    Meko (backend/): tags meko-v<version>
-#   presenter
-#           Presenter (extensions/presenter): tags presenter-v<version>, whose tarballs Meko installs
-#           and updates (meko extension install, meko extension update)
+#   agentk  Kode (src/extensions/agentk): tags kode-v<version>; agentk-v<version> before Meko
+#           called it Kode, and v<version> before releases were tagged by product (installed
+#           AgentKs from before read only those, so the newest v… release, which reads both,
+#           stays: prune-releases.sh never deletes it)
+#   meko    Meko (src/meko): tags meko-v<version>
+#   present
+#           Present (src/extensions/present): tags present-v<version>, whose tarballs Meko
+#           installs and updates (meko extension install, meko extension update)
 #
-# Takes `--product agentk|meko|presenter` (default agentk) out of the script's arguments and sets:
+# Takes `--product agentk|meko|present` (default agentk) out of the script's arguments and sets:
 #
-#   product       agentk, meko or presenter
+#   product       agentk, meko or present
 #   tag_prefix    the prefix of the product's new tags: tag = <tag_prefix><version>
 #   tag_prefixes  every prefix the product's tags have used, newest scheme first
+#   major         the major version of the product's new releases: 1 for Kode and Meko (their
+#                 releases were 0.… before), 0 for Present. Versions are <major>.<UTC date>.<n>
 #   scope         an extended regex for the `(<component>[/<area>])` of the subjects that may
 #                 release the product, and
 #   exclude       one for those that don't, even though scope matches them. Meko takes the
 #                 subjects that name meko, alone or in a list (feat(agentk,meko): ...), and
-#                 Presenter those that name presenter. AgentK takes every subject but those that
-#                 name only meko or presenter: agentk, repo, lists naming agentk or repo, and old
-#                 subjects with no component or with the free-form one subjects had before
-#                 2026-10-20. So a subject naming agentk and meko releases both
+#                 Present those that name present. Kode takes every subject but those that
+#                 name only meko or present (or presenter, Present's component before it was
+#                 present): agentk, repo, lists naming agentk or repo, and old subjects with no
+#                 component or with the free-form one subjects had before 2026-10-20. So a
+#                 subject naming agentk and meko releases both
 #
 # and newest_tag, which prints the product's newest tag (by version, across its prefixes).
 
@@ -29,7 +33,7 @@ product=agentk
 _args=''
 while [ $# -gt 0 ]; do
   case $1 in
-    --product) [ $# -ge 2 ] || { echo "--product needs a value: agentk, meko or presenter" >&2; exit 2; }; product=$2; shift 2 ;;
+    --product) [ $# -ge 2 ] || { echo "--product needs a value: agentk, meko or present" >&2; exit 2; }; product=$2; shift 2 ;;
     --product=*) product=${1#--product=}; shift ;;
     *) _args="$_args '$(printf '%s' "$1" | sed "s/'/'\\\\''/g")'"; shift ;;
   esac
@@ -39,31 +43,34 @@ unset _args
 
 case $product in
   agentk)
-    tag_prefix=agentk-v
-    tag_prefixes='agentk-v v'
+    tag_prefix=kode-v
+    tag_prefixes='kode-v agentk-v v'
+    major=1
     scope='(\([^)]*\))?'
-    exclude='\((meko|presenter)(/[^,)]*)?(,(meko|presenter)(/[^,)]*)?)*\)'
+    exclude='\((meko|present|presenter)(/[^,)]*)?(,(meko|present|presenter)(/[^,)]*)?)*\)'
     ;;
   meko)
     tag_prefix=meko-v
     tag_prefixes='meko-v'
+    major=1
     scope='\(([^,)]*,)*meko(/[^,)]*)?(,[^)]*)?\)'
     exclude=''
     ;;
-  presenter)
-    tag_prefix=presenter-v
-    tag_prefixes='presenter-v'
-    scope='\(([^,)]*,)*presenter(/[^,)]*)?(,[^)]*)?\)'
+  present)
+    tag_prefix=present-v
+    tag_prefixes='present-v'
+    major=0
+    scope='\(([^,)]*,)*present(/[^,)]*)?(,[^)]*)?\)'
     exclude=''
     ;;
-  *) echo "unknown product: $product (agentk, meko or presenter)" >&2; exit 2 ;;
+  *) echo "unknown product: $product (agentk, meko or present)" >&2; exit 2 ;;
 esac
 
-# The product's newest tag of the form <prefix>0.<date>.<n>[-<pre>], or nothing. A release sorts
-# above its own prereleases.
+# The product's newest tag of the form <prefix><major>.<date>.<n>[-<pre>], of any major, or nothing.
+# A higher major sorts above any lower one, and a release above its own prereleases.
 newest_tag() {
   for _p in $tag_prefixes; do
-    git tag -l "${_p}0.*" | sed -n "s/^\\(${_p}\\)\\([0-9][0-9]*\\.[0-9][0-9]*\\.[0-9][0-9]*\\)\\(-.*\\)\\{0,1\\}\$/\\2 \\3 &/p"
+    git tag -l "${_p}[0-9]*" | sed -n "s/^\\(${_p}\\)\\([0-9][0-9]*\\.[0-9][0-9]*\\.[0-9][0-9]*\\)\\(-.*\\)\\{0,1\\}\$/\\2 \\3 &/p"
   done | awk '
     {
       split($1, v, ".")

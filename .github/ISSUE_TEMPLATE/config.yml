@@ -1,2 +1,6 @@
 # Only the web UI's chooser reads this: `gh issue create` and the API still take free-form issues.
 blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/yugabyte/meko/blob/main/SECURITY.md
+    about: Report it privately, by email, as SECURITY.md says. Never in an issue.

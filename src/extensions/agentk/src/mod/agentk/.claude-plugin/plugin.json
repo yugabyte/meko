@@ -1,0 +1,6 @@
+{
+  "name": "kode",
+  "version": "1.0.0",
+  "description": "Kode's link into the Claude Code sessions it runs: takes Kode's prompts and reports usage.",
+  "author": { "name": "Kode" }
+}
