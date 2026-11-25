@@ -133,9 +133,11 @@ link and post it where your team is. Roles:
 An invite shows in the teammate's Kode as a banner: **Open as project** opens it as a project on
 their machine, with the repo and name filled in. A share link pasted into `⌘K` joins it.
 
-**What teammates see.** In Meko, memories are private to the person whose agents wrote them. A
-teammate's agents find the datapack's **shared knowledge**: its knowledge base and the memories a
-maintainer has **promoted**. So what your sessions learn reaches the team once it's promoted (see
+**What teammates see.** In Meko, only the agents of the person who wrote a memory can search it.
+Owners and maintainers see everyone's unpromoted memories in the datapack's **Learnings** in Meko's
+web UI, but their agents can't find them either. A teammate's agents find the datapack's **shared
+knowledge**: its knowledge base and the memories a maintainer has **promoted**. So what your
+sessions learn reaches the team's agents once it's promoted (see
 [Best practices](#5-best-practices)). Designs are stored as artifacts and named in each PR, so a
 reviewer's Kode can fetch the author's design.
 
