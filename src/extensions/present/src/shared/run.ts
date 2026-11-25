@@ -112,7 +112,7 @@ export function navigate(deck: Deck, r: RunState, a: NavAction): RunState {
       return prev ? { ...r, pos: prev.pos, trail: prev.trail, back: r.back.slice(0, -1) } : r;
     }
     case 'choose': {
-      if (!scene.fork) return r;
+      if (!scene.fork || !atChoice(deck, r)) return r;
       const edge = choices(deck, scene.id).find((e) => e.key === a.key);
       return edge ? enter(r, edge.to) : r;
     }
