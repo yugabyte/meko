@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
-import type { CreateSessionRequest, HarnessMekoState, HarnessStatus, MekoStatus, Project, Settings, UpdateStatus } from '../../src/shared/types.js';
+import { WORK_QUEUE_DATAPACK, type CreateSessionRequest, type HarnessMekoState, type HarnessStatus, type MekoStatus, type Project, type Settings, type UpdateStatus, type WorkStoreState } from '../../src/shared/types.js';
 import { NewSessionDialog, reviewSummary, startName, typedName } from '../../src/web/components/NewSessionDialog.js';
 import { AgentSettings, CodeReviewSettings, HarnessBar, SettingsDialog } from '../../src/web/components/SettingsDialog.js';
 import { autoConnectToMeko, connectToMeko, setUpWithMeko } from '../../src/web/mekoagents.js';
@@ -242,10 +242,27 @@ describe('Settings › Harness', () => {
 describe('Settings › General', () => {
   const localMeko: MekoStatus = { configured: true, url: 'http://127.0.0.1:7778/mcp', webUrl: null, local: 'running', claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: null, opencode: null, agentList: 'unread' };
   const update: UpdateStatus = { current: '1.0.0', justUpdatedFrom: null, lastUpdatedFrom: null };
+  const workStore: WorkStoreState = { status: 'not-set-up', datapack: WORK_QUEUE_DATAPACK, step: null, error: null, addresses: [], readOnly: false };
+
+  it.each([
+    ['not-linked', [], /Needs Meko linked to Meko Cloud/, false, null],
+    ['not-set-up', [], /Not set up yet/, true, 'Set up the work queue'],
+    ['can-join', [{ cidr: '203.0.113.4/32', label: 'Laptop' }], /join it here/, true, 'Join the work queue'],
+    ['ready', [{ cidr: '203.0.113.4/32', label: 'Laptop' }, { cidr: '198.51.100.0/24', label: 'Desktop' }], /Ready, in adlc\/kode\/my-work-queue/, true, 'Let it in'],
+  ] as const)("shows the work queue's place in Meko Cloud when it's %s", (status, addresses, line, field, button) => {
+    const html = renderToStaticMarkup(createElement(SettingsDialog, {
+      update, meko: localMeko, workStore: { ...workStore, status, addresses: [...addresses] }, harnesses: [], twoAgents: false, serverName: 'demo',
+      initialTab: 'work-queue', onClose: () => undefined, onWhatsNew: () => undefined,
+    }));
+    expect(html).toMatch(line);
+    expect(html.includes('id="set-wq-cidr"')).toBe(field);
+    if (button) expect(html).toContain(button);
+    expect(html.includes('>Remove<')).toBe(addresses.length > 1 && status === 'ready');
+  });
 
   it("has no Meko section: Meko's own pages are reached from Meko", () => {
     const html = renderToStaticMarkup(createElement(SettingsDialog, {
-      update, meko: localMeko, harnesses: [], twoAgents: false, serverName: 'demo', onClose: () => undefined, onWhatsNew: () => undefined,
+      update, meko: localMeko, workStore, harnesses: [], twoAgents: false, serverName: 'demo', onClose: () => undefined, onWhatsNew: () => undefined,
     }));
     // The tab itself rendered, with its settings kept in this browser.
     expect(html).toContain('id="set-rail-sessions"');

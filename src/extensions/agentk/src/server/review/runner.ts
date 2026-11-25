@@ -607,8 +607,11 @@ export class CodeReviews {
    * folder for the passes to read, as the cloud does; any other link named by its title.
    */
   private async issues(task: SessionRow, dir: string): Promise<ReviewIssue[]> {
-    const links = all<{ url: string | null; label: string }>(this.db,
-      `SELECT l.url, l.label FROM work_item_links l JOIN work_items w ON w.id = l.item_id WHERE w.session_id = ? ORDER BY l.ord`, task.id);
+    const links = await this.core.workQueue.sessionLinks(task.id);
+    if (!links) {
+      this.core.log.warn(`${task.id}'s review has no linked issues: its work item's links couldn't be read from Meko Cloud`);
+      return [];
+    }
     const out: ReviewIssue[] = [];
     for (const l of links) {
       if (!l.url) continue;

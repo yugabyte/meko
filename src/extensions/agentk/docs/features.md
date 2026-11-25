@@ -274,6 +274,13 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   whose status shows on it; **Start session** opens New session with the item filled in, and the
   item is dismissed by itself once that session's PR merges. Paste a
   GitHub, Jira or Slack link into `⌘K` to jump to the session working on it.
+- **The same work queue on all your computers:** the queue is kept in Meko Cloud, in a database Kode
+  sets up in your account (the datapack `adlc/kode/my-work-queue`), so it needs the Meko on your
+  computer linked to Meko Cloud. Set it up once in Settings › Work queue with this computer's
+  address; on each other computer, **Join the work queue** with that one's address. The items you
+  had on a computer are copied in the first time it sets up or joins. While Meko Cloud can't be
+  reached, the queue shows the list it last read, and adding, editing, dismissing, reordering and
+  Sync are refused until it's back; only a merged session's dismiss waits and goes through then.
 
 ## In the browser and on a phone
 

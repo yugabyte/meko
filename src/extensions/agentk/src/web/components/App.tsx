@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { AGENTK_TOUR, type AppState, type CreateSessionRequest, type DatapackInvite, type FailedStart, type Project, type ProjectWithSessions, type Session, type WorkItem } from '../../shared/types';
+import { AGENTK_TOUR, type AppState, type CreateSessionRequest, type DatapackInvite, type FailedStart, type Project, type ProjectWithSessions, type Session, type WorkItem, type WorkStoreState } from '../../shared/types';
 import type { HarnessId } from '../../shared/harnesses';
 import { api, ApiError, errorMessage } from '../api';
 import { appUrl, BASE } from '../base';
@@ -141,6 +141,9 @@ if (typeof window !== 'undefined') {
   });
   if (document.hasFocus()) notifier.claim();
 }
+
+/** `AppState.workStore` from a server older than the work queue's move to Meko Cloud. */
+const NO_WORK_STORE: WorkStoreState = { status: 'not-linked', datapack: '', step: null, error: null, addresses: [], readOnly: false };
 
 export function App() {
   const route = useRoute();
@@ -668,6 +671,7 @@ export function App() {
           <WorkQueueView
             items={workQueue}
             sync={state.workSync ?? { running: false, at: null, github: null, slack: null, slackAuto: false, sources: { github: true, slack: true } }}
+            store={state.workStore ?? NO_WORK_STORE}
             projects={projects}
             focusId={queueFocus}
             onMenu={openDrawer}
@@ -816,7 +820,7 @@ export function App() {
       )}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to, opener: 'settings' })} />
+        <SettingsDialog update={state.update} meko={state.meko} workStore={state.workStore ?? NO_WORK_STORE} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to, opener: 'settings' })} />
       )}
       {modal.kind === 'whats-new' && (
         <WhatsNewDialog

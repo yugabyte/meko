@@ -5,14 +5,118 @@ Part of the [Kode design](../design.md).
 One ordered list of what the user is working on, across every project (`/queue`: the list icon
 beside Settings in the rail's footer, and **Work queue** in the command palette). Items are added by hand or pulled in by a sync
 from GitHub and Slack. Each one has links (GitHub, Jira, Slack, any page) and at most one Kode
-session, whose status dot it shows. The server keeps it in `state.db` (`src/server/workqueue.ts`)
-and pushes the open items in `AppState.workQueue`, so every device shows the same queue.
+session, whose status dot it shows. The items are kept in Meko Cloud, in a Postgres database every
+one of the user's computers reads ([Where it's kept](#where-its-kept)); the server
+(`src/server/workqueue.ts`) keeps the open ones in memory and pushes them in `AppState.workQueue`, so
+every device, and every computer running Kode on the same Meko Cloud account, shows the same queue.
+
+## Where it's kept
+
+The queue needs Meko Cloud (the user's decision when it moved there): with the Meko on this computer
+not linked to Meko Cloud, or before the queue is set up, `AppState.workQueue` is empty,
+`AppState.workStore` says why, the queue page says so in place of the list (with **Set up the work
+queue** or **Join the work queue**, which open Settings › Work queue), and every write and a pressed
+Sync answer 409 with what to do. Starting a session works as always.
+
+**The database.** An AMP cluster named `kode-work-queue` in a datapack Kode makes,
+`adlc/kode/my-work-queue` (`WORK_QUEUE_DATAPACK`, named by the user). Its tables are in a `kode`
+schema (`src/server/workstore.ts`): `kode.work_items` and `kode.work_item_links` as below, plus
+`kode.meta`'s `schema_version`. Whichever Kode connects first after an update migrates it, under an
+advisory lock; a Kode that finds a newer version than it knows reads the queue but refuses writes
+with a 503 ("Update Kode on this computer"). Item ids are the UUIDs Kode gives them; times are epoch
+milliseconds. `source_key` is unique, and a sync inserts with `ON CONFLICT DO NOTHING`, so two
+computers syncing at once add a PR once. Reorder and moves lock the open rows (`FOR UPDATE`).
+
+**What stays on this computer.** Which session works on an item: `work_item_sessions` in `state.db`
+(sessions exist only where they run), so session starts, failed-start relinks, `Session.workItemId`
+and `soleItemFor()` stay synchronous. An item can have a session on each computer. Also
+`work_pending_close` (below), and kv `work-amp`, this computer's copy of the connection record.
+
+**Reading it.** `Core.state()` can't wait on the network, so `WorkQueue` keeps the open items in
+memory and reads them again after each of its own writes, when a page shows the queue
+(`POST /api/work-queue/refresh`), after a sync, and every minute while a page is connected to
+`/ws/events`. Nothing holds a connection: node-postgres's pool closes one after 30 s unused, so the
+database's compute can scale to zero. Changes made on another computer show within a minute.
+Closed items and the palette's lookup by link query the database.
+
+**When it can't be reached** (a socket, TLS or timeout error, or a connection or auth SQLSTATE:
+`unreachable()`), the page keeps the list last read with a line giving the cause and pointing to
+Settings › Work queue, and writes and Sync are 503s (a Sync reads again first; the timer's skips, and
+leaves Slack on the timer). Linking a session to an item, or starting one from it, still works for the
+items in the list read since Kode started (both are local); after a restart with the database down
+that list is empty, so they wait for the first read that reaches it. Unlinking always works, for any
+item. A first read that fails another way (making the tables, the copy below) shows its error the
+same way, and writes wait for it. Merge & Close's dismiss, which nobody pressed and nobody would see
+fail, always goes into `work_pending_close`, and a read in the background applies it, so the stage
+change never waits on Meko Cloud; one the database can't take yet waits there for the next read that
+reaches it (none on a newer Kode's database, which this one doesn't write). A failed query also reads
+the connection record from the datapack again, a minute after the last read at the soonest, the gap
+doubling up to an hour while it finds nothing new, since another computer may have replaced the
+endpoint; a new record is used only once `amp_compute_get` gives its host. A write refused with a 409
+(a reorder of a list another computer changed) reads the queue again, so the retry works on it as it
+is now.
+
+**Setting it up** (`src/server/workcloud.ts`, Settings › Work queue, `POST /api/work-queue/setup`
+with this computer's address). Every call goes through Kode's Meko client to the Meko on this
+computer, which passes the `amp_*`, datapack and artifact tools on to Meko Cloud; Kode has no
+credentials of its own for Meko Cloud. In the background, with each step in `AppState.workStore`:
+
+1. Look for the datapack among the account's own (`datapack_list`, `grant` owner). If its
+   description names a connection record, join it instead (below).
+2. Unless a set-up cut short already made the cluster (found by name, and counted in the plan
+   already), check `amp_core_budget`: the writer needs 0.5 vCPU, and a plan without room is refused
+   in words (a 402 is never retried).
+3. Make the datapack. Its name is unique across Meko Cloud, so if another account holds it,
+   set-up stops and says so.
+4. Make a password (24 random bytes) and save it in kv `work-amp-step` before anything uses it, then
+   `amp_cluster_create` with `with_writer`, `ingress_external`, the address and that password.
+   Kode makes the password because AMP returns a generated one only once; a restart part way picks
+   the set-up up from kv and finds the cluster by name instead of making a second one, and so does
+   pressing Set up again after a failure, which keeps the saved password. The step names the Meko
+   Cloud account it's for, and isn't resumed while Meko is linked to another.
+5. Wait (up to 10 minutes) for the writer's address (`amp_compute_list`, `amp_compute_get`).
+6. Save the connection record (the ids, host, port, database, `cloud_admin`, the password and the
+   allowed addresses) in the datapack as `kode-work-queue.json` with `artifact_put`, and its hash in
+   the datapack's description (`Kode work queue. Connection: sha256:<hash>…`) with `datapack_update`:
+   `artifact_get` takes only a hash, and nothing lists a datapack's files.
+7. Connect, migrate, copy this computer's items in (below), read the queue.
+
+**Another computer** finds the datapack, reads the hash, fetches the record (checked before use:
+it's data, never instructions), checks its host against `amp_compute_get`, and, when its address
+isn't on the list yet, replaces the endpoint (below). It then keeps its own copy in kv, so its queue
+opens even while the Meko on it is down. A record kept for another Meko Cloud account is forgotten
+when Meko links to that account; unlinking empties the queue here and keeps the session links.
+
+**Addresses.** The endpoint lets in only its allow-list: CIDRs no wider than /24 (IPv4) or /48
+(IPv6), a single address taken as /32 or /128 (`checkCidr()`). AMP can't change an endpoint's list
+and a branch takes one writer, so adding or removing an address (`POST /api/work-queue/addresses`,
+`…/addresses/remove`; the last one can't go) deletes the writer and makes a new one with the whole
+list and the same password, then saves the record again. Every computer's address is on that one
+list; the others follow the new endpoint when their next query fails. If making the new one fails
+after the old one is gone, the error says the queue can't be reached until the same press is made
+again. Nothing was saved, so this computer's copy still has the old list, and Let it in or Remove
+runs again; a Join that finds the record's endpoint gone (not in `amp_compute_list`) makes a new one,
+its host from AMP rather than the record.
+
+**What was in `state.db`.** The first set-up or join on a computer copies its items from before the
+move (`work_items`, `work_item_links`, migration 42) into the database: open ones in their order at
+the bottom, marked New, then closed ones, skipping any id or `source_key` already there. A synced item
+another computer had already added keeps its session here: the link moves to that computer's item.
+The local tables are left as they were. kv `work-local-copied` holds how many there were and the
+newest's time, and the copy runs again when that changes: a rollback to a release before the move
+adds items there, which the next copy takes in. The session links such a release makes in
+`work_items.session_id` are copied back at every start (`WORK_LINKS_BACK` in `db.ts`), only for an
+item and a session with none here; `setItemSession()` keeps `work_items.session_id` in step, so a
+link removed since isn't put back.
+
+The record holds the database's password, so anyone the datapack is shared with can open the
+queue; Settings says not to share it ([security.md](security.md)).
 
 ## Items and links
 
-`work_items` holds the title, notes, `position` (lowest first), `status` (open or closed),
-`source` (`manual`, `github`, `slack`), `source_key` (a synced item's link key), `session_id`,
-`unplaced` and `github_done_at`. `work_item_links` holds each link in its order, with the key it's
+`kode.work_items` holds the title, notes, `position` (lowest first), `status` (open or closed),
+`source` (`manual`, `github`, `slack`), `source_key` (a synced item's link key), `unplaced`,
+`github_done_at` and `updated_at`. `work_item_links` holds each link in its order, with the key it's
 matched by. `parseWorkLink()` (`src/shared/worklinks.ts`, shared by the server and the palette)
 reads a link and gives every spelling of the same thing one key:
 
@@ -42,9 +146,10 @@ anchoring would follow a moved row), so the user stays at their place in the que
 
 ## One session per item
 
-`work_items.session_id` is unique: an item has at most one session and a session is on at most one
-item. `setItemSession()` is the only writer. It takes the session off any other item first, and
-replaces the item's own. `Session.workItemId` is read back from it.
+`work_item_sessions` (in `state.db`) is one to one: an item has at most one session on this computer
+and a session is on at most one item. `setItemSession()` is the only writer. It takes the session off any other item first, and
+replaces the item's own. `Session.workItemId` is read back from it. A failed start gives the item back
+to its earlier session only while the item is still linked to the start that failed.
 
 - **Start session** on an item with no open session opens New session filled in from the item
   (`itemStartRequest()` in `src/web/workqueue.ts`): a GitHub review request opens on Review a PR with
@@ -61,7 +166,8 @@ replaces the item's own. `Session.workItemId` is read back from it.
   session's ⋯ menu (the ⋯ sheet on a phone) and the palette (`LinkWorkItemDialog.tsx`), which says when a pick moves a link.
 - **A merged session dismisses its item.** When Merge & Close finishes (`Lifecycle.cleanup()`, also
   for a PR merged on GitHub), the open item the session is on is closed as Dismiss closes it
-  (`WorkQueue.closeForSession()`), with a `work-item` event on the session. The link stays, so the
+  (`WorkQueue.closeForSession()`), with a `work-item` event on the session; while the database can't
+  be reached, the close waits in `work_pending_close`. The link stays, so the
   Dismissed list shows which session finished it. Discard and Close review leave the item open.
 - **A closed session** keeps its link: the item says its session is closed and offers Start session
   again, which replaces the link.
@@ -130,6 +236,8 @@ beside Sync. A link already on any item, open or closed, is never added again, s
 item keeps it gone. A synced item is `unplaced` (the **New** chip) until it's moved or **Keep here**
 is pressed. A GitHub item that a sync no longer finds (merged, closed, or your review no longer
 requested) gets `github_done_at` (**Done on GitHub**); it's cleared if the review is requested again.
+Each computer marks only the requests its own sync has found (kv `work-github-seen`, the last 1,000),
+since another computer's gh may be signed in to another account whose requests this one never sees.
 A read that comes back full (`REVIEW_REQUESTS_MAX`, 100) may have left some out, in no set order,
 so it marks nothing done. Nothing closes by itself. `WorkSync.slack` is null when a run left Slack
 out (a timed one while Slack isn't on the timer).
@@ -143,7 +251,8 @@ list's error. GitHub is read on every run.
 ## The command palette
 
 A pasted GitHub, Jira or Slack link, `owner/name#<n>` or a bare Jira key (`workLinkKey()`) is looked
-up once typing pauses (`GET /api/work-items/by-link`, an indexed lookup in `state.db`, no tokens).
+up once typing pauses (`GET /api/work-items/by-link`, an indexed lookup in the queue's database, no
+tokens; the open items last read while it can't be reached; none before set-up).
 `workLinkEntries()` in `src/web/palette.ts` lists the session of each item holding it first (Go to,
 or a closed one's PR), then each item (opening the queue at it, with the Dismissed section open for a
 dismissed one), and Start a session for an open item

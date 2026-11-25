@@ -220,15 +220,13 @@ CREATE TABLE session_events (  -- every hook call; feeds badges + project activi
 CREATE TABLE owner (id INTEGER PRIMARY KEY CHECK (id = 1), username TEXT, pw_scrypt TEXT, totp_secret TEXT);
 CREATE TABLE auth_sessions (token_sha256 TEXT PRIMARY KEY, created_at INTEGER, expires_at INTEGER, user_agent TEXT, ip TEXT);
 CREATE TABLE audit_log (id INTEGER PRIMARY KEY, at INTEGER, action TEXT, detail_json TEXT);
-CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update state, plan limits
-CREATE TABLE work_items (      -- the work queue (workqueue.ts, docs/design/work-queue.md)
-  id TEXT PRIMARY KEY, title TEXT, notes TEXT, position INTEGER, status TEXT,  -- open | closed
-  source TEXT,                 -- manual | github | slack
-  source_key TEXT UNIQUE,      -- a synced item's link key: a sync never adds it again
-  session_id TEXT UNIQUE REFERENCES sessions(id) ON DELETE SET NULL,  -- one session per item, one item per session
-  unplaced INTEGER, github_done_at INTEGER, created_at INTEGER, closed_at INTEGER);
-CREATE TABLE work_item_links (item_id TEXT, ord INTEGER, key TEXT, kind TEXT, url TEXT, label TEXT,
-  PRIMARY KEY (item_id, key));  -- indexed on key, for the palette's lookup by link
+CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update state, plan limits, the work queue's connection record (work-amp), its set-up under way (work-amp-step), the review requests this computer's sync found (work-github-seen)
+-- The work queue's items are in Meko Cloud (docs/design/work-queue.md#where-its-kept); here, only what's this computer's:
+CREATE TABLE work_item_sessions (  -- which session works on an item (workqueue.ts), one to one
+  item_id TEXT PRIMARY KEY, session_id TEXT UNIQUE REFERENCES sessions(id) ON DELETE CASCADE);
+CREATE TABLE work_pending_close (item_id TEXT PRIMARY KEY, at INTEGER);  -- Merge & Close's dismiss, waiting for Meko Cloud
+CREATE TABLE work_items (...);       -- the queue before it moved to Meko Cloud: read once by the copy at set-up, then
+CREATE TABLE work_item_links (...);  --   left as they are (kv work-local-copied)
 CREATE TABLE code_reviews (    -- a task's code reviews (review/runner.ts, docs/design/code-review.md), one per Open PR, move to Pull Request or review-run
   id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT,  -- the task, and its code-review session
   strategy TEXT, rounds INTEGER, depth INTEGER,        -- what it runs with, stamped when it starts

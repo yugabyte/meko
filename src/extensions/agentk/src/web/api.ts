@@ -78,6 +78,7 @@ import type {
   UpdateProjectRequest,
   UpdateSessionRequest,
   UpdateStatus,
+  WorkAddressRequest,
 } from '../shared/types';
 import type { HarnessId } from '../shared/harnesses';
 import { GH_NEEDED, type GhStatus } from '../shared/types';
@@ -212,6 +213,12 @@ export const api = {
   reorderWorkItems: (b: ReorderWorkItemsRequest) => request<void>('PUT', '/api/work-items/order', b),
   closeWorkItems: (b: CloseWorkItemsRequest) => post<{ closed: number }>('/api/work-items/close', b),
   syncWork: () => post<WorkSync>('/api/work-items/sync'),
+  /** Sets up the work queue in Meko Cloud, or joins it, letting this address in (progress in AppState.workStore). */
+  setUpWorkQueue: (b: WorkAddressRequest) => request<void>('POST', '/api/work-queue/setup', b),
+  addWorkAddress: (b: WorkAddressRequest) => request<void>('POST', '/api/work-queue/addresses', b),
+  removeWorkAddress: (cidr: string) => request<void>('POST', '/api/work-queue/addresses/remove', { cidr }),
+  /** The queue page showed the queue: the server reads it from Meko Cloud again. */
+  refreshWorkQueue: () => request<void>('POST', '/api/work-queue/refresh'),
   /** The work items holding a GitHub, Jira or Slack link, each with its session. */
   workByLink: (link: string, signal?: AbortSignal) =>
     request<WorkLinkMatch[]>('GET', `/api/work-items/by-link?link=${enc(link)}`, undefined, { signal }),

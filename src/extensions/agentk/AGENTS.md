@@ -173,7 +173,11 @@ agents should read it before changing code there.
    holds a lock on that folder while the host runs.
 7. **Meko is the Meko on this computer; a project has at most one dedicated datapack.** It can't be
    turned off, and Kode doesn't know or ask whether it's linked to Meko Cloud: no code branches on
-   local or Meko Cloud. Meko owns the link (its web UI's Settings › Meko Cloud, `meko cloud-link`)
+   local or Meko Cloud. **The one exception** is the work queue, which the project owner decided
+   needs Meko Cloud: it's kept in a Postgres database there that all the user's computers share,
+   so `workLinkNow()` in `core.ts` reads the link's account to say "link Meko to Meko Cloud" and to
+   drop a connection record kept for another account (`src/server/workcloud.ts`,
+   [docs/design/work-queue.md](docs/design/work-queue.md#where-its-kept)). Meko owns the link (its web UI's Settings › Meko Cloud, `meko cloud-link`)
    and its key, and its `/mcp` and its `/api/v1` (on the same origin, `mekoApiBase`) serve its own
    datapacks and pass any other id on to Meko Cloud while it's linked; what it can't do (sharing
    while unlinked) it refuses with an error that says what to do, which Kode shows. Kode reads

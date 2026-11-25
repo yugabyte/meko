@@ -88,6 +88,24 @@ own copy.
   must be a real directory owned by you that others can't write to (`ensurePrivateDir`, and
   `private_dir` in the installer), or Kode stops.
 
+## The work queue's database
+
+The work queue is a Postgres database in the user's Meko Cloud account
+([work-queue.md](work-queue.md#where-its-kept)), which Kode reaches directly:
+
+- **Who it lets in.** Its endpoint takes connections only from the addresses on its allow-list, each
+  no wider than /24 (/48 for IPv6), typed in Settings › Work queue; AMP refuses a public endpoint
+  without one. Connections use TLS with the server's certificate checked, and SCRAM with channel
+  binding when the server offers it.
+- **The password.** Kode makes it (24 random bytes) and gives it to AMP. It's kept in the datapack
+  `adlc/kode/my-work-queue`, in the connection record, unencrypted (the user's decision: no
+  passphrase), so another of the user's computers can join without typing it; and in each
+  computer's `state.db` kv (owner-only, above). It's never in `AppState`, a route's reply or a log
+  line. Anyone the datapack is shared with can read it, so Settings says not to share it.
+- **The record is data.** A record read from the datapack is checked field by field before use, and
+  its host must be the one AMP gives for its endpoint before a computer joins through it, or
+  switches to it when another computer replaced the endpoint (`WorkCloud.recheck`).
+
 ## Code from public repos
 
 Code on a private or internal GitHub repo is trusted like your own: only people with access can

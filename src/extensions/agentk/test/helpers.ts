@@ -6,7 +6,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONFIG, type Config } from '../src/server/config.js';
 import { Core } from '../src/server/core.js';
-import { openDb } from '../src/server/db.js';
+import { kvSet, openDb } from '../src/server/db.js';
+import { PGlite } from '@electric-sql/pglite';
+import { pgliteSql } from './pglite.js';
 import { defaultDeps, type InstanceDeps } from '../src/server/instance.js';
 import { silentLogger } from '../src/server/log.js';
 import { pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
@@ -258,6 +260,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   // gh as the gates find it: installed and signed in, unless a test says otherwise (then core.gh.check()).
   const gh: { state: GhState } = { state: 'ok' };
   let hostHandle: HostHandle | null = null;
+  let workPg: PGlite | null = null;
   const host = new SessionHost(paths, {
     services: () => null,
     start: async () => {
@@ -275,6 +278,8 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
     localMeko: async () => ({ ...local }),
     mekoAgents: async () => mekoAgents.value,
     ghProbe: async () => gh.state,
+    // The work queue's database: Postgres in this process, made when the queue first connects (workQueueReady).
+    workSql: () => pgliteSql((workPg ??= new PGlite())),
   });
   // Core reads the Meko on this computer at its start; one not started reads it here.
   if (opts.start !== false) await core.start();
@@ -284,6 +289,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
     async cleanup() {
       await core.stop().catch(() => undefined);
       await killHost();
+      await workPg?.close();
       db.close();
       // core.stop() waited for what writes into the home after a test: the transcript captures (into
       // fakeDir), Kiro's and OpenCode's one-shot runs (into FAKE_KIRO_DIR, FAKE_OPENCODE_DIR), and the
@@ -439,4 +445,17 @@ export async function noMeko(env: TestEnv, state: 'stopped' | 'none' = 'stopped'
   env.local.state = state;
   env.local.meko = null;
   await env.core.refreshMeko();
+}
+
+/**
+ * Sets the work queue up as if it had been in Meko Cloud: this computer's copy of the connection record
+ * (with Meko linked as TEST_ACCOUNT), so the queue opens on the test's own Postgres in this process.
+ */
+export async function workQueueReady(env: TestEnv): Promise<void> {
+  kvSet(env.core.db, 'work-amp', JSON.stringify({
+    version: 1, datapackId: 'dp-work', clusterId: 'cl-work', branchId: 'br-work', computeId: 'ep-work', host: 'ep-work.amp.example.com', port: 5432,
+    database: 'postgres', user: 'cloud_admin', password: 'test-password', allowed: [{ cidr: '203.0.113.4/32', label: 'Test' }], updatedAt: 1, account: TEST_ACCOUNT,
+  }));
+  await env.core.workCloud.lookup();
+  if (env.core.workCloud.state().status !== 'ready') throw new Error(`the work queue isn't ready: ${JSON.stringify(env.core.workCloud.state())}`);
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
 import {
   MAX_IDLE_STOP_HOURS, WORK_SYNC_MINUTES_MAX, type HarnessMekoState, type HarnessStatus, type MekoStatus, type Settings, type SettingsUpdate, type UpdateStatus,
+  type WorkStoreState,
 } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, onlyMekoBlocks, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
@@ -11,7 +12,7 @@ import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useM
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, relativeTime } from '../util';
-import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field, InfoButton, InfoCheck, InfoPanel, ReviewFields } from './common';
+import { AgentLabel, AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field, InfoButton, InfoCheck, InfoPanel, ReviewFields } from './common';
 import { setReviewDefaults } from '../reviewdefaults';
 
 export type SettingsTab = 'general' | 'harness' | 'code-review' | 'work-queue' | 'updates';
@@ -25,6 +26,7 @@ const TAB_LABEL: Record<Tab, string> = {
 export function SettingsDialog({
   update,
   meko,
+  workStore,
   harnesses,
   twoAgents,
   serverName,
@@ -35,6 +37,8 @@ export function SettingsDialog({
 }: {
   update: UpdateStatus;
   meko: MekoStatus;
+  /** Where the work queue is kept (`AppState.workStore`), for Work queue's Meko Cloud part. */
+  workStore: WorkStoreState;
   /** The coding agents sessions can run on (`AppState.harnesses`). */
   harnesses: HarnessStatus[];
   /** Open sessions run on more than one agent (`harnessLogos()`), so the logos would show. */
@@ -103,7 +107,12 @@ export function SettingsDialog({
         <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} meko={meko} initialAgent={initialAgent} />
       )}
       {tab === 'code-review' && <CodeReviewTab auto={auto} />}
-      {tab === 'work-queue' && <WorkQueueTab auto={auto} typed={typed} />}
+      {tab === 'work-queue' && (
+        <div className="stack">
+          <WorkCloudSection store={workStore} />
+          <WorkQueueTab auto={auto} typed={typed} />
+        </div>
+      )}
       {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={(from, to) => leave(() => onWhatsNew(from, to))} />}
       <SaveStatus status={auto.status} held={held} />
     </Dialog>
@@ -195,6 +204,143 @@ const clampOr = (typed: string, max: number, saved: number) => {
   const n = Math.round(Number(typed));
   return typed.trim() && Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : saved;
 };
+
+/** What Settings › Work queue says of where the queue is kept, by `WorkStoreState.status`. */
+export function workStoreText(w: WorkStoreState): string {
+  switch (w.status) {
+    case 'not-linked':
+      return 'Needs Meko linked to Meko Cloud.';
+    case 'not-set-up':
+      return 'Not set up yet.';
+    case 'can-join':
+      return 'Set up on another computer: join it here.';
+    case 'setting-up':
+      return w.step ?? 'Setting up';
+    case 'unreachable':
+      return `Can't reach it: ${w.error ?? 'no answer'}`;
+    case 'ready':
+      return w.readOnly ? 'A newer Kode set it up: update Kode to edit it.' : `Ready, in ${w.datapack}.`;
+  }
+}
+
+/**
+ * Where the work queue is kept: its database in Meko Cloud. Set up (or Join, once another computer has)
+ * with this computer's address, the addresses every computer gave, each with Remove, and adding one.
+ * Each change runs on the server; `AppState.workStore` shows how it goes.
+ */
+function WorkCloudSection({ store }: { store: WorkStoreState }) {
+  const [cidr, setCidr] = useState('');
+  const [label, setLabel] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const set = store.status === 'ready' || store.status === 'unreachable';
+  const busy = store.status === 'setting-up';
+  const canAsk = !busy && store.status !== 'not-linked';
+  const send = async (fn: () => Promise<void>) => {
+    setError(null);
+    setSending(true);
+    try {
+      await fn();
+      setCidr('');
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSending(false);
+    }
+  };
+  const go = () => void send(() => (set ? api.addWorkAddress({ cidr: cidr.trim(), label: label.trim() }) : api.setUpWorkQueue({ cidr: cidr.trim(), label: label.trim() })));
+  const action = set ? 'Let it in' : store.status === 'can-join' ? 'Join the work queue' : 'Set up the work queue';
+  return (
+    <section className="stack wq-cloud">
+      <div className="info-row">
+        <span className="label">Kept in Meko Cloud</span>
+        <InfoButton id="set-wq-cloud-info" label="Meko Cloud" />
+      </div>
+      <InfoPanel id="set-wq-cloud-info">
+        <p>
+          Your work queue is kept in a database in Meko Cloud, so every computer you run Kode on shows the same one. It
+          needs the Meko on this computer linked to Meko Cloud (Meko's settings). Set it up once; each other computer then
+          joins it with its own address.
+        </p>
+        <p>
+          The datapack {store.datapack} holds the database and its password, so anyone it's shared with can open your
+          queue: don't share it.
+        </p>
+      </InfoPanel>
+      {busy ? <p className="muted"><Busy label={workStoreText(store)} /></p> : <p className={cx(store.status === 'unreachable' ? 'error-text' : 'muted')}>{workStoreText(store)}</p>}
+      {!busy && store.status !== 'unreachable' && <ErrorText error={store.error} />}
+      {canAsk && (
+        <>
+          <Field
+            label={set ? 'Another address' : "This computer's address"}
+            info={{
+              for: 'set-wq-cidr',
+              text: (
+                <>
+                  <p>
+                    The work queue's database lets in only the addresses on its list. Give this computer's public IP address
+                    (a search for "what is my IP" shows it), or your VPN's range, no wider than /24, which keeps working as
+                    you move between networks.
+                  </p>
+                  <p>
+                    Changing the list replaces the database's endpoint: it takes a few minutes, and your other computers
+                    reconnect by themselves.
+                  </p>
+                </>
+              ),
+            }}
+          >
+            <input
+              id="set-wq-cidr"
+              className="input"
+              placeholder="203.0.113.4"
+              value={cidr}
+              onChange={(e) => setCidr(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && cidr.trim()) {
+                  e.preventDefault();
+                  go();
+                }
+              }}
+            />
+          </Field>
+          <Field label="Name it">
+            <input id="set-wq-label" className="input" placeholder="Laptop" maxLength={80} value={label} onChange={(e) => setLabel(e.target.value)} />
+          </Field>
+          <div>
+            <button type="button" className="btn" disabled={sending || !cidr.trim()} onClick={go}>
+              {sending ? <Busy label="Sending" /> : action}
+            </button>
+          </div>
+        </>
+      )}
+      <ErrorText error={error} />
+      {store.addresses.length > 0 && (
+        <ul className="wq-addrs">
+          {store.addresses.map((a) => (
+            <li key={a.cidr}>
+              <span className="wq-addr">
+                <code>{a.cidr}</code> {a.label && <span className="muted">{a.label}</span>}
+              </span>
+              {set && store.addresses.length > 1 && (
+                <ConfirmButton
+                  className="btn small"
+                  label="Remove"
+                  confirmLabel="Remove"
+                  prompt={`Stop letting ${a.cidr} in?`}
+                  danger
+                  disabled={busy}
+                  onConfirm={() => send(() => api.removeWorkAddress(a.cidr))}
+                />
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {(set || store.status === 'can-join') && <p className="muted small">Don't share {store.datapack}: it holds the password.</p>}
+    </section>
+  );
+}
 
 /**
  * The work queue's sync: which sources it reads (both off turns sync off, the Sync button too), the

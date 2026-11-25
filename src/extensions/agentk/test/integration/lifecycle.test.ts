@@ -83,7 +83,7 @@ function tip(dir: string): string {
   }
 }
 
-const { fakeMekoQuestions, makeEnv, readJsonl, useLocalMeko, waitFor } = await import('../helpers.js');
+const { fakeMekoQuestions, makeEnv, readJsonl, useLocalMeko, waitFor, workQueueReady } = await import('../helpers.js');
 const { all, get: dbGet, run } = await import('../../src/server/db.js');
 const { SKIPPED_TEXT } = await import('../../src/server/learn.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
@@ -385,13 +385,14 @@ describe('lifecycle: PR → Kode review → Merge & Close', () => {
   });
 
   it('dismisses the work item a merged session is on, and leaves one a discarded session is on', async () => {
+    await workQueueReady(env);
     const work = await env.core.workQueue.create({ title: 'Fix it' });
     const s = await inReview('From the queue', undefined, { workItemId: work.id });
-    expect(env.core.workQueue.get(work.id)).toMatchObject({ status: 'open', sessionId: s.id });
+    expect(await env.core.workQueue.get(work.id)).toMatchObject({ status: 'open', sessionId: s.id });
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
     await closed(s.id);
-    expect(env.core.workQueue.get(work.id)).toMatchObject({ status: 'closed', sessionId: s.id });
+    expect(await env.core.workQueue.get(work.id)).toMatchObject({ status: 'closed', sessionId: s.id });
     expect(lastEvent(s.id, 'work-item')).toBe('Work item dismissed: Fix it');
     // The cleanup run again (a restart partway) finds nothing open and says nothing more.
     await env.core.lifecycle.cleanup(env.core.sessions.row(s.id), gh.status);
@@ -403,7 +404,7 @@ describe('lifecycle: PR → Kode review → Merge & Close', () => {
     await waitFor(() => env.core.sessions.get(d.id), (x) => x.status === 'idle', 10000, 'first turn');
     await env.core.sessions.action(d.id, 'discard', { skipLearn: true });
     await waitFor(() => lastEvent(d.id, 'discarded'), (t) => !!t, 10000, 'the discard');
-    expect(env.core.workQueue.get(other.id)).toMatchObject({ status: 'open', sessionId: d.id });
+    expect(await env.core.workQueue.get(other.id)).toMatchObject({ status: 'open', sessionId: d.id });
   });
 
   it('waits for Claude to finish its turn before closing a merged session', async () => {

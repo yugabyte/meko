@@ -1,5 +1,5 @@
 // The work queue's helpers: an item's session, its Start session request and project, and the queue's counts. Pure, so it's unit-tested.
-import type { CreateSessionRequest, ProjectWithSessions, Session, WorkItem, WorkSourceResult, WorkSync } from '../shared/types';
+import type { CreateSessionRequest, ProjectWithSessions, Session, WorkItem, WorkSourceResult, WorkStoreState, WorkSync } from '../shared/types';
 import { liveSessions, relativeTime } from './util';
 
 /** The open session of an item, from the state; null when it has none or only a closed one. */
@@ -74,4 +74,25 @@ export function workSyncText(sync: WorkSync, now = Date.now()): string {
     sync.github && source('GitHub', sync.github),
     sync.slack ? source('Slack', sync.slack) : sync.sources.slack && !sync.slackAuto && sync.at ? 'Slack: only when you press Sync' : null,
   ].filter(Boolean).join(' · ');
+}
+
+/**
+ * The queue page's line about where the queue is kept (Meko Cloud): in place of the list before it's set
+ * up on this computer, and above it while it can't be reached or a newer Kode set it up. Empty while it's ready.
+ */
+export function workStoreLine(w: WorkStoreState): string {
+  switch (w.status) {
+    case 'not-linked':
+      return "Your work queue is kept in Meko Cloud. Link Meko to Meko Cloud in Meko's settings, then set it up in Settings › Work queue.";
+    case 'not-set-up':
+      return 'Your work queue is kept in Meko Cloud, so every computer you run Kode on shows the same one. Set it up once, from this computer.';
+    case 'can-join':
+      return 'Another of your computers set up your work queue in Meko Cloud. Join it from this computer.';
+    case 'setting-up':
+      return w.step ?? 'Setting up your work queue in Meko Cloud';
+    case 'unreachable':
+      return `Can't reach your work queue in Meko Cloud: ${w.error ?? 'no answer'}. This is the list as last read, and changes are refused until it's back. If this computer's address changed, let it in from Settings › Work queue.`;
+    case 'ready':
+      return w.readOnly ? 'A newer Kode set up your work queue in Meko Cloud. Update Kode on this computer to change it.' : '';
+  }
 }

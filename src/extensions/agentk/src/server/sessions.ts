@@ -19,7 +19,7 @@ import { toolsReady } from './tools.js';
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
-import { checkStartItem, setItemSession } from './workqueue.js';
+import { itemOfSession, setItemSession, sessionOfItem } from './workqueue.js';
 import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId } from './meko.js';
 import {
   AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, firstLine, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
@@ -580,7 +580,7 @@ export class SessionManager {
     if (req.autoRun != null && typeof req.autoRun !== 'boolean') throw new HttpError(400, 'autoRun must be true or false.');
     // A learn session's task is its brief: it takes no images or first prompt.
     const learn = req.learn != null ? checkLearn(req.learn) : null;
-    const workItem = checkStartItem(this.db, req.workItemId);
+    const workItem = this.core.workQueue.checkStartItem(req.workItemId);
     // Before the first await, so an image swept meanwhile is left out at the move, not refused here.
     const images = learn ? [] : checkStaged(this.core.paths.pastes, projectId, req.images);
     // A harness that isn't available starts nothing.
@@ -706,7 +706,7 @@ export class SessionManager {
         push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : null, autoRun ? 1 : 0, projectId);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       if (workItem) {
-        this.relinks.set(id, { item: workItem, prev: get<{ session_id: string | null }>(this.db, 'SELECT session_id FROM work_items WHERE id = ?', workItem)?.session_id ?? null });
+        this.relinks.set(id, { item: workItem, prev: sessionOfItem(this.db, workItem) });
         setItemSession(this.db, workItem, id);
       }
       return { worktree: path, reused: !!claimed };
@@ -915,12 +915,13 @@ export class SessionManager {
     // Its images go too: Try again says to add them again.
     removePastes(this.core.paths.pastes, id);
     if (row?.kind === 'review-pr') removePrDesignFiles(this.core, id);
-    // Deleting the row unlinks its work item; the session the item had before gets it back.
+    // Deleting the row unlinks its work item; the session the item had before gets it back, only while the
+    // item is still linked to this start (the user may have unlinked it, or linked it elsewhere, meanwhile).
     const relink = this.relinks.get(id);
     tx(this.db, () => {
-      if (relink?.prev && sessionRow(this.db, relink.prev)) run(this.db, `UPDATE work_items SET session_id = ? WHERE id = ? AND session_id = ?
-                                 AND NOT EXISTS (SELECT 1 FROM work_items WHERE session_id = ?)`, relink.prev, relink.item, id, relink.prev);
+      const still = !!relink && !!get(this.db, 'SELECT 1 AS x FROM work_item_sessions WHERE item_id = ? AND session_id = ?', relink.item, id);
       run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
+      if (still && relink?.prev && sessionRow(this.db, relink.prev) && !itemOfSession(this.db, relink.prev)) setItemSession(this.db, relink.item, relink.prev);
     });
     this.core.changed();
     return new HttpError(400, message);
