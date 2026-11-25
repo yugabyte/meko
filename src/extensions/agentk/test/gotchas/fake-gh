@@ -1,0 +1,16 @@
+#!/bin/sh
+# A fake gh for run.sh: `gh api graphql` with the default branch's history prints
+# $FAKE_GH/commits.json, and any other graphql call prints $FAKE_GH/prs.json. With
+# $FAKE_GH/refuse, every call fails with its contents on stderr, as gh does. Every call is logged
+# to $FAKE_GH/calls.
+printf '%s\n' "$*" >> "$FAKE_GH/calls"
+if [ -f "$FAKE_GH/refuse" ]; then
+  cat "$FAKE_GH/refuse" >&2
+  exit 1
+fi
+case $* in
+  *graphql*defaultBranchRef*) exec cat "$FAKE_GH/commits.json" ;;
+  *graphql*) exec cat "$FAKE_GH/prs.json" ;;
+esac
+echo "fake gh: unexpected call: $*" >&2
+exit 1

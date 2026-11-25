@@ -9,14 +9,18 @@
 #      datapack, adlc/repo/<repo name>/workflow/gotchas unless DATAPACK below names another. Give
 #      the workflow a datapack of its own: it numbers gotchas from what's in it, so another
 #      writer's MG-<n> documents would collide with its own. Keep the name ending in /gotchas:
-#      that's how Kode's code review knows a gotchas datapack.
+#      that's how Kode's code review knows a gotchas datapack. Run this workflow instead of Meko
+#      Cloud's gotchas miner for a repo, not beside it: both number from MG-1, and Kode's review
+#      names a gotcha by its id alone.
 #   3. Add a repository secret ANTHROPIC_API_KEY, or use Bedrock (the commented lines below).
 #   4. Run it by hand from the Actions tab with dry-run on, and read the job summary: it lists what
 #      it would add. Then run it with dry-run off. From then on it runs every Monday.
 #
 # Each run mines the 7 whole days (UTC) before the day it runs, so weekly runs follow on from each
 # other however late each starts; or, run by hand with `since`, from that day until now: use that
-# to backfill, or to cover a run that failed. Merged PRs (with comments from the repo's owners, members and
+# to backfill, or to cover a run that failed. A PR counts by when it merged, but a direct commit by
+# its own date, so one pushed after the run that covered that date is missed: a run with `since`
+# picks it up. PRs merged into the default branch (with comments from the repo's owners, members and
 # collaborators) and direct commits are read with gh; claude -p, with no tools, answers with new
 # gotchas, updates and retirements as JSON; the script checks the answer and writes one Meko
 # document per gotcha (MG-1.md, MG-2.md, ...). Most weeks add nothing, which is expected. To remove
@@ -59,7 +63,8 @@ jobs:
   mine:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    # What the run changed, for a later job: counts of gotchas added, updated and retired.
+    # What the run wrote, for a later job: counts of gotchas added, updated and retired (all 0 in a
+    # dry run, which writes nothing), and the datapack's id.
     outputs:
       added: ${{ steps.mine.outputs.added }}
       updated: ${{ steps.mine.outputs.updated }}
@@ -275,8 +280,8 @@ jobs:
               [ "$dropped" -eq 0 ] || printf '%s change(s) dropped as invalid: the log says which and why.\n\n' "$dropped"
               [ "${#notes[@]}" -eq 0 ] || printf '%s\n\n' "${notes[@]}" | awk '!seen[$0]++'
               if [ "$created" = true ]; then
-                printf 'This run created the datapack `%s` (`%s`). For repos that use Kode, this is its row for `MEKO.md`:\n\n' "$datapack" "$datapack_id"
-                printf '```\n| `%s` | `%s` | Gotchas to watch out for in this repo: the mistakes reviewers here have caught before. Search it with `knowledgebase_search`, and don'"'"'t write to it: the Gotchas workflow fills it. |\n```\n' "$datapack" "$datapack_id"
+                printf 'This run created the datapack `%s` (`%s`). For repos that use Kode, add it to `MEKO.md` at the repository'"'"'s root, as below; if that file already has this table, add only the last row to it:\n\n' "$datapack" "$datapack_id"
+                printf '```\n| Datapack | ID | What'"'"'s in it |\n|---|---|---|\n| `%s` | `%s` | Gotchas to watch out for in this repo: the mistakes reviewers here have caught before. Search it with `knowledgebase_search`, and don'"'"'t write to it: the Gotchas workflow fills it. |\n```\n' "$datapack" "$datapack_id"
               elif [ -n "$datapack_id" ]; then
                 printf 'Datapack `%s` (`%s`) holds %s gotcha(s).\n' "$datapack" "$datapack_id" "$corpus_size"
               elif [ "$dry" = true ] && [ "$looked" = true ]; then
@@ -287,7 +292,11 @@ jobs:
             cat "$s" >&2
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat "$s" >> "$GITHUB_STEP_SUMMARY"; fi
             if [ -n "${GITHUB_OUTPUT:-}" ]; then
-              printf 'added=%s\nupdated=%s\nretired=%s\ndatapack-id=%s\n' "${#added[@]}" "${#updated[@]}" "${#retired[@]}" "$datapack_id" >> "$GITHUB_OUTPUT"
+              if [ "$dry" = true ]; then
+                printf 'added=0\nupdated=0\nretired=0\ndatapack-id=%s\n' "$datapack_id" >> "$GITHUB_OUTPUT"
+              else
+                printf 'added=%s\nupdated=%s\nretired=%s\ndatapack-id=%s\n' "${#added[@]}" "${#updated[@]}" "${#retired[@]}" "$datapack_id" >> "$GITHUB_OUTPUT"
+              fi
             fi
             rm -rf "$work"
           }
@@ -298,6 +307,10 @@ jobs:
           [ -n "$repo" ] || die "GITHUB_REPOSITORY isn't set: run this in GitHub Actions, or set it to owner/name"
           datapack=${DATAPACK:-}
           [ -n "$datapack" ] || datapack=adlc/repo/${repo#*/}/workflow/gotchas
+          case $datapack in
+            */gotchas) ;;
+            *) die "DATAPACK must end in /gotchas, as adlc/repo/${repo#*/}/workflow/gotchas does: Kode's code review only searches a gotchas datapack named that way, not $datapack" ;;
+          esac
           api=${MEKO_URL:-https://cloud.mekodata.ai}
           api=${api%/}/api/v1
           budget=${BUDGET:-15}
@@ -352,9 +365,12 @@ jobs:
           # weekly run starts where the last one ended however late either started.
           if [ -n "${SINCE:-}" ]; then
             case $SINCE in
-              [0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9]) w_since=${SINCE}T00:00:00Z ;;
+              [0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9]) ;;
               *) die "since must be a day, YYYY-MM-DD, not $SINCE" ;;
             esac
+            day=$(date -u -d "$SINCE" +%Y-%m-%d 2> /dev/null || date -u -j -f %Y-%m-%d "$SINCE" +%Y-%m-%d 2> /dev/null || true)
+            [ "$day" = "$SINCE" ] || die "since must be a day that exists, YYYY-MM-DD, not $SINCE"
+            w_since=${SINCE}T00:00:00Z
             w_until=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           else
             w_until=$(date -u +%Y-%m-%dT00:00:00Z)
@@ -394,6 +410,13 @@ jobs:
           }
 
           last_is() { [ "$(cut -d' ' -f1,2 "$work/last")" = "$1" ]; }
+          # Whether the last refusal is worth waiting through: Meko unreachable or busy, or the API's 404
+          # while it's still registering a document. Anything else won't change by waiting.
+          passing() {
+            local code
+            code=$(cut -d' ' -f1 "$work/last")
+            [ "$code" = 0 ] || [ "$code" = 429 ] || [ "$code" -ge 500 ] || last_is "404 json"
+          }
           uri() { jq -rn --arg s "$1" '$s | @uri'; }
           sha256() { if command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
 
@@ -414,7 +437,7 @@ jobs:
           # $work/uploaded or, when Meko already held these exact bytes, "same". Not run in a $(...): its
           # failures end the run.
           upload() {
-            local data url key code form=() kv deadline state
+            local data url key code form=() kv deadline state warned=false
             data=$(meko POST "/datapacks/$datapack_id/knowledge-bases/upload-url" "$(jq -nc --arg f "$2" \
               --argjson s "$(wc -c < "$1" | tr -d ' ')" --arg h "$(sha256 "$1")" \
               '{filename: $f, size: $s, content_hash: $h, client: "meko-gotchas"}')")
@@ -440,8 +463,11 @@ jobs:
                   completed) break ;;
                   failed | abandoned | oversized) die "Meko didn't index $2: $state $(jq -r '.message // ""' <<< "$data")" ;;
                 esac
-              elif ! last_is "404 json"; then # the API's 404 while nothing knows the key yet isn't an answer
+              elif ! passing; then
                 die "Meko refused the status of $2: HTTP $(cut -d' ' -f1,3- "$work/last")"
+              elif [ "$warned" = false ] && ! last_is "404 json"; then
+                say "Meko didn't answer the status of $2 (HTTP $(cut -d' ' -f1,3- "$work/last")); still waiting"
+                warned=true
               fi
               [ "$(date +%s)" -lt "$deadline" ] || die "Meko didn't finish indexing $2 in ${index_wait}s"
               sleep "$poll"
@@ -504,12 +530,30 @@ jobs:
           fi
 
           say "Collecting what landed on $repo from $since to $until"
-          # Merged PRs by search, which only returns the window's. Each comes with its conversation, up to
-          # 100 comments, 50 reviews and 50 review threads of 20 comments.
+          gh_error() { tr '\n' ' ' < "$work/gh.err" | tail -c 400; }
+          # The default branch's commits in the window, each with the merged PR that brought it, if any: a
+          # PR's squash or merge commit, the commits of a merge-committed PR's branch and a rebased PR's
+          # commits all name their PR. The window is on each commit's own date, not when it was pushed.
           # shellcheck disable=SC2016 # GraphQL variables, not shell ones
-          gh api graphql --paginate -f q="repo:$repo is:pr is:merged merged:>=${since%Z}+00:00" -f query='
+          gh api graphql --paginate -f owner="${repo%%/*}" -f name="${repo#*/}" -f since="$since" -f until="$until" -f query='
+          query($owner: String!, $name: String!, $since: GitTimestamp!, $until: GitTimestamp!, $endCursor: String) {
+            repository(owner: $owner, name: $name) { defaultBranchRef { name target { ... on Commit {
+              history(first: 100, since: $since, until: $until, after: $endCursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes { oid message author { name user { login } } associatedPullRequests(first: 5) { nodes { merged } } }
+              }
+            } } } }
+          }' > "$work/commits.json" 2> "$work/gh.err" || die "GitHub refused the commits: $(gh_error)"
+          branch=$(jq -rs '[.[].data.repository.defaultBranchRef.name // empty][0] // empty' "$work/commits.json")
+          [ -n "$branch" ] || die "$repo has no default branch, so nothing has landed to mine"
+          # PRs merged into the default branch in the window, by search. Each comes with its conversation,
+          # up to 100 comments, 50 reviews and 50 review threads of 20 comments. Search lists at most
+          # 1000, so a longer list fails the run rather than mine part of it.
+          # shellcheck disable=SC2016 # GraphQL variables, not shell ones
+          gh api graphql --paginate -f q="repo:$repo is:pr is:merged base:$branch merged:${since%Z}+00:00..${until%Z}+00:00" -f query='
           query($q: String!, $endCursor: String) {
             search(query: $q, type: ISSUE, first: 25, after: $endCursor) {
+              issueCount
               pageInfo { hasNextPage endCursor }
               nodes { ... on PullRequest {
                 number title body mergedAt author { login } mergeCommit { oid }
@@ -519,26 +563,17 @@ jobs:
                   databaseId body createdAt path authorAssociation author { login } replyTo { databaseId } } } } }
               } }
             }
-          }' > "$work/prs.json" || die "couldn't list the merged PRs: the workflow needs pull-requests: read"
-          # The default branch's commits in the window, each with the merged PR that brought it, if any: a
-          # PR's squash or merge commit, the commits of a merge-committed PR's branch and a rebased PR's
-          # commits all name their PR.
-          # shellcheck disable=SC2016 # GraphQL variables, not shell ones
-          gh api graphql --paginate -f owner="${repo%%/*}" -f name="${repo#*/}" -f since="$since" -f until="$until" -f query='
-          query($owner: String!, $name: String!, $since: GitTimestamp!, $until: GitTimestamp!, $endCursor: String) {
-            repository(owner: $owner, name: $name) { defaultBranchRef { target { ... on Commit {
-              history(first: 100, since: $since, until: $until, after: $endCursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes { oid message author { name user { login } } associatedPullRequests(first: 5) { nodes { merged } } }
-              }
-            } } } }
-          }' > "$work/commits.json" || die "couldn't list the commits: the workflow needs contents: read"
+          }' > "$work/prs.json" 2> "$work/gh.err" || die "GitHub refused the merged PRs: $(gh_error)"
+          listed=$(jq -s '[.[].data.search.issueCount // 0] | max // 0' "$work/prs.json")
+          [ "$listed" -le 1000 ] ||
+            die "$listed PRs merged in the window, more than the 1000 GitHub's search lists: run it by hand with a later since"
 
           # Render as the cloud miner does: one block per commit and per PR, never split across chunks.
           # Commits a merged PR brought (its squash or merge commit, its branch's commits, its rebased
-          # commits) are left out, since the PR is mined whole. PR titles, bodies and commit messages are mined whoever wrote them, since a merge or a
-          # push endorses them; comments only from the repo's owners, members and collaborators. A reply
-          # under a "Meko Gotcha" footer is tagged with the ids it's about.
+          # commits) are left out, since the PR is mined whole. PR titles, bodies and commit messages are
+          # mined whoever wrote them, since a merge or a push endorses them; comments only from the repo's
+          # owners, members and collaborators. A reply to a review comment that credits Meko gotchas (the
+          # Meko Cloud reviewer's "Meko Gotcha" footer, or "(Meko gotcha MG-n)") is tagged with their ids.
           jq -n --slurpfile prs "$work/prs.json" --slurpfile commits "$work/commits.json" \
             --arg since "$since" --arg until "$until" --argjson max "$chunk_bytes" '
             def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
@@ -556,7 +591,7 @@ jobs:
                   | ($threads | map({key: (.databaseId | tostring), value: .body}) | from_entries) as $byid
                   | ([.comments.nodes[]?] + [.reviews.nodes[]? | select((.body // "") | test("\\S"))] + $threads
                     | map(select(trusted)) | sort_by(.createdAt)
-                    | map((if .replyTo.databaseId then ($byid[.replyTo.databaseId | tostring] // "" | [capture("Meko Gotchas? (?<s>[^\n]+)").s] | first // "" | ids) else "" end) as $tag
+                    | map((if .replyTo.databaseId then ($byid[.replyTo.databaseId | tostring] // "" | [capture("Meko Gotchas?\\b(?<s>[^\n]*)"; "i").s] | first // "" | ids) else "" end) as $tag
                       | "\(.author.login // "ghost")\(if .path then " on \(.path)" else "" end)\(if $tag != "" then " [about gotcha \($tag)]" else "" end):\n\(.body | trim)\n\n")) as $conv
                   | "# PR #\(.number): \(.title)\nmerged \(.mergedAt[0:10]), merge commit \((.mergeCommit.oid // "")[0:12]), author \(.author.login // "ghost")\n\n"
                     + (if (.body // "" | test("\\S")) then (.body | trim) + "\n\n" else "" end)
@@ -652,27 +687,48 @@ jobs:
             jq -e '.structured_output | type == "object"' "$work/out.json" > /dev/null || die "Claude gave no answer on part $i"
 
             # Drop what can't be applied: an id not in the corpus, a kind not in the list, an empty field,
-            # a path git doesn't track (that path only, but the whole entry when none of its paths is left,
-            # rather than widen it to the whole repo). Dropped, never repaired.
+            # a second entry for one id, a retire of a gotcha that's also updated, or an entry none of whose
+            # paths git tracks (rather than widen it to the whole repo). An untracked path in an entry that's
+            # kept is left out of it. Dropped, never repaired; the log says which and why.
             jq --slurpfile corpus "$work/corpus.json" --slurpfile tracked "$work/tracked.json" --argjson kinds "$kinds" '
               def text: type == "string" and test("\\S");
-              def paths: [.[]? | strings | sub("^\\s+"; "") | sub("\\s+$"; "") | ltrimstr("/")
-                | select(length > 0 and ($tracked[0] == null or $tracked[0][rtrimstr("/")] == true))];
+              def named: [.[]? | strings | sub("^\\s+"; "") | sub("\\s+$"; "") | ltrimstr("/") | select(length > 0)];
+              def tracked: $tracked[0] == null or $tracked[0][rtrimstr("/")] == true;
               def strs: [.[]? | strings | select(test("\\S"))];
-              def scoped: (.paths | strs | length) == 0 or (.paths | paths | length) > 0;
+              def scope: (.paths | named) as $p
+                | if ($p | length) > 0 and ($p | map(select(tracked)) | length) == 0
+                  then "git tracks none of its paths (\($p | join(", ")))" else null end;
+              def firsts: reduce .[] as $e ({seen: [], out: []};
+                if $e.why != null then .out += [$e]
+                elif (.seen | any(. == $e.id)) then .out += [$e + {why: "another entry for \($e.id) came first"}]
+                else .seen += [$e.id] | .out += [$e] end) | .out;
+              def shown: (.title // .id // "" | tostring | gsub("\\s+"; " ")) | "\"\(.)\"";
+              def keep: select(.why == null) | del(.why);
               ($corpus[0] | map(.id)) as $known
               | .structured_output as $d
-              | [$d.new[]? | select((.title | text) and (.body | text) and (.kind as $k | $kinds | any(. == $k)) and scoped)
-                  | .paths |= paths | .symbols |= strs] as $new
-              | [$d.update[]? | select((.id as $id | $known | any(. == $id)) and (.body | text) and scoped) | .paths |= paths | .symbols |= strs]
-                | unique_by(.id) as $update
-              | [$d.retire[]? | select(.id as $id | ($known | any(. == $id)) and ($update | all(.id != $id)))] | unique_by(.id) as $retire
-              | {new: $new, update: $update, retire: $retire,
-                 dropped: (([$d.new[]?] | length) - ($new | length) + ([$d.update[]?] | length) - ($update | length)
-                   + ([$d.retire[]?] | length) - ($retire | length))}' "$work/out.json" > "$work/delta.json"
-            dropped=$((dropped + $(jq .dropped "$work/delta.json")))
-            [ "$(jq .dropped "$work/delta.json")" -eq 0 ] ||
-              say "Dropped invalid entries: $(jq -c '.structured_output | {new: [.new[]?.title], update: [.update[]?.id], retire: [.retire[]?.id]}' "$work/out.json")"
+              | [$d.new[]? | . + {why: (if (.title | text | not) then "it has no title" elif (.body | text | not) then "it has no body"
+                  elif (.kind as $k | $kinds | any(. == $k) | not) then "its kind \(.kind | tojson) isn'"'"'t one of the list" else scope end)}] as $new
+              | [$d.update[]? | . + {why: (if (.id as $id | $known | any(. == $id) | not) then "there'"'"'s no gotcha \(.id | tojson)"
+                  elif (.body | text | not) then "it has no body" else scope end)}] | firsts as $update
+              | [$update[] | select(.why == null) | .id] as $updated
+              | [$d.retire[]? | . + {why: (if (.id as $id | $known | any(. == $id) | not) then "there'"'"'s no gotcha \(.id | tojson)"
+                  elif (.id as $id | $updated | any(. == $id)) then "it'"'"'s also updated" else null end)}] | firsts as $retire
+              | {new: [$new[] | keep | .paths |= (named | map(select(tracked))) | .symbols |= strs],
+                 update: [$update[] | keep | .paths |= (named | map(select(tracked))) | .symbols |= strs],
+                 retire: [$retire[] | keep],
+                 dropped: ([$new[] | select(.why) | "the new gotcha \(shown): \(.why)"]
+                   + [$update[] | select(.why) | "the update to \(.id // "" | tostring): \(.why)"]
+                   + [$retire[] | select(.why) | "the retirement of \(.id // "" | tostring): \(.why)"]),
+                 trimmed: [($new[], $update[]) | select(.why == null) | (.paths | named | map(select(tracked | not))) as $x
+                   | select($x | length > 0) | "\(shown): \($x | join(", "))"]}' "$work/out.json" > "$work/delta.json"
+            while IFS= read -r line; do
+              say "Dropped $line"
+              dropped=$((dropped + 1))
+            done < <(jq -r '.dropped[]' "$work/delta.json")
+            while IFS= read -r line; do
+              say "Left out the paths git doesn't track from $line"
+              notes+=("Some paths Claude named aren't in the repository, and were left out of the gotchas that named them: the log says which.")
+            done < <(jq -r '.trimmed[]' "$work/delta.json")
 
             n=$(jq '.new | length' "$work/delta.json")
             for ((k = 0; k < n; k++)); do
