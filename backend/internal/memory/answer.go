@@ -157,6 +157,12 @@ func (s *Service) Answer(ctx context.Context, datapack, query string, passages [
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return SearchAnswer{}, err
 	}
+	return s.AnswerFrom(ctx, query, passages)
+}
+
+// AnswerFrom is Answer for a datapack this Meko doesn't keep (the linked Meko Cloud's): the passages
+// are all it reads, so there's no datapack to check.
+func (s *Service) AnswerFrom(ctx context.Context, query string, passages []Passage) (SearchAnswer, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return SearchAnswer{}, fmt.Errorf("%w: query is required", ErrBadRequest)

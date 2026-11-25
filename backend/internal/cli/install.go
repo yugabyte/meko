@@ -259,6 +259,13 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 		}
 		fmt.Fprintf(stdout, "Removed the %s service\n", m.Kind())
 	}
+	// The menu bar app runs from the releases removed below.
+	if job, jerr := newMenuBar(); jerr == nil && job.Installed() {
+		if err = job.Remove(); err != nil {
+			return fail(stderr, err)
+		}
+		fmt.Fprintln(stdout, "Removed the menu bar app")
+	}
 	if up, _ := running(l.Lock); up {
 		if code := stopMeko(l, stdout, stderr); code != exitOK {
 			return code

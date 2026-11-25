@@ -248,6 +248,7 @@ jobs:
         run: |
           set -eu
           make build VERSION="$VERSION"
+          make menubar VERSION="$VERSION"
           make memory_engine || { rm -rf memory_engine/node_modules; make memory_engine; }
           make web_ui || { rm -rf web_ui/node_modules; make web_ui; }
           (cd memory_engine && npm prune --omit=dev)

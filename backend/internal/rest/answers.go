@@ -65,11 +65,19 @@ func namedCommand(c echo.Context) error {
 }
 
 // answer is POST /datapacks/:id/answer {query, passages: [{source, id, text}]}: an answer to query
-// written from the passages a search returned, {answer, cited, model}.
+// written from the passages a search returned, {answer, cited, model}. It's written here, by the
+// harness answers use, for this Meko's datapacks and for the linked Meko Cloud's alike (inCloud):
+// the passages come in the body, so Meko Cloud is never asked.
 func (a *api) answer(c echo.Context) error {
-	id, ok, err := a.pathDatapack(c)
+	cloud, ok, err := a.inCloud(c)
 	if !ok {
 		return err
+	}
+	id := ""
+	if !cloud {
+		if id, ok, err = a.pathDatapack(c); !ok {
+			return err
+		}
 	}
 	var body struct {
 		Query    string           `json:"query"`
@@ -78,7 +86,12 @@ func (a *api) answer(c echo.Context) error {
 	if ok, berr := bind(c, &body); !ok {
 		return berr
 	}
-	out, err := a.Service.Answer(ctx(c), id, body.Query, body.Passages)
+	var out memory.SearchAnswer
+	if cloud {
+		out, err = a.Service.AnswerFrom(ctx(c), body.Query, body.Passages)
+	} else {
+		out, err = a.Service.Answer(ctx(c), id, body.Query, body.Passages)
+	}
 	switch {
 	case errors.Is(err, memory.ErrAnswersOff):
 		return envelope.Fail(c, http.StatusConflict, "ANSWERS_OFF", err.Error())

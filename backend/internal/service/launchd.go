@@ -17,14 +17,23 @@ type Launchd struct {
 	Run  Runner
 	// Pause waits between checks; tests make it instant.
 	Pause func(time.Duration)
+	// Job is the job's label: Label (Meko's server) when empty, MenuBarLabel for the menu bar app.
+	Job string
+}
+
+func (d *Launchd) label() string {
+	if d.Job != "" {
+		return d.Job
+	}
+	return Label
 }
 
 func (d *Launchd) Kind() string { return "launchd" }
 func (d *Launchd) File() string {
-	return filepath.Join(d.Home, "Library", "LaunchAgents", Label+".plist")
+	return filepath.Join(d.Home, "Library", "LaunchAgents", d.label()+".plist")
 }
 func (d *Launchd) domain() string     { return fmt.Sprintf("gui/%d", d.UID) }
-func (d *Launchd) target() string     { return d.domain() + "/" + Label }
+func (d *Launchd) target() string     { return d.domain() + "/" + d.label() }
 func (d *Launchd) DataDir() string    { return dataDirOf(d.File()) }
 func (d *Launchd) StatusHint() string { return "launchctl print " + d.target() }
 
@@ -95,7 +104,7 @@ func (d *Launchd) bootout() error {
 		d.pause(100 * time.Millisecond)
 	}
 	if d.loaded() {
-		return fmt.Errorf("%s didn't stop within 40 s. Check: %s", Label, d.StatusHint())
+		return fmt.Errorf("%s didn't stop within 40 s. Check: %s", d.label(), d.StatusHint())
 	}
 	return nil
 }

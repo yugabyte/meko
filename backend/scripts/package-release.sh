@@ -7,6 +7,7 @@
 # onnxruntime and sharp are native), after:
 #
 #   make build VERSION=<version>          bin/meko
+#   make menubar VERSION=<version>        bin/Meko.app, on macOS only
 #   make memory_engine                    memory_engine/dist and its dependencies
 #   (cd memory_engine && npm prune --omit=dev)   production dependencies only
 #
@@ -16,6 +17,7 @@
 #
 #   meko-<version>/
 #     bin/meko                   the CLI and server
+#     bin/Meko.app               the menu bar app (macOS only), which meko menubar start runs
 #     node/bin/node, node/LICENSE  Meko's own Node
 #     memory_engine/package.json, dist/, node_modules/, stubs/
 #                                the memory engine, trimmed to this platform
@@ -47,6 +49,11 @@ for p in "$backend/bin/meko" "$backend/memory_engine/dist/main.js" "$backend/mem
   "$backend/web_ui/dist/index.html" "$node_dir/bin/node"; do
   [ -e "$p" ] || { echo "missing $p (build first)" >&2; exit 1; }
 done
+if [ $platform = darwin ]; then
+  [ -x "$backend/bin/Meko.app/Contents/MacOS/meko-menubar" ] || { echo "missing $backend/bin/Meko.app: make menubar" >&2; exit 1; }
+  plutil -extract CFBundleVersion raw "$backend/bin/Meko.app/Contents/Info.plist" | grep -qx "$version" ||
+    { echo "bin/Meko.app isn't version $version: make menubar VERSION=$version" >&2; exit 1; }
+fi
 [ -d "$backend/memory_engine/node_modules/typescript" ] && { echo "memory_engine/node_modules has dev dependencies: run npm prune --omit=dev" >&2; exit 1; }
 v=$("$backend/bin/meko" version --json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
 [ "$v" = "$version" ] || { echo "bin/meko is version $v, not $version: make build VERSION=$version" >&2; exit 1; }
@@ -59,6 +66,7 @@ mkdir -p "$root/bin" "$root/node/bin" "$root/memory_engine" "$root/web_ui"
 
 cp "$backend/bin/meko" "$root/bin/meko"
 chmod 755 "$root/bin/meko"
+[ $platform = darwin ] && cp -R "$backend/bin/Meko.app" "$root/bin/Meko.app"
 cp "$node_dir/bin/node" "$root/node/bin/node"
 cp "$node_dir/LICENSE" "$root/node/LICENSE"
 cp "$backend/memory_engine/package.json" "$root/memory_engine/package.json"

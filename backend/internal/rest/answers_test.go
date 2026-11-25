@@ -3,11 +3,14 @@ package rest_test
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/secrets"
 	"github.com/yugabyte/meko/backend/internal/testenv"
 )
 
@@ -77,4 +80,46 @@ func TestSearchAnswers(t *testing.T) {
 		obj(r.Data)["enabled"] != false {
 		t.Errorf("off: %+v", r)
 	}
+}
+
+// A linked Meko Cloud's datapack gets its answer here, from the passages sent, without asking Meko
+// Cloud; unlinked, a datapack this Meko doesn't have is still a 404.
+func TestSearchAnswersCloud(t *testing.T) {
+	a := &fakeAnswerer{reply: memory.SearchAnswer{Answer: "Nightly [1].", Cited: []int{1}}}
+	fakeClaude(t)
+	cloud := newFakeCloud(t)
+	dir := t.TempDir()
+	link := &cloudlink.Service{
+		Store:    cloudlink.Store{File: filepath.Join(dir, "cloud.toml"), Secrets: secrets.NewFiles(dir)},
+		Check:    func(context.Context, string, string) error { return nil },
+		CheckAPI: func(context.Context, string) error { return nil },
+	}
+	e := testenv.Start(t, testenv.Options{Answerer: a, Cloud: link})
+	if r := asAdmin(t, e, "/settings/answers", map[string]any{"harness": "claude"}); r.Status != 200 {
+		t.Fatalf("set up: %+v", r)
+	}
+	path := "/datapacks/" + cloudDP + "/answer"
+	ask := map[string]any{"query": "when does the build run?",
+		"passages": []map[string]string{{"source": "memory", "id": "m1", "text": "the build runs nightly"}}}
+	wantErr(t, e, "POST", path, ask, 404, "NOT_FOUND")
+
+	if _, err := link.Link(context.Background(), cloudlink.Update{URL: ptr(cloud.URL + "/mcp"),
+		APIURL: ptr(cloud.URL + "/api/v1"), Key: ptr(cloudKey)}); err != nil {
+		t.Fatal(err)
+	}
+	asked := func() int { cloud.mu.Lock(); defer cloud.mu.Unlock(); return len(cloud.calls) }
+	calls := asked()
+	got := obj(okData(t, e, "POST", path, ask, 200))
+	if got["answer"] != "Nightly [1]." || fmt.Sprint(got["cited"]) != "[1]" {
+		t.Errorf("answer %v", got)
+	}
+	if in := a.inputs[len(a.inputs)-1]; !strings.Contains(in, "[1] (memory) the build runs nightly") {
+		t.Errorf("input:\n%s", in)
+	}
+	if n := asked(); n != calls {
+		t.Errorf("Meko Cloud was asked %d times", n-calls)
+	}
+	wantErr(t, e, "POST", path, map[string]any{"query": " "}, 400, "VALIDATION_ERROR")
+	// This Meko's own datapack is still answered here as before.
+	okData(t, e, "POST", "/datapacks/"+e.DatapackID+"/answer", ask, 200)
 }

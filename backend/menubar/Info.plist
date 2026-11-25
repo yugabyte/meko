@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.yugabyte.meko.menubar</string>
+  <key>CFBundleName</key>
+  <string>Meko</string>
+  <key>CFBundleDisplayName</key>
+  <string>Meko</string>
+  <key>CFBundleExecutable</key>
+  <string>meko-menubar</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <!-- A menu bar app: no Dock icon, no app menu. -->
+  <key>LSUIElement</key>
+  <true/>
+  <!-- Meko's API listens on plain http at 127.0.0.1. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

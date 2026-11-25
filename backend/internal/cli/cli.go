@@ -1,7 +1,7 @@
 // Package cli is the meko and meko-cli commands, one binary run by either name. meko runs Meko:
-// install, start, stop, restart, status, logs, update, version, token, ui, ui start|stop, cloud_link,
-// destroy, uninstall, extension list|install|update|delete, agent list|connect|disconnect (agent.go)
-// and serve. meko-cli
+// install, start, stop, restart, status, logs, update, version, token, ui, ui start|stop,
+// menubar start|stop (menubar.go), cloud_link, destroy, uninstall, extension
+// list|install|update|delete, agent list|connect|disconnect (agent.go) and serve. meko-cli
 // works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
 // (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search, add_memory, upload
 // and upload_status, one at a time or at its prompt (shell.go). help.go has each command's help.
@@ -318,6 +318,10 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		return runUISwitch(l, true, stdout, stderr)
 	case "ui stop":
 		return runUISwitch(l, false, stdout, stderr)
+	case "menubar start":
+		return runMenuBar(l, true, stdout, stderr)
+	case "menubar stop":
+		return runMenuBar(l, false, stdout, stderr)
 	case "cloud_link":
 		return runCloudLink(l, cl, stdin, stdout, stderr)
 	case "destroy":

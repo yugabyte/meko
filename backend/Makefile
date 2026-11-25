@@ -15,12 +15,16 @@ MEMORY_ENGINE_SRC := $(wildcard memory_engine/src/*.ts) memory_engine/tsconfig.j
 WEB_UI_SRC := $(shell find web_ui/src web_ui/public -type f 2>/dev/null) web_ui/index.html web_ui/vite.config.ts \
 	web_ui/tsconfig.json
 
-.PHONY: build memory_engine web_ui test bench lint fmt clean
+.PHONY: build menubar memory_engine web_ui test bench lint fmt clean
 
 # bin/meko-cli is meko under its other name (cmd/meko picks the commands by it).
 build:
 	go build -tags $(TAGS) -ldflags "$(LDFLAGS)" -o bin/meko ./cmd/meko
 	ln -sf meko bin/meko-cli
+
+# The menu bar app (macOS only), bin/Meko.app beside bin/meko, where meko menubar start finds it.
+menubar:
+	sh menubar/build.sh $(VERSION) bin
 
 # The memory engine's dependencies, installed again only when the lockfile changes. onnxruntime-node's
 # install script would download a CUDA provider on linux-x64 (and time out on CI runners); Meko runs

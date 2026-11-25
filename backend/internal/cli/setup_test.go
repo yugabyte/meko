@@ -562,8 +562,13 @@ func TestUninstallRemovesTheCommands(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	bar := useFakeMenuBar(t, app.CurrentExe())
+	bar.installed = true
 	code, out, errs := run("uninstall", "--data-dir", dir)
 	want(t, "uninstall", code, 0, out+errs, "and the meko and meko-cli commands")
+	if bar.installed || !strings.Contains(out, "Removed the menu bar app\n") {
+		t.Errorf("uninstall left the menu bar app's job:\n%s", out)
+	}
 	for _, link := range []string{progMeko, progMekoCLI, progMekosh} {
 		if _, err := os.Lstat(filepath.Join(bin, link)); !os.IsNotExist(err) { //nolint:gosec // G703: the test's home
 			t.Errorf("uninstall left %s: %v", link, err)
