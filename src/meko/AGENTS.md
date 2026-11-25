@@ -43,6 +43,7 @@ the service, extensions, updates and secrets), [docs/web.md](docs/web.md) (one p
 | `internal/update/` | Release installs (`~/.local/share/meko/app/<version>`, `app/current`, outside the data folder), GitHub releases, staging and checking an update (`SHA256SUMS`'s signature, `SHA256SUMS.sig`, against the release keys built in from `keys/*.pub`, by `[update] require_signature`: `sign.go`; then the checksum and the staged binary), probation and rollback (for the extensions too, through `meko _launch`, and for `meko install`'s upgrades, through `App.Switch`), `meko install`'s `app/setup-pending` marker (`MarkSetup`, `ClearSetup`, `SetupPending`: `setup.go`), the in-use mark that keeps a running version from being pruned (`App.LockInUse`), the update lock every update holds (`Lock`), and the web UI's check and install (`Updater.Status`, `CheckNow`, `StartApply`), whose checks also find the extensions' releases (`Updater.Extensions`, `AfterCheck`). `App.Name` names the program, so a `Managed` extension's releases (in `<data>/extensions/<name>/app`) use the same code. |
 | `internal/supervisor/` | Child processes (the context engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
 | `internal/callhome/` | Usage stats to YugabyteDB's call home service (`DefaultURL`, from release installs): the report (counts only, from `store.UsageTotals`, `CallDays` and `QuestionDays`), yugabyted's envelope, the schedule, and the on/off state the web UI and `status --json` show; a failed `meko install`'s `install_failure` report, its step and error class only (`failure.go`); the first commands after a first install, the file the CLI appends them to and the heartbeat carries until it took all 15 (`firstcommands.go`); and `meko uninstall`'s and `destroy`'s own events with them (`uninstall.go`). |
+| `internal/callhome/callhometest/` | For tests only: the guard that keeps them from sending to `callhome.DefaultURL` (`Run` in a `TestMain`, `Check` in a test), with what the test binary's child processes turned away in the file `MEKO_TEST_CALL_HOME_GUARD` names. |
 | `internal/spin/` | The CLI's palette (colors by role, readable on light and dark terminals, which `install.sh` repeats: [docs/install.md](docs/install.md#colors)): base ANSI colors, but a blue picked for the terminal's background, 24-bit or 256-color by `COLORTERM` and `TERM` (`background.go`: `Background` reads `MEKO_TERM_BG`, `COLORFGBG`, else asks the terminal on `/dev/tty` with echo off, OSC 11 and DA1, and sets `MEKO_TERM_BG` for the commands meko runs), the summary's ✓/!/✗ rows (their marks, colors and format, which `cli/report.go` uses) and a step's rotating blue dots on a terminal while it runs (`Start`, `Quiet`, `Wait`): the release listing and download in `meko update`, `extension update` and `extension install`. Off a terminal a step prints what it's doing as a plain line when it starts (`Installing Kode <version>`), then its finished row. |
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
 | `internal/version/` | Version and commit, set with `-ldflags`. |
@@ -128,6 +129,15 @@ Markdown only people read, such as this file and `REVIEW.md`, doesn't run it; `d
   and `XDG_CONFIG_HOME` are unset, and the agent commands are fakes on the test's PATH. Tests that need no model start the context engine with the
   hashing embedder (`contextengine.Options.TestEmbedder`; the CLI's tests set it through their own
   `MEKO_TEST_EMBEDDER`, which only the test binary reads).
+- Tests never send to YugabyteDB's call home service (`callhome.DefaultURL`). Every test binary that
+  can build a sender (`callhome`, `cli`, `rest`, `server`, and `mcp` and `cloudsync` through
+  `testenv`) runs `callhometest.Run` in its `TestMain`: a guard in front of `http.DefaultTransport`
+  turns away every request to `DefaultURL`'s host and fails the run, and in the CLI's tests
+  `setup` fails the test that sent it (`callhometest.Check`). The serve and `_launch` the CLI's
+  tests run as the test binary write what they turn away to the file in
+  `MEKO_TEST_CALL_HOME_GUARD`. A test that fakes a release install (`testRelease`,
+  `releaseInstall`) points call home at a test server (`callHomeSink`) unless it set its own. A
+  new package whose tests can send gets the same `TestMain`.
 - No third-party C code is copied here. SQLite and sqlite-vec come from a tag of the
   `yugabyte/go-sqlite3` fork (its `README.yugabyte.md` says how to sync sqlite-vec from
   `yugabyte/sqlite-vec` or rebase on mattn). To upgrade, cut a new `-yb.<n>` tag there (never move
