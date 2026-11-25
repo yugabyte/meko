@@ -60,6 +60,7 @@ var mekoCommands = []command{
 			{"meko install", "set Meko up with a login service (launchd or systemd), and start it"},
 			{"meko install --access remote", "let browsers on other computers reach the web UI, over HTTPS, with no login"},
 			{"meko install --no-ui", "set Meko up with the web UI off (meko ui start turns it on)"},
+			{"meko install --no-menubar", "macOS: set Meko up without the menu bar app (meko menubar start turns it on)"},
 			{"meko install --no-service", "set it up without a service; start it with meko start"},
 		}},
 	{name: "start", group: "Get started", summary: "Start Meko and its extensions",

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yugabyte/meko/src/meko/internal/paths"
@@ -87,6 +89,16 @@ func TestMenuBar(t *testing.T) {
 	if f.removed != 1 {
 		t.Errorf("removed %d times", f.removed)
 	}
+	// stop is remembered, so meko install leaves the app off; start forgets it.
+	off := menuBarOff(paths.New(got.DataDir))
+	if _, err := os.Stat(off); err != nil {
+		t.Errorf("stop didn't record that the app is off: %v", err)
+	}
+	code, out, errs = run("menubar", "start", "--data-dir", dir)
+	want(t, "start again", code, exitOK, out+errs, "Started the menu bar app")
+	if _, err := os.Stat(off); !os.IsNotExist(err) {
+		t.Errorf("start left the app recorded as off: %v", err)
+	}
 
 	code, _, errs = run("menubar")
 	want(t, "menubar alone", code, exitUsage, errs, "")
@@ -99,4 +111,36 @@ func TestMenuBarOffMacOS(t *testing.T) {
 	t.Cleanup(func() { newMenuBar = old })
 	code, _, errs := run("menubar", "start", "--data-dir", t.TempDir())
 	want(t, "start", code, exitError, errs, "meko: the menu bar app runs only on macOS\n")
+}
+
+// meko install starts the menu bar app at each login on macOS, unless it was turned off; --no-menubar
+// turns it off and records that. A Meko with no Meko.app (a build from source) skips it silently.
+func TestInstallMenuBar(t *testing.T) {
+	l := paths.New(t.TempDir())
+	exe := filepath.Join(t.TempDir(), "bin", "meko")
+	f := useFakeMenuBar(t, exe)
+	var out bytes.Buffer
+	r := report{w: &out}
+
+	installMenuBar(l, r, exe, false)
+	if out.Len() != 0 || len(f.started) != 0 {
+		t.Fatalf("without a bundle: %q, started %v", out.String(), f.started)
+	}
+
+	menuBarBundle(t, exe)
+	installMenuBar(l, r, exe, false)
+	if len(f.started) != 1 || !strings.Contains(out.String(), "Menu bar") ||
+		!strings.Contains(out.String(), "meko menubar stop") {
+		t.Fatalf("install: %q, started %v", out.String(), f.started)
+	}
+
+	out.Reset()
+	installMenuBar(l, r, exe, true)
+	if f.installed || f.removed != 1 || out.Len() != 0 {
+		t.Fatalf("--no-menubar: installed %v, removed %d, %q", f.installed, f.removed, out.String())
+	}
+	installMenuBar(l, r, exe, false)
+	if len(f.started) != 1 {
+		t.Errorf("an install after --no-menubar started it again")
+	}
 }

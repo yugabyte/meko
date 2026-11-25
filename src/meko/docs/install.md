@@ -144,6 +144,12 @@ safe.
   ([web.md](web.md#settings)). Neither access has a login. `--no-ui` turns the web UI off there
   too (`[web] enabled = false`; `meko ui start` turns it on). The summary's `Web UI` link row
   gives the URL and the access.
+- On macOS, with the service, once the server is up, it starts the menu bar app at each login
+  (`meko menubar start`'s job, [menubar.md](menubar.md)), with a `Menu bar` row, unless the user
+  turned it off: `--no-menubar`, or an earlier `meko menubar stop`, each of which writes
+  `menubar-off` in the data folder (`meko menubar start` removes it). A failure there is a `!`
+  row, not a failed install; a Meko with no `Meko.app` (a build from source without
+  `make menubar`) skips it.
 - It installs Meko alone. On a first install from the installer (`MEKO_INSTALL_FIRST=1`) at a
   terminal, it ends, after the links, with "Choose your agentic experience": a picker of the
   known extensions not installed yet that have a `Summary` (`extensions.Known`, Kode first), each

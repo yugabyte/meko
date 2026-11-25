@@ -17,9 +17,12 @@ datapacks, this Meko's and the linked Meko Cloud's, as one list sorted by name:
 
 ## Running it
 
+`meko install` starts it on macOS, with the service, unless it was turned off (`--no-menubar`, or
+`meko menubar stop`, which `meko install` then respects until `meko menubar start`).
 `meko menubar start` writes a LaunchAgent, `com.yugabyte.meko.menubar`, that runs the app at each
 login, and starts it now. Quit (in its window) quits it until the next login or
-`meko menubar start`; a crash starts it again. `meko menubar stop` quits it and removes the job,
+`meko menubar start`; a crash starts it again. `meko menubar stop` quits it, removes the job and
+records that it's off (`menubar-off` in the data folder),
 and `meko uninstall` removes the job too. The job runs the `Meko.app` beside the `meko` binary:
 in a release that's `app/current/bin/Meko.app`. Like Meko's own job ([install.md](install.md)), a
 release's job runs a launcher, `<app>/service/meko-menubar`, a script that execs the app in

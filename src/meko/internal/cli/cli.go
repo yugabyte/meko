@@ -43,14 +43,14 @@ var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
 type cmdFlags struct {
-	keepExtensions, noService, noUI, purge, check, follow, force, withExtensions bool
-	verbose                                                                      bool
-	lines                                                                        int
-	server, contextEngine, service                                               bool
-	access                                                                       string
-	all                                                                          bool
-	auto, version                                                                string
-	extra                                                                        []string // after --
+	keepExtensions, noService, noUI, noMenuBar, purge, check, follow, force, withExtensions bool
+	verbose                                                                                 bool
+	lines                                                                                   int
+	server, contextEngine, service                                                          bool
+	access                                                                                  string
+	all                                                                                     bool
+	auto, version                                                                           string
+	extra                                                                                   []string // after --
 }
 
 // Main runs the program argv0 names (meko-cli, or else meko) with args and returns the exit code.
@@ -213,6 +213,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer, tr *tracked) 
 		fs.BoolVar(&c.noService, "no-service", false, "don't set up the login service")
 		fs.StringVar(&c.access, "access", "", "how browsers reach the web UI: local or remote")
 		fs.BoolVar(&c.noUI, "no-ui", false, "leave the web UI off (meko ui start turns it on)")
+		fs.BoolVar(&c.noMenuBar, "no-menubar", false, "macOS: leave the menu bar app off (meko menubar start turns it on)")
 	case "uninstall":
 		fs.BoolVar(&c.purge, "purge", false, "also destroy the data folder and its secrets")
 		fs.BoolVar(&c.force, "force", false, "with --purge, destroy without asking")
@@ -398,7 +399,8 @@ func runProg(prog string, args []string, stdout, stderr io.Writer, tr *tracked) 
 		return runDestroy(l, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdin, stdout, stderr)
 	case "install":
 		_, before := os.Stat(l.FirstCommands)
-		code := runInstall(l, c.noService, c.access, c.noUI, stdout, stderr)
+		code := runInstall(l, installOptions{noService: c.noService, access: c.access, noUI: c.noUI,
+			noMenuBar: c.noMenuBar}, stdout, stderr)
 		if _, after := os.Stat(l.FirstCommands); before != nil && after == nil {
 			tr.started = true // a first install: the list starts after it
 		}

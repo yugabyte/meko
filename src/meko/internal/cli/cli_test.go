@@ -48,6 +48,8 @@ func TestMain(m *testing.M) {
 	agents.SystemFolders = nil
 	agents.Applications = ""
 	agents.LoginShell = ""
+	// Never this computer's launchd: meko install starts the menu bar app on macOS.
+	newMenuBar = func() (menuBarJob, error) { return &fakeMenuBar{}, nil }
 	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_HOME", "XDG_CONFIG_HOME"} {
 		_ = os.Unsetenv(k)
 	}
