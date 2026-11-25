@@ -29,12 +29,17 @@ binary> --data-dir <data folder>`; the app's own errors go to `logs/menubar.log`
 
 ## How it reaches Meko
 
-The app runs `meko token --json` (with the job's `--data-dir`) for the server's address and the
-client token, and calls the REST API with it: `GET /api/v1/datapacks` for the list,
+The app runs `meko token --json` (with the job's `--data-dir`) for the agents' listener's address
+(`url`, the MCP URL, plain http on 127.0.0.1: the REST API is at `/api/v1` beside it) and the client
+token, which that listener takes. It never calls the web listener, which takes no token and is off
+after `meko ui stop`, or HTTPS with its own certificate under remote access; `web_url` is only where
+it opens pages (while the web UI is off it says to run `meko ui start`). It calls
+`GET /api/v1/datapacks` for the list,
 `POST /api/v1/datapacks/:id/search` for a search (with `agent_id` `meko_menubar`, so its searches
 show as its own in the call log and Context Gaps), and `POST /api/v1/datapacks/:id/answer` for a
 chat's answer, which takes Meko Cloud's datapacks too ([api.md](api.md#rest-at-apiv1)). It reads the
-token again after a 401 (Meko was set up again) or a failed connection (Meko restarted). Started
+address and token again after a 401 (Meko was set up again, with a new token) or a failed
+connection, which it reports as Meko not answering at that address, with `meko status` to run. Started
 without arguments (opened from Finder), it uses the `meko` beside it, else `~/.local/bin/meko`.
 
 ## Building it

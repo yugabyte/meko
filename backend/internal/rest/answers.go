@@ -3,6 +3,7 @@ package rest
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -67,17 +68,20 @@ func namedCommand(c echo.Context) error {
 // answer is POST /datapacks/:id/answer {query, passages: [{source, id, text}]}: an answer to query
 // written from the passages a search returned, {answer, cited, model}. It's written here, by the
 // harness answers use, for this Meko's datapacks and for the linked Meko Cloud's alike (inCloud):
-// the passages come in the body, so Meko Cloud is never asked.
+// the passages come in the body, so Meko Cloud is asked only whether the datapack exists, and one
+// that doesn't is its 404, as on the routes byID passes on.
 func (a *api) answer(c echo.Context) error {
 	cloud, ok, err := a.inCloud(c)
 	if !ok {
 		return err
 	}
 	id := ""
-	if !cloud {
-		if id, ok, err = a.pathDatapack(c); !ok {
-			return err
+	if cloud {
+		if _, err = a.Cloud.API(ctx(c), http.MethodGet, "/datapacks/"+strings.TrimSpace(c.Param("id")), nil); err != nil {
+			return cloudError(c, err)
 		}
+	} else if id, ok, err = a.pathDatapack(c); !ok {
+		return err
 	}
 	var body struct {
 		Query    string           `json:"query"`

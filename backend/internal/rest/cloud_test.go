@@ -101,6 +101,8 @@ func newFakeCloud(t *testing.T) *fakeCloud {
 		case "POST /api/v1/datapacks":
 			reply(201, `{"data":{"datapack_id":"`+cloudDP+`","name":"team-notes","agent_id":"meko_agent",`+
 				`"mcp_server":{"url":"","api_key":"secret"}}}`)
+		case "GET /api/v1/datapacks/" + cloudDP:
+			reply(200, `{"data":{"datapack_id":"`+cloudDP+`","datapack_name":"team-notes","grant":"owner"}}`)
 		case "DELETE /api/v1/datapacks/" + cloudDP:
 			reply(200, `{"data":{"message":"datapack deleted"}}`)
 		case "POST /api/v1/datapacks/" + cloudDP + "/knowledge-bases/upload-url":

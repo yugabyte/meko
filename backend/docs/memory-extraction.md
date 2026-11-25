@@ -52,7 +52,7 @@ reply is held to `{"answer", "cited"}` by a JSON schema, and citations of passag
 are dropped. Each search costs one call of the user's quota, which is why it's off until set up.
 The menu bar app's chat ([menubar.md](menubar.md)) answers each question the same way. The route
 answers for the linked Meko Cloud's datapacks too: the passages come in the request, so Meko Cloud
-is never asked, and the answer is written here.
+is asked only whether the datapack exists, and the answer is written here.
 
 ## Not built yet
 

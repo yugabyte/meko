@@ -1,17 +1,26 @@
 // Meko's menu bar app (macOS): the meko "m" in the menu bar. Its window lists the datapacks, this
 // Meko's and the linked Meko Cloud's (filter them, copy a name, open one), searches one, and chats
 // with one: each question is searched, then answered from the results by the user's own Claude Code
-// (meko answers use claude). It reaches Meko through its REST API at /api/v1, with the address and
-// token `meko token --json` prints. `meko menubar start` runs it at login; see backend/docs/menubar.md.
+// (meko answers use claude). It reaches Meko through the REST API on the agents' listener (the MCP
+// URL's host, plain http on 127.0.0.1), with the client token `meko token --json` prints; the web UI's
+// address (web_url) is only for opening pages, and is "" while the web UI is off.
+// `meko menubar start` runs it at login; see backend/docs/menubar.md.
 import AppKit
 import SwiftUI
 
 // MARK: - Meko's API
 
 struct Connection: Decodable {
+    let url: String  // the MCP URL, http://127.0.0.1:<port>/mcp: /api/v1 is beside it
     let token: String
-    let web_url: String
+    let web_url: String?
     let running: Bool?
+
+    var api: String {
+        var u = url
+        if u.hasSuffix("/mcp") { u.removeLast(4) }
+        return u + "/api/v1"
+    }
 }
 
 struct Datapack: Decodable, Identifiable, Hashable {
@@ -67,11 +76,13 @@ struct Hit: Identifiable, Hashable {
 }
 
 enum MekoError: LocalizedError {
-    case noCLI, notRunning, answersOff, api(String)
+    case noCLI, notRunning, unreachable(String), webOff, answersOff, api(String)
     var errorDescription: String? {
         switch self {
         case .noCLI: return "Meko isn't installed: install it, then run meko menubar start."
         case .notRunning: return "Meko isn't running: run meko start."
+        case .unreachable(let at): return "Meko isn't answering at \(at): run meko status."
+        case .webOff: return "Meko's web UI is off: run meko ui start to open it."
         case .answersOff: return "Chat writes its answers through your own Claude Code: run meko answers use claude to turn it on."
         case .api(let m): return m
         }
@@ -144,7 +155,7 @@ final class MekoClient: @unchecked Sendable {
     private func call<T: Decodable>(_ method: String, _ path: String, body: [String: Any]? = nil,
                                     timeout: TimeInterval = 30) async throws -> T {
         let c = try await Task.detached { try self.connection() }.value
-        guard let url = URL(string: c.web_url + "/api/v1" + path) else { throw MekoError.api("Meko's address isn't a URL") }
+        guard let url = URL(string: c.api + path) else { throw MekoError.api("Meko's address isn't a URL") }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = timeout
@@ -157,8 +168,8 @@ final class MekoClient: @unchecked Sendable {
         do {
             (data, resp) = try await URLSession.shared.data(for: req)
         } catch {
-            forget()  // Meko stopped, or moved to another port
-            throw MekoError.notRunning
+            forget()  // Meko restarted on another port, or stopped: read the address again next time
+            throw MekoError.unreachable(c.api)
         }
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         let env = try? JSONDecoder().decode(Envelope<T>.self, from: data)
@@ -200,10 +211,16 @@ final class MekoClient: @unchecked Sendable {
                               body: ["query": question, "passages": ps], timeout: 180)
     }
 
-    func open(_ path: String?) {
-        guard let c = try? connection() else { return }
-        let s = path.map { $0.hasPrefix("http") ? $0 : c.web_url + $0 } ?? c.web_url
-        if let u = URL(string: s) { NSWorkspace.shared.open(u) }
+    /// Opens a datapack's page (its web_url: a path in Meko's web UI, or Meko Cloud's web app), or
+    /// Meko's web UI with no path.
+    func open(_ path: String?) throws {
+        if let p = path, p.hasPrefix("http") {
+            if let u = URL(string: p) { NSWorkspace.shared.open(u) }
+            return
+        }
+        let c = try connection()
+        guard let web = c.web_url, !web.isEmpty else { throw MekoError.webOff }
+        if let u = URL(string: web + (path ?? "")) { NSWorkspace.shared.open(u) }
     }
 }
 
@@ -259,6 +276,14 @@ final class Model: ObservableObject {
         do {
             datapacks = try await client.datapacks()
             error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func open(_ path: String?) {
+        do {
+            try client.open(path)
         } catch {
             self.error = error.localizedDescription
         }
@@ -333,7 +358,7 @@ struct RootView: View {
             }
             Divider()
             HStack {
-                Button("Open Meko") { model.client.open(nil) }
+                Button("Open Meko") { model.open(nil) }
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }
             }
@@ -356,7 +381,7 @@ struct Header: View {
                 .buttonStyle(.borderless).help("All datapacks")
             Text(dp.datapack_name).font(.headline).lineLimit(1)
             Spacer()
-            Button { model.client.open(dp.web_url) } label: { Image(systemName: "arrow.up.right.square") }
+            Button { model.open(dp.web_url) } label: { Image(systemName: "arrow.up.right.square") }
                 .buttonStyle(.borderless).help("Open in Meko")
         }
     }
@@ -395,7 +420,7 @@ struct ListView: View {
                         .buttonStyle(.borderless).help("Chat")
                 }
                 .contentShape(Rectangle())
-                .onTapGesture(count: 2) { model.client.open(dp.web_url) }
+                .onTapGesture(count: 2) { model.open(dp.web_url) }
             }
             .listStyle(.plain)
             Text("\(model.shown.count) datapacks · double-click opens one")

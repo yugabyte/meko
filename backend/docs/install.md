@@ -65,7 +65,8 @@ says so and changes nothing, unless given `--reinstall` or another version.
   too (`[web] enabled = false`; `meko ui start` turns it on). It prints the web UI's URL.
 - It installs Meko alone. AgentK is `meko extension install agentk`.
 
-`meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/meko-cli`,
+`meko uninstall` removes the service, the menu bar app's LaunchAgent (macOS, when
+`meko menubar start` made it), `~/.local/bin/meko`, `~/.local/bin/meko-cli`,
 `~/.local/bin/mekosh` (when they're links into the app folder) and the app folder,
 and keeps the data;
 `--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`; it
@@ -78,12 +79,13 @@ are outside the data folder, so the service can still start Meko on a fresh one.
 ## Release builds
 
 `backend/scripts/package-release.sh <version> <arch> <node-dir> <out-dir>`, run on the platform
-the tarball is for after `make build VERSION=<version>`, `make memory_engine`, `make web_ui` and
-`(cd memory_engine && npm prune --omit=dev)`:
+the tarball is for after `make build VERSION=<version>`, on macOS `make menubar VERSION=<version>`,
+`make memory_engine`, `make web_ui` and `(cd memory_engine && npm prune --omit=dev)`:
 
 ```
 meko-<version>/
   bin/meko                     the CLI and server (cgo: SQLite and sqlite-vec compiled in)
+  bin/Meko.app                 macOS only: the menu bar app meko menubar start runs (menubar.md)
   node/bin/node, node/LICENSE  Meko's own Node (22.18.0, checked against nodejs.org's SHASUMS256)
   memory_engine/package.json, dist/, node_modules/, stubs/
   web_ui/dist/                 the built web UI, served at / on the web listener (web-ui.md)

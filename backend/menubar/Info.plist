@@ -21,7 +21,7 @@
   <!-- A menu bar app: no Dock icon, no app menu. -->
   <key>LSUIElement</key>
   <true/>
-  <!-- Meko's API listens on plain http at 127.0.0.1. -->
+  <!-- The app calls Meko's agents' listener (the MCP URL's host), plain http on 127.0.0.1. -->
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key>
