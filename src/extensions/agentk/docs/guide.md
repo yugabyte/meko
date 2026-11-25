@@ -209,7 +209,7 @@ sessions learn reaches the team's agents once it's promoted (see
 [Best practices](#5-best-practices)). Designs are stored as artifacts and named in each PR, so a
 reviewer's Kode can fetch the author's design.
 
-## 4. What Kode does with Meko during a task
+## 4. Meko at each stage of a task
 
 You don't call Meko by hand during a task: Kode does it at each stage, and asks the agent to.
 
