@@ -28,8 +28,9 @@ and [install](install.md) has the install details.
   time from a session, or on any checkout with `meko kode review`. For someone else's PR, a
   **Review a PR** session sums it up with the author's design beside it.
 - **Claude Code, OpenCode or Kiro CLI.** Each session runs on the agent you pick, with the same
-  stages, gates, design review and PR flow; pick a model per session too. Claude Code adds
-  designs as Artifacts and answering its questions in Kode; Kiro shows its credits.
+  stages, gates, design review and PR flow; pick a model per session too. On Claude Code,
+  designs are Artifacts and you can answer its questions in Kode; on Kiro, Kode shows the
+  credits it used.
 - **Learning with Meko.** When a session starts, Kode searches the project's datapacks for its
   task and gives the agent what the team already knows, and each stage's prompt asks it to search
   Meko before reading code. Designs go to Meko as they're approved, and the PR names them. When a
@@ -39,9 +40,8 @@ and [install](install.md) has the install details.
   the repo's files and its merged PRs.
 - **Self-learning.** Meko keeps the searches it couldn't answer as **Context Gaps**. When a later
   session finds the answer, Kode's learn step (on Claude Code, through Kode's mod) saves it and
-  marks the gap taught, so the next
-  session that asks finds it in Meko. Over time the datapack fills in where agents actually got
-  stuck.
+  marks the gap taught, so the next session that asks finds it in Meko. Over time the datapack
+  fills in where agents actually got stuck.
 
 ## Meko in one minute
 
