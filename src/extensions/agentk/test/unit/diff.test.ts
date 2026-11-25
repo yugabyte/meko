@@ -152,16 +152,19 @@ describe('parsing again after a refetch', () => {
 });
 
 describe("an image preview's version", () => {
-  const f = (path: string, patch: string | null, binary = false, uncommitted = false) => ({ path, patch, binary, uncommitted });
+  const f = (path: string, patch: string | null, binary = false, uncommitted = false, truncated = false) => ({ path, patch, binary, uncommitted, truncated });
 
-  it('is 0 for a file that is not an image, so a refetch leaves its section alone', () => {
+  it('is 0 for a file with no preview, so a refetch leaves its section alone', () => {
     expect(imageVersion(f('a.txt', '+a'), 42)).toBe(0);
     expect(imageVersion(f('blob.bin', null, true), 42)).toBe(0);
+    // A raster image git diffs as text (a Git LFS pointer, a symlink): just its diff.
+    expect(imageVersion(f('lfs.png', '+version https://git-lfs.github.com/spec/v1'), 42)).toBe(0);
   });
 
-  it("follows the fetch for a binary image, whose bytes the panel can't see, and an SVG without a patch", () => {
+  it("follows the fetch for a binary image, whose bytes the panel can't see, and an SVG whose patch was left out or cut short", () => {
     expect(imageVersion(f('a.png', null, true), 42)).toBe(42);
     expect(imageVersion(f('a.svg', null), 42)).toBe(42);
+    expect(imageVersion(f('a.svg', '+<svg>', false, false, true), 42)).toBe(42);
   });
 
   it("changes for an SVG only when its patch, or whether it's committed, does", () => {

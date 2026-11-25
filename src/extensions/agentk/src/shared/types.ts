@@ -2182,6 +2182,11 @@ export function isRasterImage(path: string): boolean {
   return type !== null && type !== 'image/svg+xml';
 }
 
+/** Whether a path is a previewable image stored as text (SVG), shown above its diff. */
+export function isTextImage(path: string): boolean {
+  return previewImageType(path) === 'image/svg+xml';
+}
+
 /** Which version of a changed file: the base's (old) or the worktree's (new). */
 export type ChangeSide = 'old' | 'new';
 

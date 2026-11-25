@@ -1,12 +1,12 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import {
-  previewImageType,
+  isTextImage,
   type ApplySuggestionRequest, type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type CommentSide, type CommentState, type ReviewComment, type Session,
   type SessionChanges,
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
 import {
-  anchorComment, applyRange, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, imageVersion, keepUnchanged, pathFilter, PHONE_BUDGET,
+  anchorComment, applyRange, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, imageVersion, keepUnchanged, pathFilter, PHONE_BUDGET, showsImage,
   fitText, pickComment, reparse, revealLines, revealRow, sameItems, showsLine, sideLine, splitText, type DiffLine, type Gap,
 } from '../diff';
 import { keepFocusedInView, matches, MOBILE_QUERY, useIsMobile, useTouch, watchSideways } from '../hooks/useMedia';
@@ -1476,7 +1476,7 @@ function ImageDiff({ file, imageUrl }: { file: ChangedFile; imageUrl: (side: Cha
   const hasOld = file.kind !== 'added' && file.kind !== 'untracked';
   const hasNew = file.kind !== 'deleted';
   return (
-    <div className={cx('img-diff', previewImageType(file.path) === 'image/svg+xml' && 'img-svg')}>
+    <div className={cx('img-diff', isTextImage(file.path) && 'img-svg')}>
       {hasOld && <ImageSide label={hasNew ? 'Before' : 'Deleted'} src={imageUrl('old', file.oldPath ?? file.path)} />}
       {hasNew && <ImageSide label={hasOld ? 'After' : 'Added'} src={imageUrl('new', file.path)} />}
     </div>
@@ -1561,7 +1561,7 @@ const FileSection = memo(function FileSection({
   /** A commit is shown: no comments. */
   readOnly: boolean;
   imageUrl: (side: ChangeSide, path: string, v: number) => string;
-  /** When an image's previews were last fetched (they reload with it); 0 for text files, so a refetch leaves them alone. */
+  /** When its image previews last changed, which they reload with (`imageVersion()` in diff.ts): 0 for a file with none, so a refetch leaves it alone. */
   imageVersion: number;
   /** While more of the file's lines are being fetched, 'loading'; why they can't be shown; else null. */
   expandNote: string | null;
@@ -1570,8 +1570,7 @@ const FileSection = memo(function FileSection({
 }) {
   const path = file.path;
   // Rows it draws, for the height the browser assumes before drawing it (styles.css .chg-file).
-  const preview = previewImageType(path) !== null;
-  const rows = !open ? 0 : file.binary ? 12 : (preview ? 12 : 0) + (!lines ? 2 : limit + (limit < lines.length ? 2 : 0));
+  const rows = !open ? 0 : file.binary ? 12 : (showsImage(file) ? 12 : 0) + (!lines ? 2 : limit + (limit < lines.length ? 2 : 0));
   return (
     <section className="chg-file" style={{ '--chg-rows': rows } as CSSProperties} ref={(el) => actions.section(path, el)}>
       <button className="chg-file-hd" aria-expanded={open} onClick={() => actions.toggle(path)}>
@@ -1687,7 +1686,7 @@ export function FileDiff({
   onComment?: (i: number, pick: CommentPick) => void;
 }) {
   const drag = useRangeDrag(lines, onComment);
-  const preview = previewImageType(file.path) !== null;
+  const preview = showsImage(file);
   if (file.binary) {
     return preview ? <ImageDiff file={file} imageUrl={imageUrl} /> : <p className="chg-note">Binary file, not shown.</p>;
   }

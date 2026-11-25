@@ -267,9 +267,11 @@ names: binary at any size, and never read, so they don't use up that budget (`is
 A changed image (those, and SVG) is
 shown as *Before* and *After* side by side with its size: a binary one instead of "Binary file",
 an SVG, which is text, above its diff, so its rows still take comments, suggestions and ↑ ↓ (no
-Preview/Diff toggle, and no swipe or onion skin). An SVG is only ever an `<img>`, never inline,
-so a script in it never runs, and its preview reloads only when its patch changes
-(`imageVersion()` in `src/web/diff.ts`; a binary image's reloads with each fetch);
+Preview/Diff toggle, and no swipe or onion skin), while a raster image git diffs as text (a Git
+LFS pointer, a symlink) shows only its diff (`showsImage()` in `src/web/diff.ts`). An SVG is only
+ever an `<img>`, never inline, so a script in it never runs, and its preview reloads only when its
+patch changes (`imageVersion()`; a binary image's, or an SVG's whose patch was cut short or left
+out, reloads with each fetch);
 `GET /api/sessions/:id/changes/image` serves the base's version from git or the worktree's from
 disk (in a commit's view, its parent's and its own, from git), only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
 a sandboxing content policy so the bytes can never run as a page, an SVG's included when

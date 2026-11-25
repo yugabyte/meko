@@ -1,6 +1,6 @@
 // Unified diff parsing for the Changes panel.
 
-import { previewImageType, type ChangeKind } from '../shared/types';
+import { isTextImage, previewImageType, type ChangeKind } from '../shared/types';
 
 export interface DiffLine {
   kind: 'hunk' | 'add' | 'del' | 'ctx' | 'meta' | 'note';
@@ -247,15 +247,25 @@ export function reparse(prev: ReadonlyMap<string, DiffLine[]>, files: { patch: s
 }
 
 /**
+ * Whether the panel shows a file's image preview: a binary file of an image type, in place of its
+ * diff, or an SVG (text), above it. A raster image git diffs as text (a Git LFS pointer, a symlink,
+ * a text file misnamed) shows only its diff: its sides aren't the picture.
+ */
+export function showsImage(f: { path: string; binary: boolean }): boolean {
+  return f.binary ? previewImageType(f.path) !== null : isTextImage(f.path);
+}
+
+/**
  * When a file's image previews last changed, which their URLs carry so they reload: 0 for a file
- * that isn't a previewable image (its section then stays the same across refetches); `fetchedAt`
+ * with no preview (`showsImage`; its section then stays the same across refetches); `fetchedAt`
  * for a binary image, whose bytes the panel can't see; and for an SVG, a hash of its patch (and
  * whether it's uncommitted), so its section, rows and all, draws again only when it changes. An
- * SVG whose patch was left out takes `fetchedAt`.
+ * SVG whose patch was left out, or cut short (an edit past the cut wouldn't change the hash),
+ * takes `fetchedAt`.
  */
-export function imageVersion(f: { path: string; binary: boolean; patch: string | null; uncommitted: boolean }, fetchedAt: number): number {
-  if (!previewImageType(f.path)) return 0;
-  if (f.binary || f.patch === null) return fetchedAt;
+export function imageVersion(f: { path: string; binary: boolean; patch: string | null; truncated: boolean; uncommitted: boolean }, fetchedAt: number): number {
+  if (!showsImage(f)) return 0;
+  if (f.binary || f.patch === null || f.truncated) return fetchedAt;
   // FNV-1a, 32 bits.
   let h = f.uncommitted ? 0x811c9dc5 ^ 1 : 0x811c9dc5;
   for (let i = 0; i < f.patch.length; i++) h = Math.imul(h ^ f.patch.charCodeAt(i), 0x01000193);

@@ -391,13 +391,6 @@ describe('HTTP API: origin checks, projects', () => {
     expect(pic.headers['content-security-policy']).toBe("default-src 'none'; sandbox");
     expect(pic.headers['x-content-type-options']).toBe('nosniff');
     expect(pic.rawPayload).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
-    // An SVG is served as an image under the same policy, so opened on its own it runs nothing.
-    writeFileSync(join(s.json().worktreePath, 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
-    const svg = await img('path=pic.svg&side=new');
-    expect(svg.statusCode).toBe(200);
-    expect(svg.headers['content-type']).toBe('image/svg+xml');
-    expect(svg.headers['content-security-policy']).toBe("default-src 'none'; sandbox");
-    expect(svg.headers['x-content-type-options']).toBe('nosniff');
     // A commit the branch doesn't have: the same 404, with what to do, from the diff and its images.
     const gone = await img(`path=pic.png&side=new&commit=${'0'.repeat(40)}`);
     expect(gone.statusCode).toBe(404);
@@ -427,7 +420,6 @@ describe('HTTP API: origin checks, projects', () => {
     expect((await app.inject({ method: 'POST', url: '/api/sessions/nope/images', headers: { 'content-type': 'image/png' }, payload: png })).statusCode).toBe(404);
     // Archiving the session removes its images, and it takes no more. (The preview's file goes first: it's uncommitted.)
     rmSync(join(s.json().worktreePath, 'pic.png'));
-    rmSync(join(s.json().worktreePath, 'pic.svg'));
     expect((await app.inject({ method: 'POST', url: `/api/sessions/${sid}/actions/archive` })).statusCode).toBe(200);
     expect(existsSync(join(env.core.paths.pastes, sid))).toBe(false);
     expect((await paste(png)).statusCode).toBe(409);

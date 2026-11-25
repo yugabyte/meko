@@ -258,6 +258,12 @@ describe('image previews', () => {
     expect(added).toContain('This diff is too large to show here.');
   });
 
+  it("draws only the diff of a raster image git diffs as text, such as a Git LFS pointer, whose sides aren't the picture", () => {
+    const html = draw({ path: 'lfs.png', kind: 'modified' }, '@@ -1 +1 @@\n-oid sha256:aaa\n+oid sha256:bbb');
+    expect(html).not.toContain('img-diff');
+    expect(html).toMatch(/^<div class="diff-wrap">/);
+  });
+
   it('draws a binary image alone, and says so for a binary file that is not an image', () => {
     const png = draw({ path: 'pic.png', kind: 'modified', binary: true });
     expect(png).toMatch(/^<div class="img-diff"><figure/);
