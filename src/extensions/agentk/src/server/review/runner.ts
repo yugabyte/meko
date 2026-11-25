@@ -21,7 +21,7 @@ import { HttpError } from '../projects.js';
 import type { FixAfter } from '../prompts.js';
 import { parseSettings, projectRow, sessionRepo, sessionReview, sessionRow, type SessionRow } from '../store.js';
 import { TOOLS_SERVER } from '../tooldefs.js';
-import { baseRefIn, readChange } from './context.js';
+import { readChange } from './context.js';
 import { ASK_AGAIN, SCORE_BATCH, SCORER_TIER, countsOf, findingCredits, judgeRound, mergeNotes, mergeSweep, moreSweeps } from './merge.js';
 import { basePrompt, passPrompt, scoreBase, scorePrompt, stepList, sweepContext } from './prompt.js';
 import { checkOutcomes, checkReport, checkScore } from './schemas.js';
@@ -583,7 +583,7 @@ export class CodeReviews {
     return readChange({
       folder: wt,
       repo: sessionRepo(this.db, task) ?? wt,
-      base: await baseRefIn(wt, task.base_branch),
+      base: task.base_branch,
       dir,
       branch: task.branch,
       title: task.name,

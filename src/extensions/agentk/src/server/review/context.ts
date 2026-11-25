@@ -31,12 +31,16 @@ export async function commitRef(folder: string, ref: string): Promise<string | n
   }
 }
 
-/** The base a change is read against: origin's copy of the base branch when there is one, else the local branch. */
-export async function baseRefIn(folder: string, branch: string): Promise<string> {
-  for (const ref of [`origin/${branch}`, branch]) {
-    if (await commitRef(folder, ref)) return ref;
+/**
+ * Whether `base` names a branch (origin's, upstream's or local) or a commit here. The change itself
+ * is read from the branch name, not one remote's ref: `diffBase` picks origin's or, in a fork,
+ * upstream's copy, whichever the branch left last, as the Changes panel does.
+ */
+export async function baseIn(folder: string, base: string): Promise<boolean> {
+  for (const ref of [`origin/${base}`, `upstream/${base}`, base]) {
+    if (await commitRef(folder, ref)) return true;
   }
-  return branch;
+  return false;
 }
 
 /** The datapacks the MEKO.md files over the change list, each once, the gotchas ones marked. */
@@ -60,7 +64,7 @@ export interface ChangeAccount {
   folder: string;
   /** The repo it's in, for its name (a task's repo, else the folder). */
   repo: string;
-  /** The base the change is read against (`baseRefIn`, or what the user named). */
+  /** The base branch (or a commit) the change is read against: a name, which `diffBase` resolves. */
   base: string;
   /** The review's run folder for this round: patches too large to inline go there. */
   dir: string;
@@ -84,7 +88,7 @@ export async function readChange(a: ChangeAccount): Promise<{ ctx: ReviewContext
   const diff = await readDiff(wt, a.base, a.dir);
   // The passes read each patch too large to inline by its path: as Claude is told every path.
   for (const f of diff.files) if (f.patchPath) f.patchPath = claudePath(f.patchPath);
-  const mergeBase = (await git(wt, 'merge-base', a.base, 'HEAD')).trim();
+  const mergeBase = diff.mergeBase.sha;
   const head = (await git(wt, 'rev-parse', 'HEAD')).trim();
   const dirty = !!(await git(wt, 'status', '--porcelain')).trim();
   const paths = diff.files.map((f) => f.path);
@@ -93,7 +97,7 @@ export async function readChange(a: ChangeAccount): Promise<{ ctx: ReviewContext
     ctx: {
       repo: await repoNameOf(a.repo),
       branch: a.branch,
-      baseRef: a.base,
+      baseRef: diff.mergeBase.ref,
       baseSha: mergeBase,
       headSha: head,
       dirty,

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { anchorsLine, generatedByName, readDiff, secretPath } from '../../src/server/review/diff.js';
+import { readChange } from '../../src/server/review/context.js';
 import { findGuides, findMekoMds } from '../../src/server/review/guides.js';
 import { readCommits, readHistory } from '../../src/server/review/history.js';
 
@@ -66,6 +67,20 @@ describe('the change a review reads', () => {
   });
 
   afterEach(() => rmSync(join(dir, '..'), { recursive: true, force: true }));
+
+  it("reads a fork's change from upstream's base when origin's lags behind it", async () => {
+    // origin/main is the fork's own main, still at the first commit; the branch left upstream/main.
+    g('update-ref', 'refs/remotes/origin/main', 'main~1');
+    g('update-ref', 'refs/remotes/upstream/main', 'main');
+    const { ctx, diff } = await readChange({
+      folder: dir, repo: dir, base: 'main', dir: runDir, branch: 'feature', title: 't', prDescription: null, description: '', design: null,
+      meko: false, issues: async () => [], prior: [],
+    });
+    expect(diff.files.map((f) => f.path)).toEqual(['src/app.ts']);
+    expect(ctx.baseRef).toBe('upstream/main');
+    expect(ctx.baseSha).toBe(g('rev-parse', 'main').trim());
+    expect(ctx.commits).toHaveLength(1);
+  });
 
   it('reads committed, uncommitted and untracked changes, and withholds credentials and generated files', async () => {
     write('src/review/x.ts', 'export const x = 1;\n'); // untracked
