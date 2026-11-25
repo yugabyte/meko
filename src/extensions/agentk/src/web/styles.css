@@ -4626,7 +4626,7 @@ div[id^='dak-mermaid-'] .label {
   color: var(--muted);
 }
 
-/* Image previews for changed binary images */
+/* Image previews for changed images: in place of a binary one's diff, above an SVG's */
 .img-diff {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -4661,6 +4661,10 @@ div[id^='dak-mermaid-'] .label {
   max-width: 100%;
   max-height: 360px;
   object-fit: contain;
+}
+/* An SVG with no size of its own still shows. */
+.img-svg .img-box img {
+  min-width: 48px;
 }
 
 /* Review comments and the Files menu */

@@ -6,7 +6,7 @@ import {
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
 import {
-  anchorComment, applyRange, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, keepUnchanged, pathFilter, PHONE_BUDGET,
+  anchorComment, applyRange, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, imageVersion, keepUnchanged, pathFilter, PHONE_BUDGET,
   fitText, pickComment, reparse, revealLines, revealRow, sameItems, showsLine, sideLine, splitText, type DiffLine, type Gap,
 } from '../diff';
 import { keepFocusedInView, matches, MOBILE_QUERY, useIsMobile, useTouch, watchSideways } from '../hooks/useMedia';
@@ -889,7 +889,7 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
                   editorAt={ed && !ed.id ? editorAt : null}
                   readOnly={!!data.commit}
                   imageUrl={imageUrl}
-                  imageVersion={f.binary ? fetchedAt : 0}
+                  imageVersion={imageVersion(f, fetchedAt)}
                   expandNote={opening && opening.state !== 'ready' ? opening.state : null}
                   draft={draftText}
                   actions={actions}
@@ -1471,12 +1471,12 @@ function CommentEditor({
   );
 }
 
-/** A changed image: the base's version next to the worktree's, or just the one that exists. */
+/** A changed image: the base's version next to the worktree's, or just the one that exists. Always an `<img>`, an SVG too, so no script in one runs. */
 function ImageDiff({ file, imageUrl }: { file: ChangedFile; imageUrl: (side: ChangeSide, path: string) => string }) {
   const hasOld = file.kind !== 'added' && file.kind !== 'untracked';
   const hasNew = file.kind !== 'deleted';
   return (
-    <div className="img-diff">
+    <div className={cx('img-diff', previewImageType(file.path) === 'image/svg+xml' && 'img-svg')}>
       {hasOld && <ImageSide label={hasNew ? 'Before' : 'Deleted'} src={imageUrl('old', file.oldPath ?? file.path)} />}
       {hasNew && <ImageSide label={hasOld ? 'After' : 'Added'} src={imageUrl('new', file.path)} />}
     </div>
@@ -1499,13 +1499,19 @@ function ImageSide({ label, src }: { label: string; src: string }) {
           <img
             src={src}
             alt={`${label} image`}
-            onLoad={(e) => setSize(`${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`)}
+            onLoad={(e) => setSize(imageSize(e.currentTarget))}
             onError={() => setFailed(true)}
           />
         </a>
       )}
     </figure>
   );
+}
+
+/** An image's size for its caption, or null when it reports none (an SVG with no size of its own can say 0). */
+function imageSize(img: { naturalWidth: number; naturalHeight: number }): string | null {
+  const { naturalWidth: w, naturalHeight: h } = img;
+  return w && h ? `${w} × ${h}` : null;
 }
 
 /**
@@ -1564,7 +1570,8 @@ const FileSection = memo(function FileSection({
 }) {
   const path = file.path;
   // Rows it draws, for the height the browser assumes before drawing it (styles.css .chg-file).
-  const rows = !open ? 0 : file.binary ? 12 : !lines ? 2 : limit + (limit < lines.length ? 2 : 0);
+  const preview = previewImageType(path) !== null;
+  const rows = !open ? 0 : file.binary ? 12 : (preview ? 12 : 0) + (!lines ? 2 : limit + (limit < lines.length ? 2 : 0));
   return (
     <section className="chg-file" style={{ '--chg-rows': rows } as CSSProperties} ref={(el) => actions.section(path, el)}>
       <button className="chg-file-hd" aria-expanded={open} onClick={() => actions.toggle(path)}>
@@ -1680,11 +1687,14 @@ export function FileDiff({
   onComment?: (i: number, pick: CommentPick) => void;
 }) {
   const drag = useRangeDrag(lines, onComment);
+  const preview = previewImageType(file.path) !== null;
   if (file.binary) {
-    return previewImageType(file.path) ? <ImageDiff file={file} imageUrl={imageUrl} /> : <p className="chg-note">Binary file, not shown.</p>;
+    return preview ? <ImageDiff file={file} imageUrl={imageUrl} /> : <p className="chg-note">Binary file, not shown.</p>;
   }
-  if (!lines) return <p className="chg-note">This diff is too large to show here.</p>;
-  if (lines.length === 0) return <p className="chg-note">{file.kind === 'untracked' ? 'Empty file.' : 'No content changes.'}</p>;
+  // An SVG is text: its picture, then its diff, whose rows keep comments, suggestions and ↑ ↓.
+  const image = preview ? <ImageDiff file={file} imageUrl={imageUrl} /> : null;
+  if (!lines) return withImage(image, <p className="chg-note">This diff is too large to show here.</p>);
+  if (lines.length === 0) return withImage(image, <p className="chg-note">{file.kind === 'untracked' ? 'Empty file.' : 'No content changes.'}</p>);
   const left = lines.length - limit;
   /** The range being dragged, else the one a new comment is being written for. */
   const shown = drag.range ?? picked;
@@ -1696,7 +1706,8 @@ export function FileDiff({
     const after = renderAfter(i);
     if (after) later.push(<Fragment key={i}>{after}</Fragment>);
   }
-  return (
+  return withImage(
+    image,
     <div className="diff-wrap" ref={watchSideways}>
       {limit > 0 && (
         <table className={cx('diff', drag.range && 'dragging')} ref={drag.tableRef}>
@@ -1778,6 +1789,18 @@ export function FileDiff({
       )}
       {later.length > 0 && <div className="cmt-thread chg-later">{later}</div>}
       {file.truncated && <p className="chg-note">Diff cut short: this file’s diff is larger than 256 KB.</p>}
-    </div>
+    </div>,
+  );
+}
+
+/** A text image's (an SVG's) preview over its diff, or just the diff. */
+function withImage(image: ReactNode, body: ReactNode): ReactNode {
+  return image ? (
+    <>
+      {image}
+      {body}
+    </>
+  ) : (
+    body
   );
 }

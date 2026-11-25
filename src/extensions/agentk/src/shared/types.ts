@@ -2161,15 +2161,25 @@ export interface DiscardCheck {
 
 export type ChangeKind = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
 
-/** Image files the Changes panel previews instead of "Binary file", by extension, with their content type. */
+/**
+ * Image files the Changes panel previews, by extension, with their content type: a binary one in
+ * place of "Binary file", an SVG (text) above its diff. An SVG is only ever drawn as an `<img>`.
+ */
 export const PREVIEW_IMAGE_TYPES: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', bmp: 'image/bmp', ico: 'image/x-icon',
+  svg: 'image/svg+xml',
 };
 
 /** The content type to preview a path with, or null when it isn't a previewable image. */
 export function previewImageType(path: string): string | null {
   const ext = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase();
   return (ext && PREVIEW_IMAGE_TYPES[ext]) || null;
+}
+
+/** Whether a path is a previewable image stored as binary (every preview type but SVG, which is text). */
+export function isRasterImage(path: string): boolean {
+  const type = previewImageType(path);
+  return type !== null && type !== 'image/svg+xml';
 }
 
 /** Which version of a changed file: the base's (old) or the worktree's (new). */

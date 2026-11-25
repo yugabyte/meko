@@ -310,6 +310,48 @@ describe('changes vs. the base (real git)', () => {
     }
   });
 
+  it('previews SVGs from git and disk, and lists untracked images as binary without reading them', async () => {
+    const svg = (fill: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="${fill}"/></svg>\n`;
+    writeFileSync(join(wt, 'logo.svg'), svg('red'));
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-q', '-m', 'logo');
+    const sha = git(wt, 'rev-parse', 'HEAD');
+    writeFileSync(join(wt, 'logo.svg'), svg('blue'));
+    writeFileSync(join(wt, 'new.svg'), svg('green'));
+    // Past the 1 MB a text file is read up to: an image all the same.
+    writeFileSync(join(wt, 'big.png'), Buffer.alloc(2 * 1024 * 1024, 7));
+    // No NUL in it, but named as an image: binary, not text.
+    writeFileSync(join(wt, 'plain.jpg'), 'not really a jpeg');
+
+    const c = (await changes(wt, 'main'))!;
+    const by = Object.fromEntries(c.files.map((f) => [f.path, f]));
+    // An SVG is text: its diff and line counts, and a preview beside them.
+    expect(by['logo.svg']).toMatchObject({ kind: 'added', binary: false, added: 1, uncommitted: true });
+    expect(by['logo.svg'].patch).toContain('+<svg');
+    expect(by['new.svg']).toMatchObject({ kind: 'untracked', binary: false, added: 1, patch: `@@ -0,0 +1,1 @@\n+${svg('green').trimEnd()}` });
+    expect(by['big.png']).toMatchObject({ kind: 'untracked', binary: true, patch: null, added: 0 });
+    expect(by['plain.jpg']).toMatchObject({ kind: 'untracked', binary: true, patch: null, added: 0 });
+    expect(c.omittedPatches).toBe(0);
+
+    expect(await changedImage(wt, 'main', 'logo.svg', 'old')).toBeNull();
+    expect(await changedImage(wt, 'main', 'logo.svg', 'new')).toEqual({ type: 'image/svg+xml', data: Buffer.from(svg('blue')) });
+    expect(await changedImage(wt, 'main', 'logo.svg', 'new', sha)).toEqual({ type: 'image/svg+xml', data: Buffer.from(svg('red')) });
+    expect((await changedImage(wt, 'main', 'big.png', 'new'))?.data.length).toBe(2 * 1024 * 1024);
+  });
+
+  it('keeps the untracked read budget for text: images past it are still binary, and text under it still gets its patch', async () => {
+    // 36 MB of untracked images, each under the 1 MB a file is read up to but more than the 32 MB
+    // read budget in all, listed before the text file.
+    const n = 40;
+    for (let i = 0; i < n; i++) writeFileSync(join(wt, `a${String(i).padStart(2, '0')}.png`), Buffer.alloc(900 * 1024));
+    writeFileSync(join(wt, 'z.txt'), 'hello\n');
+    const c = (await changes(wt, 'main'))!;
+    const by = Object.fromEntries(c.files.map((f) => [f.path, f]));
+    for (let i = 0; i < n; i++) expect(by[`a${String(i).padStart(2, '0')}.png`]).toMatchObject({ binary: true, patch: null });
+    expect(by['z.txt']).toMatchObject({ added: 1, patch: '@@ -0,0 +1,1 @@\n+hello' });
+    expect(c.omittedPatches).toBe(0);
+  });
+
   it("serves a changed file's new side as text, with the patch changes() gives it, and only changed text files in the repo", async () => {
     const lines = (n: number, edit = '') => Array.from({ length: n }, (_, i) => `line ${i + 1}${i === 9 ? edit : ''}`).join('\n') + '\n';
     writeFileSync(join(wt, 'long.txt'), lines(40, ' (committed)'));

@@ -156,7 +156,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       user confirms Upload to Meko's question, which names the datapack.
 - [ ] Repo files served to the browser are limited to what the Changes panel needs: image
       previews (`/changes/image`) to image types inside the worktree, the base commit, or one of
-      the branch's listed commits and its parent, with the sandboxing content policy; a file's text
+      the branch's listed commits and its parent, with the sandboxing content policy (an SVG,
+      which can hold script, is drawn only as an `<img>`, never inline or as a page of its own
+      but this route's); a file's text
       (`/changes/file`, JSON) to a file the diff shown changes (never an unchanged, untracked or
       gitignored one), inside the repo, text only, at most 1 MB. The one other case is the tour's
       demo, played (`GET /api/workshops/:id/play/:where/*`, `playFile` in `tour.ts`): only a

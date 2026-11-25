@@ -262,11 +262,18 @@ a file scrolled back into view. Measured in Chromium at phone size with the CPU 
 rows over several files open in about 0.7 s (2,000 rows took 2.2–2.5 s before), a push takes
 4–5 ms (60–110 ms before), and a refetch that changes nothing 18–25 ms of script (66–99 ms before).
 Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of untracked files is
-read per refresh. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
-shown as *Before* and *After* side by side with its size, instead of "Binary file";
+read per refresh. Untracked images (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) are known by their
+names: binary at any size, and never read, so they don't use up that budget (`isRasterImage`).
+A changed image (those, and SVG) is
+shown as *Before* and *After* side by side with its size: a binary one instead of "Binary file",
+an SVG, which is text, above its diff, so its rows still take comments, suggestions and ↑ ↓ (no
+Preview/Diff toggle, and no swipe or onion skin). An SVG is only ever an `<img>`, never inline,
+so a script in it never runs, and its preview reloads only when its patch changes
+(`imageVersion()` in `src/web/diff.ts`; a binary image's reloads with each fetch);
 `GET /api/sessions/:id/changes/image` serves the base's version from git or the worktree's from
 disk (in a commit's view, its parent's and its own, from git), only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
-a sandboxing content policy so the bytes can never run as a page. The footer counts use the same
+a sandboxing content policy so the bytes can never run as a page, an SVG's included when
+**Open full size** opens it in a tab of its own. The footer counts use the same
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
 (*4 / 12*), and `[` / `]` step to the previous or next file. The filter keeps a file whose path or

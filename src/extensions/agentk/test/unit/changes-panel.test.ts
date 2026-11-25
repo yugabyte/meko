@@ -231,3 +231,37 @@ describe('a file path', () => {
     expect(text(html)).toBe('a/old.ts → b/new.ts');
   });
 });
+
+describe('image previews', () => {
+  const url = (side: string, path: string) => `/img?side=${side}&path=${path}`;
+  const draw = (f: Partial<ChangedFile>, patch: string | null = null) => {
+    const rows = patch === null ? null : parsePatch(patch);
+    return renderToStaticMarkup(createElement(FileDiff, {
+      file: { ...file, added: 1, patch, ...f } as ChangedFile, lines: rows, limit: rows?.length ?? 0, page: 2000, onMore: () => {}, onComment: () => {},
+      picked: null, imageUrl: url, renderAfter: () => null,
+    })).replace(/<link rel="preload"[^>]*\/>/g, ''); // React's server render adds these for images.
+  };
+
+  it("draws an SVG as images above its diff, whose rows still take comments", () => {
+    const html = draw({ path: 'logo.svg', kind: 'modified' }, '@@ -1 +1 @@\n-<svg fill="red"/>\n+<svg fill="blue"/>');
+    expect(html).toMatch(/^<div class="img-diff img-svg">.*<\/div><div class="diff-wrap">/);
+    expect(html).toContain('<img src="/img?side=old&amp;path=logo.svg" alt="Before image"/>');
+    expect(html).toContain('<img src="/img?side=new&amp;path=logo.svg" alt="After image"/>');
+    expect(html).toContain('aria-label="Comment on line 1"');
+    expect(html).not.toContain('<svg fill');
+  });
+
+  it('draws only the side that exists, and the note when the SVG has no diff to show', () => {
+    const added = draw({ path: 'new.svg', kind: 'untracked' });
+    expect(added).toContain('<b>Added</b>');
+    expect(added).not.toContain('side=old');
+    expect(added).toContain('This diff is too large to show here.');
+  });
+
+  it('draws a binary image alone, and says so for a binary file that is not an image', () => {
+    const png = draw({ path: 'pic.png', kind: 'modified', binary: true });
+    expect(png).toMatch(/^<div class="img-diff"><figure/);
+    expect(png).not.toContain('diff-wrap');
+    expect(draw({ path: 'blob.bin', kind: 'modified', binary: true })).toBe('<p class="chg-note">Binary file, not shown.</p>');
+  });
+});

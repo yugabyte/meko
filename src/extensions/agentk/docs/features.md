@@ -161,6 +161,8 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   **Files** menu (its filter takes a regex too) or `[` / `]`, and leave review comments on lines (drag the **+** to cover a range) that go to Claude as one prompt.
   A comment can suggest a change, as on GitHub (**± Suggest a change**): send it to Claude, or
   **Apply** it to the file yourself while Kode is idle.
+  A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO or SVG, untracked ones too) shows as
+  *Before* and *After* side by side, an SVG above its diff.
   Click ↑ or ↓ on a hunk to see more of the file around it, 20 lines a click, as on GitHub, and
   turn on **Wrap lines** to wrap long lines instead of scrolling sideways. The
   **All changes ▾** menu shows one of the branch's commits alone instead (read-only).

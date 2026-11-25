@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { lstat, readFile, readlink } from 'node:fs/promises';
 import { isAbsolute, join, normalize, relative, sep } from 'node:path';
-import { previewImageType, type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type DiffStat, type SessionChanges } from '../shared/types.js';
+import { isRasterImage, previewImageType, type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type DiffStat, type SessionChanges } from '../shared/types.js';
 import { gitBuffer, gitRaw, tryGit } from './git.js';
 
 /** A single file's patch is cut here. */
@@ -494,7 +494,8 @@ function parsePorcelain(out: string): Set<string> {
 /**
  * Untracked, non-ignored files as changes, read directly (no git per file). Reads are async
  * and bounded (per file and in total), and patches stop once they'd pass TOTAL_PATCH_CAP;
- * `omitted` names the files left without a patch because of those totals.
+ * `omitted` names the files left without a patch because of those totals. Raster images
+ * (`isRasterImage`, by name) are binary and never read.
  */
 async function untracked(worktree: string, withPatches: boolean): Promise<{ files: ChangedFile[]; omitted: string[] }> {
   const out = await gitRaw(worktree, 'ls-files', '--others', '--exclude-standard', '-z').catch(() => '');
@@ -512,7 +513,13 @@ async function untracked(worktree: string, withPatches: boolean): Promise<{ file
     try {
       const st = await lstat(full);
       if (st.isSymbolicLink()) text = await readlink(full);
-      else if (!st.isFile() || st.size > UNTRACKED_READ_MAX) continue;
+      else if (!st.isFile()) continue;
+      else if (isRasterImage(path)) {
+        // An image is previewed, not diffed: known by its name, at any size, and never read here,
+        // so it doesn't use up the read budget untracked text files need.
+        f.binary = true;
+        continue;
+      } else if (st.size > UNTRACKED_READ_MAX) continue;
       else if (read + st.size > UNTRACKED_READ_BUDGET) {
         if (withPatches) omitted.push(path);
         continue;

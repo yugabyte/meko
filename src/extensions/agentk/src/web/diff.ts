@@ -1,6 +1,6 @@
 // Unified diff parsing for the Changes panel.
 
-import type { ChangeKind } from '../shared/types';
+import { previewImageType, type ChangeKind } from '../shared/types';
 
 export interface DiffLine {
   kind: 'hunk' | 'add' | 'del' | 'ctx' | 'meta' | 'note';
@@ -244,6 +244,22 @@ export function reparse(prev: ReadonlyMap<string, DiffLine[]>, files: { patch: s
   const next = new Map<string, DiffLine[]>();
   for (const { patch } of files) if (patch !== null && !next.has(patch)) next.set(patch, prev.get(patch) ?? parsePatch(patch));
   return next;
+}
+
+/**
+ * When a file's image previews last changed, which their URLs carry so they reload: 0 for a file
+ * that isn't a previewable image (its section then stays the same across refetches); `fetchedAt`
+ * for a binary image, whose bytes the panel can't see; and for an SVG, a hash of its patch (and
+ * whether it's uncommitted), so its section, rows and all, draws again only when it changes. An
+ * SVG whose patch was left out takes `fetchedAt`.
+ */
+export function imageVersion(f: { path: string; binary: boolean; patch: string | null; uncommitted: boolean }, fetchedAt: number): number {
+  if (!previewImageType(f.path)) return 0;
+  if (f.binary || f.patch === null) return fetchedAt;
+  // FNV-1a, 32 bits.
+  let h = f.uncommitted ? 0x811c9dc5 ^ 1 : 0x811c9dc5;
+  for (let i = 0; i < f.patch.length; i++) h = Math.imul(h ^ f.patch.charCodeAt(i), 0x01000193);
+  return h >>> 0;
 }
 
 /** The line's number on a comment side: `new` for added and unchanged lines, `old` for removed ones. */
