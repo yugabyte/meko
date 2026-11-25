@@ -6,9 +6,10 @@
 # Set up:
 #   1. Copy this file to .github/workflows/gotchas.yml in your repository.
 #   2. Add a repository secret MEKO_TOKEN: a Meko API key with write access. Its account owns the
-#      datapack, adlc/repo/<repo name>/gotchas-workflow unless DATAPACK below names another. Give
+#      datapack, adlc/repo/<repo name>/workflow/gotchas unless DATAPACK below names another. Give
 #      the workflow a datapack of its own: it numbers gotchas from what's in it, so another
-#      writer's MG-<n> documents would collide with its own.
+#      writer's MG-<n> documents would collide with its own. Keep the name ending in /gotchas:
+#      that's how Kode's code review knows a gotchas datapack.
 #   3. Add a repository secret ANTHROPIC_API_KEY, or use Bedrock (the commented lines below).
 #   4. Run it by hand from the Actions tab with dry-run on, and read the job summary: it lists what
 #      it would add. Then run it with dry-run off. From then on it runs every Monday.
@@ -49,7 +50,7 @@ concurrency:
 
 env:
   MEKO_URL: https://cloud.mekodata.ai
-  DATAPACK: '' # default adlc/repo/<repo name>/gotchas-workflow
+  DATAPACK: '' # default adlc/repo/<repo name>/workflow/gotchas
   PROVIDER: anthropic # or bedrock
   MODEL: '' # default opus; on Bedrock, a Claude model or inference profile id enabled in your account
   BUDGET: '15' # the most one run may spend on the model, in USD; 0 for no limit
@@ -296,7 +297,7 @@ jobs:
 
           [ -n "$repo" ] || die "GITHUB_REPOSITORY isn't set: run this in GitHub Actions, or set it to owner/name"
           datapack=${DATAPACK:-}
-          [ -n "$datapack" ] || datapack=adlc/repo/${repo#*/}/gotchas-workflow
+          [ -n "$datapack" ] || datapack=adlc/repo/${repo#*/}/workflow/gotchas
           api=${MEKO_URL:-https://cloud.mekodata.ai}
           api=${api%/}/api/v1
           budget=${BUDGET:-15}
