@@ -1239,7 +1239,7 @@ function CommentCard({
     <div className={cx('cmt', c.state === 'sent' && 'sent')}>
       <div className="cmt-meta">
         <span className={cx('cmt-state', c.state)}>{STATE_LABEL[c.state]}</span>
-        <span>
+        <span className="cmt-where">
           {withPath && <span className="mono">{c.path} · </span>}
           {linesLabel(c.side, c.line + shift, c.endLine + shift)}
           {shift !== 0 && ` (was ${c.line === c.endLine ? c.line : `${c.line}–${c.endLine}`})`}

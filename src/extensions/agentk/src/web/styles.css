@@ -4907,6 +4907,12 @@ div[id^='dak-mermaid-'] .label {
 .cmt-meta .link-btn {
   font-size: 11.5px;
 }
+/* Where a comment is: a long file path breaks anywhere, as .chg-file-path does, rather than running
+   past the card, which no longer widens to its content (.cmt's min-width: 0). */
+.cmt-where {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .cmt-state {
   font: 600 10px/1.6 var(--mono);
   text-transform: uppercase;
