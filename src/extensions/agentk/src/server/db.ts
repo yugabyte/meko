@@ -20,6 +20,19 @@ const AGENTK_LOGIN = `(SELECT id AS pid, COALESCE(CASE WHEN json_valid(settings_
  * migrated database is what that release runs on); for the same reason sessions.agentk_seen stays,
  * unused, for a later migration to drop.
  */
+/**
+ * Migration 55's copy of the work queue's session links, run again at every start: a rollback to a release
+ * before 55 (Meko restores only the program) links sessions in work_items.session_id, which this release
+ * doesn't read. Only links whose item and session both have none here are taken; setItemSession keeps
+ * work_items.session_id in step with work_item_sessions, so a link removed since isn't put back.
+ */
+const WORK_LINKS_BACK = `
+  INSERT INTO work_item_sessions(item_id, session_id)
+    SELECT w.id, w.session_id FROM work_items w
+    WHERE w.session_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM work_item_sessions s WHERE s.item_id = w.id OR s.session_id = w.session_id);
+`;
+
 const AGENTK_REVIEWER_GONE = `
   UPDATE sessions SET pending_prompts = json_set(pending_prompts, '$."review-people".vars.reviewers',
       json_extract(pending_prompts, '$."review-people".vars.reviewers') || ', ' || l.login)
@@ -847,6 +860,23 @@ const MIGRATIONS: string[] = [
   INSERT INTO kv(key, value) VALUES ('meko-saved-since', CAST(CAST(unixepoch('subsec') * 1000 AS INTEGER) AS TEXT))
     ON CONFLICT(key) DO NOTHING;
   `,
+  // 55: the work queue moves to Meko Cloud (workstore.ts, docs/design/work-queue.md#where-its-kept). Which
+  // session works on an item stays on this computer: work_item_sessions, one to one (an item has at most
+  // one session here, a session at most one item), filled from work_items.session_id. item_id has no
+  // reference, since the item is in Meko Cloud now. work_pending_close: items Merge & Close dismissed
+  // while Meko Cloud couldn't be reached, closed on the next refresh that reaches it. work_items and
+  // work_item_links stay as they were, read only by the one-time copy into Meko Cloud.
+  `
+  CREATE TABLE work_item_sessions (
+    item_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE
+  );
+  INSERT INTO work_item_sessions(item_id, session_id) SELECT id, session_id FROM work_items WHERE session_id IS NOT NULL;
+  CREATE TABLE work_pending_close (
+    item_id TEXT PRIMARY KEY,
+    at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export function openDb(path: string): Db {
@@ -893,6 +923,8 @@ function migrate(db: Db): void {
   }
   // What the release before 47 wrote after a rollback to it, on a database already past 47.
   if (current >= 47) tx(db, () => db.exec(AGENTK_REVIEWER_GONE));
+  // The same for 55: the session links a release before it made in work_items.
+  if (current >= 55) tx(db, () => db.exec(WORK_LINKS_BACK));
 }
 
 export function tx<T>(db: Db, fn: () => T): T {

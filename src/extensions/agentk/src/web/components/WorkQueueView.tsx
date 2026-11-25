@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ProjectWithSessions, WorkItem, WorkLink, WorkMove, WorkSync } from '../../shared/types';
+import type { ProjectWithSessions, WorkItem, WorkLink, WorkMove, WorkStoreState, WorkSync } from '../../shared/types';
 import { moveItem } from '../../shared/workorder';
 import { api, errorMessage } from '../api';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, dotState, relativeTime, stageWords } from '../util';
-import { itemSession, movedOrder, workSyncText } from '../workqueue';
+import { itemSession, movedOrder, workStoreLine, workSyncText } from '../workqueue';
 import { Busy, ConfirmButton, StatusDot } from './common';
 import { TopBar } from './TopBar';
 
@@ -31,11 +31,14 @@ export function WorkLinkChip({ link }: { link: WorkLink }) {
  * The work queue (`/queue`): the open items in your order, each with its links and its session's
  * status (or Start session), new synced items marked until moved to their place, Sync, Dismiss on
  * each item and Dismiss all, and the dismissed items below. Reordered by dragging (not on touch) or
- * from each item's ⋯ actions.
+ * from each item's ⋯ actions. The queue is kept in Meko Cloud: before it's set up on this computer, the page
+ * says so in place of the list, with the way to set it up; while it can't be reached, it says so above the
+ * list last read.
  */
 export function WorkQueueView({
   items,
   sync,
+  store,
   projects,
   focusId,
   onMenu,
@@ -48,6 +51,8 @@ export function WorkQueueView({
 }: {
   items: WorkItem[];
   sync: WorkSync;
+  /** Where the queue is kept (`AppState.workStore`). */
+  store: WorkStoreState;
   projects: ProjectWithSessions[];
   /** An item to scroll to and open (from the command palette). */
   focusId: string | null;
@@ -57,9 +62,15 @@ export function WorkQueueView({
   onLinkSession: (item: WorkItem) => void;
   onStartSession: (item: WorkItem) => void;
   onError: (msg: string) => void;
-  /** Opens Settings › Work queue. */
+  /** Opens Settings › Work queue (its sync, and its set-up in Meko Cloud). */
   onSettings: () => void;
 }) {
+  const usable = store.status === 'ready' || store.status === 'unreachable';
+  const storeLine = workStoreLine(store);
+  // Showing the queue reads it again: another computer may have changed it.
+  useEffect(() => {
+    void api.refreshWorkQueue().catch(() => undefined);
+  }, []);
   const mobile = useIsMobile();
   const touch = useTouch();
   const [open, setOpen] = useState<string | null>(focusId);
@@ -153,12 +164,12 @@ export function WorkQueueView({
       <header className="home-hd wq-hd">
         {!mobile && <h1>Work queue</h1>}
         <div className="wq-bar">
-          <button className="btn primary" onClick={onAdd}>
+          <button className="btn primary" onClick={onAdd} disabled={!usable}>
             + Add
           </button>
           <button
             className="btn"
-            disabled={syncing || sync.running || syncOff}
+            disabled={syncing || sync.running || syncOff || !usable}
             onClick={() => void runSync()}
             title="Pull in GitHub review requests and your Slack list"
           >
@@ -182,7 +193,19 @@ export function WorkQueueView({
         </div>
       </header>
       <div className="home-scroll wq-scroll" ref={scrollRef}>
-      {!shown.length && (
+      {!usable && (
+        <div className="wq-setup">
+          {store.status === 'setting-up' ? <p><Busy label={storeLine} /></p> : <p>{storeLine}</p>}
+          {(store.status === 'not-set-up' || store.status === 'can-join') && (
+            <button className="btn primary" onClick={onSettings}>
+              {store.status === 'can-join' ? 'Join the work queue' : 'Set up the work queue'}
+            </button>
+          )}
+          {store.error && <p className="error-text">{store.error}</p>}
+        </div>
+      )}
+      {usable && storeLine && <p className={cx('wq-reach', store.status === 'unreachable' && 'error-text')}>{storeLine}</p>}
+      {usable && !shown.length && (
         <p className="muted wq-empty">
           Nothing on the queue. Add what you're working on, or {syncOff ? 'turn on Sync in Sync settings' : 'press Sync'} to pull in the PRs waiting
           for your review and the messages on your Slack list.
@@ -281,7 +304,7 @@ export function WorkQueueView({
           }} aria-hidden="true" />
         )}
       </ol>
-      <section className="wq-closed">
+      {usable && <section className="wq-closed">
         <button
           className="btn small"
           aria-expanded={showClosed}
@@ -319,7 +342,7 @@ export function WorkQueueView({
             ))}
           </ul>
         )}
-      </section>
+      </section>}
       </div>
     </div>
   );

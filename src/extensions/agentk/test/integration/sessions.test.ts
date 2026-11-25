@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TEST_MEKO_URL, makeEnv, pinFiles, pinnedDatapack, readJsonl, sessionPinFile, waitFor, type TestEnv } from '../helpers.js';
+import { TEST_MEKO_URL, makeEnv, pinFiles, pinnedDatapack, readJsonl, sessionPinFile, waitFor, workQueueReady, type TestEnv } from '../helpers.js';
 import { AGENTK_AGENT_ID, legacyAgentId, sessionAgentId } from '../../src/server/meko.js';
 import { PIN_KEEP_MS } from '../../src/server/projects.js';
 import { postHook } from '../hook-client.js';
@@ -949,11 +949,19 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(again.id).toBe(session.id);
     expect(env.core.state().failedStarts.map((f) => f.name)).toEqual(['Other']);
     // A failed start for a work item gives the item back the session it had.
+    await workQueueReady(env);
     const work = await env.core.workQueue.create({ title: 'Fix it' });
-    env.core.workQueue.update(work.id, { sessionId: again.id });
+    await env.core.workQueue.update(work.id, { sessionId: again.id });
     block('ak/retry/x');
     await expect(env.core.sessions.create(p.id, { ...req, name: 'Retry', workItemId: work.id })).rejects.toMatchObject({ status: 400 });
-    expect(env.core.workQueue.get(work.id).sessionId).toBe(again.id);
+    expect((await env.core.workQueue.get(work.id)).sessionId).toBe(again.id);
+    // Unless the item was unlinked while the start ran: it stays unlinked.
+    block('ak/unlinked/x');
+    const unlinked = await env.core.sessions.begin(p.id, { ...req, name: 'Unlinked', workItemId: work.id });
+    await env.core.workQueue.update(work.id, { sessionId: null });
+    await expect(unlinked.done).rejects.toMatchObject({ status: 400 });
+    expect((await env.core.workQueue.get(work.id)).sessionId).toBeNull();
+    env.core.sessions.dismissFailedStart('demo-repo--unlinked');
     env.core.sessions.dismissFailedStart('demo-repo--retry');
     env.core.sessions.dismissFailedStart('demo-repo--other');
     expect(env.core.state().failedStarts).toEqual([]);

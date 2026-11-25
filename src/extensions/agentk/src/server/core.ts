@@ -36,7 +36,7 @@ import { InviteService } from './invites.js';
 import { KnowledgeService } from './knowledge.js';
 import { TourService } from './tour.js';
 import { WorkshopService } from './workshops.js';
-import { MekoClient } from './meko.js';
+import { AGENTK_AGENT_ID, MekoClient } from './meko.js';
 import { MekoAgents, mekoMcpGaps, readMekoAgents, type MekoAgentsRead } from './mekoagents.js';
 import { MekoAutoConnect } from './mekoautoconnect.js';
 import { MekoQuestions } from './mekoquestions.js';
@@ -66,6 +66,8 @@ import { ZERO_USAGE, addUsage } from './usage.js';
 import { WorktreePool } from './worktrees.js';
 import { readList } from './slack.js';
 import { WorkQueue } from './workqueue.js';
+import { WorkCloud, type WorkLink, type WorkMeko } from './workcloud.js';
+import { pgSql, type WorkConn, type WorkSql } from './workstore.js';
 
 export interface CoreOptions {
   paths: Paths;
@@ -101,6 +103,12 @@ export interface CoreOptions {
   workshopsRoot?: string;
   /** Whether gh is installed and signed in (tests fake it); by default `gh --version` and `gh auth token`. */
   ghProbe?: () => Promise<GhState>;
+  /** Opens the work queue's database (tests give PGlite); by default Postgres over TLS (workstore.ts pgSql). */
+  workSql?: (c: WorkConn) => WorkSql;
+  /** The Meko tools the work queue's set-up calls (tests fake them); by default through `meko`. */
+  workMeko?: WorkMeko;
+  /** The Meko on this computer's link to Meko Cloud, for the work queue (tests fake it); by default as `meko token --json` last said. */
+  workLink?: () => WorkLink;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -115,6 +123,17 @@ const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
 const PIN_PRUNE_MS = 6 * 60 * 60 * 1000;
 /** How often images staged in the New session dialog that no session started with are looked for. */
 const STAGED_SWEEP_MS = 60 * 60 * 1000;
+/**
+ * The Meko on this computer's link to Meko Cloud, for the work queue, which needs Meko Cloud (the user's
+ * decision: docs/design/work-queue.md#where-its-kept): unknown while that Meko isn't running, or is too
+ * old to say.
+ */
+function workLinkNow(): WorkLink {
+  const l = localMeko();
+  if (l.state !== 'running' || !l.cloud) return { state: 'unknown', account: '' };
+  return l.cloud.account ? { state: 'linked', account: l.cloud.account } : { state: 'unlinked', account: '' };
+}
+
 /** How often the records `meko kode review` leaves are taken in (review/clirecords.ts). */
 const CLI_REVIEWS_EVERY_MS = 60_000;
 /** How long a read of Kiro's agent (for `MekoStatus.kiro`) and OpenCode's own config (`MekoStatus.opencode`) is reused (the state is pushed often). */
@@ -173,6 +192,10 @@ export class Core extends EventEmitter {
   readonly prReview: PrReviewService;
   readonly githubLinks: GithubLinkService;
   readonly workQueue: WorkQueue;
+  /** Where the work queue is kept: its database in Meko Cloud, set up, joined and found again (workcloud.ts). */
+  readonly workCloud: WorkCloud;
+  /** Pages connected to /ws/events: the work queue is read again every minute only while there's one (D3). */
+  private pages = 0;
   readonly askKode: AskAgentk;
   /** Kode's session tools: the calls `me_kode mcp` makes from sessions. */
   readonly tools: SessionTools;
@@ -310,6 +333,18 @@ export class Core extends EventEmitter {
       claudeAvailable: () => this.harnesses.of('claude').status(this.cfg).available,
       githubTitle: async (repo, number) => (await github.issueOrPr(homedir(), repo, number)).title,
       settings: () => this.cfg.workQueue,
+      notReady: () => this.workCloud.notReady(),
+      unreachable: () => void this.workCloud.recheck(),
+      reached: () => this.workCloud.reached(),
+    });
+    this.workCloud = new WorkCloud({
+      db: this.db,
+      meko: o.workMeko ?? this.workMekoTools(),
+      link: o.workLink ?? workLinkNow,
+      connect: o.workSql ?? pgSql,
+      queue: this.workQueue,
+      changed: () => this.changed(),
+      warn: (m, d) => this.log.warn(m, d),
     });
     this.askKode = new AskAgentk({
       config: () => this.cfg,
@@ -583,6 +618,8 @@ export class Core extends EventEmitter {
     this.mekoStatus = status;
     this.changed();
     if (!reconnect) return;
+    // Linked, unlinked or another account: the work queue is in that account's Meko Cloud.
+    void this.workCloud.lookup().catch((e: unknown) => this.log.warn('work queue: looking for it failed', errMsg(e)));
     this.log.info(after.apiKey ? `using the Meko on this computer (${after.url})` : 'the Meko on this computer stopped; Meko is not set up');
     // A harness may have written the old URL or token somewhere of its own (OpenCode's Meko server file).
     for (const h of this.harnesses.list()) h.mekoChanged?.(this.paths);
@@ -657,6 +694,32 @@ export class Core extends EventEmitter {
       sessionHost: { version: this.host.hello?.version ?? null, outdated: !!this.host.hello?.outdated },
       workQueue: this.workQueue.list(),
       workSync: this.workQueue.syncState(),
+      workStore: this.workCloud.state(),
+    };
+  }
+
+  /** A page connected to /ws/events, or left: while one is, the work queue is read again every minute. */
+  pageOpened(): void {
+    this.pages++;
+  }
+
+  pageClosed(): void {
+    this.pages = Math.max(0, this.pages - 1);
+  }
+
+  /** The work queue's Meko tools, through the Meko on this computer (which passes them on to Meko Cloud) as Kode's service agent. */
+  private workMekoTools(): WorkMeko {
+    const m = this.meko;
+    return {
+      call: async (tool, args, timeoutMs) => m.call(tool, { ...args, conversation_id: await m.serviceConv() }, timeoutMs ?? 60_000),
+      findDatapack: async (name) => {
+        const d = (await m.listDatapacks()).find((x) => x.name === name && x.grant === 'owner');
+        return d ? { id: d.id, description: d.description } : null;
+      },
+      createDatapack: async (name) => (await m.createDatapack(name)).id,
+      setDescription: (id, text) => m.setDatapackDescription(id, text),
+      putFile: async (id, name, content) => m.putArtifact(name, content, 'application/json', id, AGENTK_AGENT_ID, await m.serviceConv()),
+      getFile: async (id, hash) => m.getArtifact(hash, id, AGENTK_AGENT_ID, await m.serviceConv(), 1_000_000),
     };
   }
 
@@ -729,6 +792,8 @@ export class Core extends EventEmitter {
     // Not awaited: startup doesn't wait on Meko. Meko's list of agents kept from before gates new sessions meanwhile.
     void this.claudeMeko.refresh();
     void this.mekoAgents.refresh();
+    // Not awaited: the work queue opens once its database in Meko Cloud answers (empty until then).
+    void this.workCloud.lookup().catch((e: unknown) => this.log.warn('work queue: looking for it failed', errMsg(e)));
     // Not awaited: the New session dialog shows branch names with it once it's in.
     void this.ghLogin(this.paths.home);
     void this.gh.check();
@@ -760,6 +825,7 @@ export class Core extends EventEmitter {
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
       this.every(60_000, () => this.workQueue.tick());
+      this.every(60_000, () => (this.pages > 0 ? this.workQueue.refresh() : undefined));
       this.every(CLI_REVIEWS_EVERY_MS, () => this.takeCliReviews());
       // Meko normally starts first (it starts Kode); this covers a boot where it didn't, and an
       // install of Meko while the banner asks for one.
@@ -800,6 +866,7 @@ export class Core extends EventEmitter {
     ]);
     // After the turn ends: a Kiro one schedules a second usage read, which mustn't run after the database closes.
     this.sessions.stop();
+    await this.workQueue.detach();
     await this.meko.close();
     this.localReader.clear();
   }

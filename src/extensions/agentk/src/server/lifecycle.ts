@@ -2728,7 +2728,13 @@ export class Lifecycle {
       await git(repo, 'fetch', '--prune', '--quiet', 'origin').catch(() => undefined);
     }
     if (keep) this.core.log.info(`kept branch ${row.branch} of ${row.id}: it has commits PR #${st.number} doesn't have`);
-    const item = this.core.workQueue.closeForSession(row.id);
+    // Queued and applied in the background: the stage change doesn't wait on Meko Cloud.
+    let item: string | null = null;
+    try {
+      item = this.core.workQueue.closeForSession(row.id);
+    } catch (e) {
+      this.core.log.warn(`dismissing the work item of ${row.id} failed`, errMsg(e));
+    }
     if (item) this.sessions.event(row.id, 'work-item', `Work item dismissed: ${item}`);
     this.sessions.setStage(row.id, 'done', 'auto');
     const wt = worktree === 'idle' ? 'worktree kept for the next session' : worktree === 'removed' ? 'worktree removed' : '';

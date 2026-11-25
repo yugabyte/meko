@@ -383,7 +383,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
     position: r.position,
-    workItemId: get<{ id: string }>(db, 'SELECT id FROM work_items WHERE session_id = ?', r.id)?.id ?? null,
+    workItemId: get<{ item_id: string }>(db, 'SELECT item_id FROM work_item_sessions WHERE session_id = ?', r.id)?.item_id ?? null,
     createdAt: r.created_at,
     archivedAt: r.archived_at,
     recoveredAt: r.recovered_at,

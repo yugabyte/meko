@@ -87,7 +87,7 @@ export interface SimilarMemory {
 const SERVICE_KEY = 'agent-k-local-service';
 
 /** Tools that write something new on every call: never sent twice once a call may have reached Meko. */
-const NOT_IDEMPOTENT = new Set(['datapack_create', 'memory_add', 'artifact_put', 'conversation_add_message']);
+const NOT_IDEMPOTENT = new Set(['datapack_create', 'memory_add', 'artifact_put', 'conversation_add_message', 'amp_cluster_create', 'amp_compute_create', 'amp_compute_delete']);
 
 /** How long connecting (the MCP handshake) may take. */
 const CONNECT_TIMEOUT_MS = 15000;
@@ -280,7 +280,7 @@ export class MekoClient {
    * conversation_create needs a datapack (or an account default), which a new user doesn't have
    * yet, so when Meko refuses it a fixed trace id stands in; Meko only uses it to nest traces.
    */
-  private async serviceConv(timeoutMs?: number): Promise<string> {
+  async serviceConv(timeoutMs?: number): Promise<string> {
     if (this.serviceConversation) return this.serviceConversation;
     const gen = this.gen;
     let id: string;

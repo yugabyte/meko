@@ -1276,6 +1276,8 @@ export interface AppState {
   workQueue: WorkItem[];
   /** The work queue's last sync and whether one is running. */
   workSync: WorkSync;
+  /** Where the work queue is kept (Meko Cloud) and how that stands: before set-up, `workQueue` is empty. */
+  workStore: WorkStoreState;
 }
 
 /** GET /api/harnesses/:id/models: the models a harness's CLI lists (`provider/model` for OpenCode). */
@@ -1873,6 +1875,48 @@ export interface WorkSync {
   slackAuto: boolean;
   /** The sources Settings › Work queue has on; with neither, there's no sync. */
   sources: { github: boolean; slack: boolean };
+}
+
+/**
+ * The work queue's database in Meko Cloud (docs/design/work-queue.md#where-its-kept):
+ * - `not-linked`: the Meko on this computer isn't linked to Meko Cloud (or isn't running);
+ * - `not-set-up`: linked, and no queue in Meko Cloud yet (Set up);
+ * - `can-join`: another computer set it up, and this one isn't on it yet (Join);
+ * - `setting-up`: setting up, joining or changing the addresses (`step` says which step);
+ * - `ready`: the queue is read from and written to Meko Cloud;
+ * - `unreachable`: set up, but the last query failed (`error`): the last list read stays, and writes are refused.
+ */
+export type WorkStoreStatus = 'not-linked' | 'not-set-up' | 'can-join' | 'setting-up' | 'ready' | 'unreachable';
+
+/** One address the queue's database lets in, as typed on one of the user's computers. */
+export interface WorkAddress {
+  /** An IPv4 CIDR no wider than /24, or IPv6 no wider than /48 (a single address gets /32 or /128). */
+  cidr: string;
+  /** Which computer it is, as typed (or its host name). */
+  label: string;
+}
+
+export interface WorkStoreState {
+  status: WorkStoreStatus;
+  /** The datapack in Meko Cloud that holds the queue's database and its connection record (WORK_QUEUE_DATAPACK). */
+  datapack: string;
+  /** While `setting-up`: the step, in words. */
+  step: string | null;
+  /** Why the last set-up, join or query failed, in words; null when it didn't. */
+  error: string | null;
+  /** The addresses the database lets in (every computer's), once this computer has the connection record. */
+  addresses: WorkAddress[];
+  /** The database was set up by a newer Kode: the queue is shown, and editing it needs an update here. */
+  readOnly: boolean;
+}
+
+/** The datapack in Meko Cloud Kode keeps the work queue's database in (decided by the user: docs/design/work-queue.md). */
+export const WORK_QUEUE_DATAPACK = 'adlc/kode/my-work-queue';
+
+/** POST /api/work-queue/setup (set up, or join when another computer has) and POST /api/work-queue/addresses (add one). */
+export interface WorkAddressRequest {
+  cidr: string;
+  label?: string;
 }
 
 /** GET /api/work-items/by-link: an item holding the link, with its session when it has one. */
@@ -2967,11 +3011,23 @@ export type TermServerMessage =
 // GET    /api/sessions/search?q=[&project=] → SessionMatch[]   (sessions, archived ones included, whose name, task, PR
 //        title, branch or design has the words in `q` (at least half of them), best first, at most 20; in the
 //        projects open, or only `project`; 400 for a `q` over SESSION_SEARCH_MAX characters or given twice, or two `project`s)
+// POST   /api/work-queue/setup WorkAddressRequest → 202   (sets up the queue in Meko Cloud, or joins the one another computer set
+//        up, letting this address in; progress and failure in AppState.workStore. 400 for an address that isn't a CIDR no wider
+//        than /24 (/48 for IPv6); 409 while Meko isn't linked to Meko Cloud, while one runs, or once it's set up here)
+// POST   /api/work-queue/addresses WorkAddressRequest → 202   (lets another address in: recreates the database's endpoint;
+//        400 as above; 409 before set-up, while one runs, while Meko isn't linked to Meko Cloud, or for an address already in)
+// POST   /api/work-queue/addresses/remove { cidr } → 202   (lets an address out, the same way; 404 for an address that isn't on
+//        the list (or isn't one); 409 for the last one, before set-up, while one runs, or while Meko isn't linked to Meko Cloud)
+// POST   /api/work-queue/refresh               → 204   (reads the queue from Meko Cloud again: the page showed it; before set-up
+//        it looks for the queue instead, in the datapack, through the Meko on this computer)
+// Every /api/work-items write and the sync answer 409 before the queue is set up here (AppState.workStore says why), and
+// 503 while Meko Cloud can't be reached, before the first read worked, or while the database is a newer Kode's. The one
+// exception is unlinking a session (PATCH with only `sessionId: null`), which is this computer's alone and always works.
 // GET    /api/work-items?status=closed         → WorkItem[]   (closed items, last closed first, at most 200; open ones are AppState.workQueue)
 // POST   /api/work-items CreateWorkItemRequest → WorkItem   (400 for no title and no GitHub link to read one from, text over the
 //        WORK_*_MAX limits, more than WORK_LINKS_MAX links, or a link parseWorkLink can't read; 502 when GitHub can't give the title)
 // PATCH  /api/work-items/:id UpdateWorkItemRequest → WorkItem   (404 for an unknown item or session; 400 for bad values, or a move or
-//        session for a closed item)
+//        session for a closed item; an unlink answers with only the item's id and session when it can't be read)
 // PUT    /api/work-items/order ReorderWorkItemsRequest → 204   (409 when `ids` isn't exactly the open items)
 // POST   /api/work-items/close CloseWorkItemsRequest → { closed }   (Dismiss all: closes the open items among `ids`; 400 for no list of ids)
 // POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and your Slack list's messages into the queue; 409 while one runs)

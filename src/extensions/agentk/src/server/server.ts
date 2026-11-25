@@ -6,7 +6,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
-  AutoConnectClaim, ChangedText, EventsClientMessage, GhStatus, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
+  AutoConnectClaim, ChangedText, EventsClientMessage, GhStatus, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, WorkAddressRequest, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
   HeldReview, HeldReviewsResult, TourActRequest, TourActResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
@@ -449,16 +449,33 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get('/api/usage', async () => usageOverview(core.db));
 
   // ---- work queue ----
+  app.post<{ Body: WorkAddressRequest }>('/api/work-queue/setup', async (req, reply) => {
+    core.workCloud.startSetUp(req.body?.cidr, req.body?.label);
+    return reply.code(202).send();
+  });
+  app.post<{ Body: WorkAddressRequest }>('/api/work-queue/addresses', async (req, reply) => {
+    core.workCloud.startAddAddress(req.body?.cidr, req.body?.label);
+    return reply.code(202).send();
+  });
+  app.post<{ Body: { cidr?: unknown } }>('/api/work-queue/addresses/remove', async (req, reply) => {
+    core.workCloud.startRemoveAddress(req.body?.cidr);
+    return reply.code(202).send();
+  });
+  // The page showed the queue: read it again, or, before set-up, look for one another computer set up.
+  app.post('/api/work-queue/refresh', async (_req, reply) => {
+    await (core.workQueue.attached ? core.workQueue.refresh() : core.workCloud.lookup());
+    return reply.code(204).send();
+  });
   app.get<{ Querystring: { status?: string } }>('/api/work-items', async (req): Promise<WorkItem[]> =>
     req.query.status === 'closed' ? core.workQueue.closed() : core.workQueue.list());
   app.post<{ Body: CreateWorkItemRequest }>('/api/work-items', async (req): Promise<WorkItem> => core.workQueue.create(req.body ?? {}));
   app.patch<{ Params: { id: string }; Body: UpdateWorkItemRequest }>('/api/work-items/:id', async (req): Promise<WorkItem> =>
     core.workQueue.update(req.params.id, req.body ?? {}));
   app.put<{ Body: ReorderWorkItemsRequest }>('/api/work-items/order', async (req, reply) => {
-    core.workQueue.reorder(req.body ?? { ids: [] });
+    await core.workQueue.reorder(req.body ?? { ids: [] });
     return reply.code(204).send();
   });
-  app.post<{ Body: CloseWorkItemsRequest }>('/api/work-items/close', async (req): Promise<{ closed: number }> => ({ closed: core.workQueue.closeAll(req.body) }));
+  app.post<{ Body: CloseWorkItemsRequest }>('/api/work-items/close', async (req): Promise<{ closed: number }> => ({ closed: await core.workQueue.closeAll(req.body) }));
   app.post('/api/work-items/sync', async (): Promise<WorkSync> => core.workQueue.sync(true));
   app.get<{ Querystring: { link?: string } }>('/api/work-items/by-link', async (req): Promise<WorkLinkMatch[]> => core.workQueue.byLink(req.query.link));
   app.get<{ Querystring: { q?: string; project?: string } }>('/api/sessions/search', async (req): Promise<SessionMatch[]> =>
@@ -882,6 +899,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get('/ws/events', { websocket: true }, (socket: WebSocket, req: FastifyRequest) => {
     if (!wsGuard(socket, req)) return;
     clients.add(socket);
+    core.pageOpened();
     socket.send(JSON.stringify({ type: 'state', state: core.state() } satisfies ServerEvent));
     // A page opening is when stale versions are read again (nothing polls them); a change is pushed.
     void core.harnesses.refresh(core.config).catch((e) => core.log.warn('reading the agents\' versions failed', errMsg(e)));
@@ -895,7 +913,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       }
       if (msg?.type === 'ping' && socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'pong' } satisfies ServerEvent));
     });
-    socket.on('close', () => clients.delete(socket));
+    socket.on('close', () => {
+      clients.delete(socket);
+      core.pageClosed();
+    });
   });
 
   app.get<{ Params: { id: string }; Querystring: TermQuery }>('/ws/term/:id', { websocket: true },

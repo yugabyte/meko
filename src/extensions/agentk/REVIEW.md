@@ -127,7 +127,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       The Meko key never goes to the browser (Settings shows only its last four characters), a
       Meko URL or key change is checked against Meko before it's saved, and a typed API URL is
       checked without the key. Remote URLs lose their credentials before they go into a datapack
-      description (`withoutCredentials`).
+      description (`withoutCredentials`). **The one exception** is the work queue's database password
+      (the project owner's decision: [work-queue.md](docs/design/work-queue.md#where-its-kept)): Kode
+      makes it and keeps it in `state.db`'s kv (`work-amp`, and `work-amp-step` while a set-up runs),
+      as well as in the datapack's connection record, so the queue opens without Meko. `state.db`
+      and its pre-update snapshots (`state.db.bak-<version>`) are owner-only (`openDb`), and the
+      snapshots go when their version does (`pruneSnapshots`). It never goes to the browser, a route's
+      reply or a log line.
 - [ ] Nothing sent to a browser can queue in memory without limit (terminal output pauses the pty;
       state snapshots are skipped). A socket that closes abnormally (1006: Meko refused it, or closed
       it as the web UI was turned off) asks Meko about the sign-in alongside its retry, throttled.
@@ -332,7 +338,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       session's worktree), and a failed reuse falls back to a new worktree instead of failing the start.
       Anything that removes idle worktrees forgets the row with a write conditional on it still being
       idle (`session_id IS NULL`) before running git, so it can't remove one a session just claimed.
-- [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
+- [ ] Meko isn't polled, but for the polls the next item lists. A Meko failure shows as the error of the action that needed it (or a
       logged warning for background work) and never kills a running session or blocks work that
       doesn't need Meko (a project with No datapack, sessions). No Meko (`MekoStatus.configured`
       false: no Meko running on this computer) means no Meko calls at all; the one
@@ -349,12 +355,22 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Claude Code's settings), and has no code that branches on whether Meko is linked, local or
       Meko Cloud: REST goes to that Meko's `/api/v1` (`mekoApiBase`), datapack links to its own
       pages, and what it can't do is its error to give. Its link's `account` is read only as an
-      opaque marker of the account behind it, and its `web_url` only for share links.
-      The one poll is following a knowledge-base upload's
+      opaque marker of the account behind it, and its `web_url` only for share links. **The one
+      exception** is the work queue (AGENTS.md's invariant 7): it needs Meko Cloud, so
+      `workLinkNow()` (`core.ts`) tells linked from unlinked, and `WorkCloud` (`workcloud.ts`)
+      compares the link's `account` with the one a connection record or set-up was kept for, to
+      drop the record and not resume the set-up in another account.
+      The polls are following a knowledge-base upload's
       indexing (`KnowledgeService` in `knowledge.ts`): only after the file was posted to Meko's
       storage under the key `upload-url` gave (never for one Meko already had), every 5 s for a
       minute then every 30 s, at most 15 minutes per upload, never
-      without a Meko, stopped at an error waiting can't fix, and dropped on a Meko settings change.
+      without a Meko, stopped at an error waiting can't fix, and dropped on a Meko settings change;
+      and the work queue's (`docs/design/work-queue.md`): its database in Meko Cloud is read every
+      minute only while a page is connected (`Core.pageOpened`); after a query that couldn't reach
+      it, the connection record is read from the datapack again (`WorkCloud.recheck`), a minute
+      after the last read at the soonest, the gap doubling up to an hour while it finds nothing new;
+      and a set-up or address change waits for the database's address (`waitWriter`), every 10 s
+      for 10 minutes at most, once per press.
       The one check that calls Meko by itself, trying Claude
       Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, a change of the
       Meko on this computer, Settings open, session launch, after Claude Code's setup, Claude Code becoming available or not after a
