@@ -351,6 +351,9 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     expect(await env.core.sessions.baseBranches(s.id)).toEqual(expect.arrayContaining(['main', 'rel', 'alone']));
     expect(await env.core.sessions.baseBranches(s.id)).not.toContain(s.branch);
+    // The base is kept in the branch's gh-merge-base too, where meko kode review finds it.
+    const mergeBase = () => execFileSync('git', ['config', '--get', `branch.${s.branch}.gh-merge-base`], { cwd: env.repo, encoding: 'utf8' }).trim();
+    expect(mergeBase()).toBe('main');
 
     // Claude moves the branch onto rel and works there: against main, rel's file shows too.
     g(s.worktreePath, 'reset', '-q', '--hard', 'rel');
@@ -363,6 +366,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     const moved = await env.core.sessions.edit(s.id, { baseBranch: ' rel ' });
     expect(moved).toMatchObject({ baseBranch: 'rel', name: 'Backport', diffStat: { files: 1, added: 1, removed: 0 } });
     expect((await env.core.projects.home(p.id)).activity.find((a) => a.kind === 'base')).toMatchObject({ text: 'Base changed from main to rel' });
+    await waitFor(mergeBase, (b) => b === 'rel', 5000, 'gh-merge-base follows the base');
 
     const refused = async (req: Parameters<typeof env.core.sessions.edit>[1], status: number) =>
       expect(env.core.sessions.edit(s.id, req)).rejects.toMatchObject({ status });

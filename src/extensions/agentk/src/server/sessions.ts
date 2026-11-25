@@ -10,7 +10,7 @@ import { changedImage, changedText, changes, diffBase, NotChangedError, diffStat
 import {
   BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fastForward, isMainRepo,
   fetchPrHead, git, gitRaw, isIdleWorktree, listBaseBranches, prLocalBranch, prRef, remoteFor, remoteOf, remoteRepo, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
-  worktreeClean, type BranchSource, type SyncResult,
+  setMergeBase, worktreeClean, type BranchSource, type SyncResult,
 } from './git.js';
 import type { GuardDecision, HookContext, HookPayload, ModReply } from './hooks.js';
 import { findPr, isRepoName, issueText, prInfo, repoVisibility, type PrInfo } from './github.js';
@@ -257,10 +257,12 @@ function startedText(branch: string, base: string, sync: SyncResult | null, reus
       : sync?.kind === 'skipped' ? `; it wasn't updated from ${remote}: ${sync.reason}` : '';
     return `${on} (base ${base})${note}`;
   }
+  // origin's base, or a fork's upstream's when that's newer (`startPoint` in git.ts).
+  const remote = sync?.remote ?? 'origin';
   switch (sync?.kind) {
-    case 'updated': return `Started on ${branch} from ${base} (fast-forwarded ${base} to origin/${base})`;
-    case 'current': return `Started on ${branch} from ${base} (already up to date with origin)`;
-    case 'skipped': return `Started on ${branch} from origin/${base}; local ${base} wasn't updated: ${sync.reason}`;
+    case 'updated': return `Started on ${branch} from ${base} (fast-forwarded ${base} to ${remote}/${base})`;
+    case 'current': return `Started on ${branch} from ${base} (already up to date with ${remote})`;
+    case 'skipped': return `Started on ${branch} from ${remote}/${base}; local ${base} wasn't updated: ${sync.reason}`;
     default: return `Started on ${branch} from ${base}`;
   }
 }
@@ -516,7 +518,28 @@ export class SessionManager {
     if (!keys.length) return;
     run(this.db, `UPDATE sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
       ...keys.map((k) => fields[k as keyof SessionRow] ?? null), id);
+    // Every change of a session's base (a PR's, the Changes panel's) reaches its branch's gh-merge-base.
+    if (typeof fields.base_branch === 'string') void this.noteBase(id);
     this.core.changed();
+  }
+
+  /**
+   * Writes the session's base into its branch's `gh-merge-base` (git.ts `setMergeBase`), where
+   * `meko kode review` run in its worktree finds it; the CLI never opens state.db. Not for a
+   * Review a PR session, whose branch is Kode's own. With `keep` (a task started on an existing
+   * branch), a value the user set stays. Never fails: a review without it uses upstream/HEAD.
+   */
+  private async noteBase(id: string, o: { keep?: boolean } = {}): Promise<void> {
+    try {
+      const r = sessionRow(this.db, id);
+      if (!r || r.kind === 'review-pr' || !r.branch || !r.base_branch || r.base_branch === r.branch) return;
+      const repo = r.repo_path ?? r.worktree_path;
+      if (!repo || !existsSync(repo)) return;
+      await setMergeBase(repo, r.branch, r.base_branch, o);
+    } catch (e) {
+      // Also a database closed by a shutdown while git ran.
+      this.core.log.warn(`couldn't set the gh-merge-base of ${id}'s branch`, errMsg(e));
+    }
   }
 
   setStatus(id: string, status: SessionStatus, detail: string | null = null): void {
@@ -823,6 +846,7 @@ export class SessionManager {
       ? `Checked out PR #${review.info.number} of ${review.repo} at ${sha.slice(0, 7)} on ${branch} (base ${base})`
       : startedText(branch, base, c.where ? caughtUp : made.sync, !!c.where, c.where ? c.from : undefined, c.attach?.info.number);
     this.event(id, 'created', started + (made.reused ? ` in a reused worktree (${basename(made.path)})` : ''), { reused: made.reused });
+    if (!review) await this.noteBase(id, { keep: !!c.where });
     if (c.linkPr) {
       // An answer after the wait is dropped: Claude's prompts are written by then.
       let waiting = true;

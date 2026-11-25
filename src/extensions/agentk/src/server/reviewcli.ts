@@ -18,7 +18,7 @@ import {
 import { parsePrInput } from '../shared/github-refs.js';
 import { REVIEW_MEKO_SERVER, signInSettings } from './claude.js';
 import { loadConfig, type Config } from './config.js';
-import { git } from './git.js';
+import { git, readMergeBase } from './git.js';
 import { repoVisibility } from './github.js';
 import { SESSION_MARKERS } from './launcher.js';
 import { errMsg } from './log.js';
@@ -45,7 +45,8 @@ uncommitted and untracked files included. It runs Kode's code review on Claude C
 it found and exits 0; 1 when it couldn't review.
 
   --base <branch>        The base to review against (default: the PR's base with --pr, else the
-                         branch upstream/HEAD or origin/HEAD names, else main or master)
+                         Kode session's base, else the branch upstream/HEAD or origin/HEAD
+                         names, else main or master)
   --pr <pr>              The PR this change is for (a number, owner/name#number or a link): its
                          title and description go to the review, which checks the change against them
   --description <text>   What the change is meant to do, for the review to check it against
@@ -147,8 +148,9 @@ async function readPr(folder: string, input: string, env: NodeJS.ProcessEnv): Pr
 /**
  * The base the change is read against, as a branch name (or a commit) here, which `readDiff`
  * resolves to origin's or, in a fork, upstream's copy, whichever the branch left last: `--base`,
- * else the PR's base, else the branch upstream/HEAD names (a fork's origin/HEAD is the fork's own
- * default branch, which can lag far behind), else origin/HEAD's, else main or master.
+ * else the PR's base, else the branch's `gh-merge-base` (a Kode session's base, which Kode keeps
+ * there), else the branch upstream/HEAD names (a fork's origin/HEAD is the fork's own default
+ * branch, which can lag far behind), else origin/HEAD's, else main or master.
  */
 export async function pickBase(folder: string, a: { base?: string; prBase?: string; pr?: string }): Promise<string> {
   if (a.base) {
@@ -159,6 +161,9 @@ export async function pickBase(folder: string, a: { base?: string; prBase?: stri
     if (!(await baseIn(folder, a.prBase))) throw new UsageError(`PR ${a.pr}'s base, ${a.prBase}, isn't here. Fetch it (git fetch origin ${a.prBase}), or name the base with --base.`);
     return a.prBase;
   }
+  const branch = await git(folder, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '');
+  const kept = branch ? await readMergeBase(folder, branch) : null;
+  if (kept && kept !== branch && (await baseIn(folder, kept))) return kept;
   for (const remote of ['upstream', 'origin']) {
     const head = await git(folder, 'symbolic-ref', '--quiet', '--short', `refs/remotes/${remote}/HEAD`).catch(() => '');
     const name = head.startsWith(`${remote}/`) ? head.slice(remote.length + 1) : '';

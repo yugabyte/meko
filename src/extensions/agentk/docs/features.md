@@ -37,7 +37,8 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   **Open project** starts one; **Close project** stops its sessions when you're done. The repo,
   branches and datapack stay: opening its datapack again brings the same project back, with its
   sessions, settings and usage.
-  New sessions start from the base branch after it's fast-forwarded to `origin`, on a branch
+  New sessions start from the base branch after it's fast-forwarded to `origin` (in a fork, to
+  `upstream` when its base is newer than the fork's), on a branch
   named `ak_<your GitHub login>/<task>` (the prefix is a project setting). Under
   **Advanced** a session can work in another of your repos, on a new branch you name, or pick up
   existing work: an **existing branch** (its open PR is linked), or one of your open **pull

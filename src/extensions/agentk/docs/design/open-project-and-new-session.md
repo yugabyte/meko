@@ -186,11 +186,16 @@ lists with it (`task` would make them throw). Where a task started is its first 
 and steps before it show as skipped. The workflow line of the system prompt Claude gets lists the
 task's stages, and says what Explore means while the session is there. The old session types still
 work in `CreateSessionRequest.kind` for a page that hasn't reloaded yet (`explore`, `plan` and
-`quick` start at Explore, Design and Code), and so does `skipDesign: true` (Code). The server fetches the base from `origin` and fast-forwards your local base
-branch to it when that's safe, then creates the worktree and branch from it, starts Claude inside
+`quick` start at Explore, Design and Code), and so does `skipDesign: true` (Code). The server fetches the base from `origin` (and, in a fork, from `upstream`
+too) and fast-forwards your local base branch to it when that's safe: to `upstream/<base>` when
+that is strictly ahead of `origin/<base>` (a fork's own base can lag upstream's by months), else
+to `origin/<base>` (`baseRemote` in `git.ts`). It then creates the worktree and branch from it, starts Claude inside
 it (or in an idle worktree of the repo: see [Worktree reuse](projects-and-sessions.md#worktree-reuse)), and focuses the tab. If the local base can't be fast-forwarded (it has commits origin lacks,
-local edits would be overwritten, or it is checked out in another session's worktree), the session starts from `origin/<base>` and the activity log
-says why.
+local edits would be overwritten, or it is checked out in another session's worktree), the session starts from `origin/<base>` (or `upstream/<base>`) and the activity log
+says why. The new branch's `gh-merge-base` (gh's per-branch default base) is set to the session's
+base, and follows it whenever the base changes (the Changes panel, a PR's base), so
+`meko kode review` in its worktree reviews against it; on an existing branch, a value already
+there stays.
 
 **The dialog doesn't wait for the worktree.** On a big repo the fetch and checkout take minutes,
 so creating a session (`SessionManager.begin`) is in two parts. The quick checks come first and

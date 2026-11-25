@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, w
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
-import { BranchGoneError, addWorktree, checkBranchName, listBaseBranches, restoreWorktree } from '../../src/server/git.js';
+import { BranchGoneError, addWorktree, baseRemote, checkBranchName, listBaseBranches, readMergeBase, restoreWorktree, reuseWorktree, setMergeBase } from '../../src/server/git.js';
 import { NotChangedError, SUGGEST_MIN_AHEAD, TEXT_EXPAND_MAX, UnknownCommitError, changedImage, changedText, changes, diffStat, suggestBase } from '../../src/server/changes.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -171,6 +171,95 @@ describe('new sessions start from an up-to-date base (real git)', () => {
     expect(await addWorktree(solo, wt(), 'ak/x', 'main')).toEqual({ kind: 'no-upstream' });
     git(solo, 'worktree', 'remove', wt());
     expect(await addWorktree(solo, wt(), 'ak/x', 'main')).toBeNull();
+  });
+});
+
+describe("a fork's new sessions start from upstream's base when it's newer (real git)", () => {
+  let home: string;
+  let repo: string; // the user's clone of their fork: origin = the fork, upstream = the main repo
+  let maint: string; // a maintainer's clone of upstream
+
+  beforeEach(() => {
+    home = tempDir('akl-fork-sync-');
+    const seed = gitRepo(join(home, 'seed'));
+    git(home, 'clone', '-q', '--bare', seed, 'upstream.git');
+    git(home, 'clone', '-q', '--bare', 'upstream.git', 'origin.git');
+    git(home, 'clone', '-q', 'origin.git', 'repo');
+    git(home, 'clone', '-q', 'upstream.git', 'maint');
+    repo = join(home, 'repo');
+    maint = join(home, 'maint');
+    identity(repo);
+    identity(maint);
+    git(repo, 'remote', 'add', 'upstream', join(home, 'upstream.git'));
+  });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  /** Lands a commit on upstream's main (the fork's main doesn't get it); returns its sha. */
+  function landUpstream(file = 'upstream.txt'): string {
+    writeFileSync(join(maint, file), 'from upstream\n');
+    git(maint, 'add', '.');
+    git(maint, 'commit', '-q', '-m', 'upstream change');
+    git(maint, 'push', '-q', 'origin', 'main');
+    return git(maint, 'rev-parse', 'HEAD');
+  }
+
+  const wt = () => join(home, 'wt');
+
+  it("fetches upstream's main, fast-forwards the local main to it and branches from it", async () => {
+    const up = landUpstream();
+    expect(await addWorktree(repo, wt(), 'ak/x', 'main')).toEqual({ kind: 'updated', remote: 'upstream' });
+    expect(git(repo, 'rev-parse', 'refs/remotes/upstream/main')).toBe(up); // fetched by the start
+    expect(git(repo, 'rev-parse', 'main')).toBe(up);
+    expect(git(wt(), 'rev-parse', 'HEAD')).toBe(up);
+    expect(await addWorktree(repo, join(home, 'wt2'), 'ak/y', 'main')).toEqual({ kind: 'current', remote: 'upstream' });
+  });
+
+  it("starts from upstream's main when the local main can't be moved, as from origin's", async () => {
+    git(repo, 'checkout', '-q', '-b', 'side');
+    git(repo, 'branch', '-q', '-D', 'main');
+    const up = landUpstream();
+    const r = await addWorktree(repo, wt(), 'ak/x', 'main');
+    expect(r).toMatchObject({ kind: 'skipped', remote: 'upstream' });
+    expect(git(wt(), 'rev-parse', 'HEAD')).toBe(up);
+  });
+
+  it('reuses an idle worktree from upstream\'s main too', async () => {
+    git(repo, 'worktree', 'add', '-q', '--detach', wt());
+    const up = landUpstream();
+    expect(await reuseWorktree(repo, wt(), 'ak/x', 'main')).toEqual({ kind: 'updated', remote: 'upstream' });
+    expect(git(wt(), 'rev-parse', 'HEAD')).toBe(up);
+  });
+
+  it("keeps origin when the fork's main has commits upstream lacks, or the two agree", async () => {
+    expect(await baseRemote(repo, 'main')).toBe('origin'); // the same commit
+    landUpstream();
+    writeFileSync(join(repo, 'fork.txt'), 'fork only\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'fork only');
+    git(repo, 'push', '-q', 'origin', 'main');
+    const fork = git(repo, 'rev-parse', 'HEAD');
+    expect(await addWorktree(repo, wt(), 'ak/x', 'main')).toEqual({ kind: 'current' });
+    expect(git(wt(), 'rev-parse', 'HEAD')).toBe(fork);
+  });
+
+  it("keeps origin when upstream has no such branch", async () => {
+    git(repo, 'checkout', '-q', '-b', 'fork-base');
+    git(repo, 'push', '-q', 'origin', 'fork-base');
+    git(repo, 'checkout', '-q', 'main');
+    expect(await addWorktree(repo, wt(), 'ak/x', 'fork-base')).toEqual({ kind: 'current' });
+  });
+
+  it("keeps a branch's gh-merge-base, leaving one the user set when asked to", async () => {
+    git(repo, 'branch', 'ak/x');
+    expect(await readMergeBase(repo, 'ak/x')).toBeNull();
+    await setMergeBase(repo, 'ak/x', 'main');
+    expect(await readMergeBase(repo, 'ak/x')).toBe('main');
+    await setMergeBase(repo, 'ak/x', 'rel', { keep: true });
+    expect(await readMergeBase(repo, 'ak/x')).toBe('main');
+    await setMergeBase(repo, 'ak/x', 'rel');
+    expect(await readMergeBase(repo, 'ak/x')).toBe('rel');
+    git(repo, 'branch', '-D', 'ak/x');
+    expect(await readMergeBase(repo, 'ak/x')).toBeNull(); // git drops it with the branch
   });
 });
 

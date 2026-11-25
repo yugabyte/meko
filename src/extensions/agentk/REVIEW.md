@@ -279,9 +279,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       sessions kept in it (through git), and only the datapacks named as the tour names its own.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
       session starts (`merge --ff-only` with autostash off in the main checkout, or a non-forced
-      `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), the same
-      fast-forward of an existing branch a session starts on (from its remote, a fork's for a fork's
-      PR), setting that branch's `branch.<b>.remote`/`.merge` to a fork's PR head, and an
+      `git fetch . refs/remotes/<remote>/<b>:refs/heads/<b>`, from origin, or from a fork's upstream
+      only when `upstream/<b>` is strictly ahead of `origin/<b>`: `baseRemote`; never inside another
+      worktree), the same fast-forward of an existing branch a session starts on (from its remote,
+      a fork's for a fork's PR), setting that branch's `branch.<b>.remote`/`.merge` to a fork's PR
+      head, keeping a session's branch's `branch.<b>.gh-merge-base` at the session's base (never
+      over one the user set on an existing branch: `noteBase`), and an
       empty first commit on HEAD's branch of a repo with no commits and no files
       (`ensureFirstCommit()`, at project open or session start; a repo with files is refused, and an
       empty folder typed under Other folder is made a repo only after the name check), never a
