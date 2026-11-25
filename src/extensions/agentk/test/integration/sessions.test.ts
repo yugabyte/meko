@@ -1563,6 +1563,46 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(() => env.core.comments.add(s.id, { ...at, body: 'Late.' })).toThrow(/archived/);
     expect(env.core.comments.list(s.id)).toHaveLength(3);
   });
+
+  it("applies a draft's suggested change to the worktree only while Kode is idle and the lines are as shown", async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Suggest', prompt: 'hi', kind: 'quick' });
+    const get = () => env.core.sessions.get(s.id);
+    await waitFor(get, (x) => x.status === 'idle', 10000, 'first turn');
+    const file = join(s.worktreePath, 'calc.ts');
+    writeFileSync(file, 'let n = 1;\nn++;\nexport { n };\n');
+    const at = { path: 'calc.ts', side: 'new', line: 1, endLine: 2, excerpt: 'let n = 1;\nn++;' };
+    const c = env.core.comments.add(s.id, { ...at, body: 'Shorter:\n```suggestion\nconst n = 2;\n```' });
+    const here = { line: 1, endLine: 2, current: ['let n = 1;', 'n++;'] };
+
+    // Lines that changed since the diff was read, or a comment with no suggestion, are refused.
+    expect(() => env.core.comments.apply(s.id, c.id, { ...here, current: ['let n = 0;', 'n++;'] })).toThrow(/have changed since/);
+    const plain = env.core.comments.add(s.id, { ...at, body: 'Why?' });
+    expect(() => env.core.comments.apply(s.id, plain.id, here)).toThrow(/no suggestion/);
+    expect(() => env.core.comments.apply(s.id, c.id, { line: 1, endLine: 2 })).toThrow(/needs the lines/);
+    // Lines that match the file but not the text the suggestion was written on (Kode edited them).
+    writeFileSync(file, 'let n = 1;\nn += 1;\nexport { n };\n');
+    expect(() => env.core.comments.apply(s.id, c.id, { ...here, current: ['let n = 1;', 'n += 1;'] })).toThrow(/since the comment was written/);
+    writeFileSync(file, 'let n = 1;\nn++;\nexport { n };\n');
+    // A removed line takes no suggestion, edited in or written with it.
+    const old = env.core.comments.add(s.id, { ...at, side: 'old', body: 'Why remove this?' });
+    expect(() => env.core.comments.edit(s.id, old.id, '```suggestion\nn++;\n```')).toThrow(/not removed ones/);
+    env.core.comments.remove(s.id, old.id);
+
+    // Mid-turn: refused, so it never writes under Kode's edit.
+    writeFileSync(join(env.fakeDir, 'turn-ms'), '1500');
+    await env.core.sessions.submit(s.id, 'a long turn');
+    await waitFor(get, (x) => x.status === 'working', 10000, 'long turn started');
+    expect(() => env.core.comments.apply(s.id, c.id, here)).toThrow(/Kode is working/);
+    await waitFor(get, (x) => x.status === 'idle', 10000, 'long turn');
+    writeFileSync(join(env.fakeDir, 'turn-ms'), '200');
+    expect(readFileSync(file, 'utf8')).toBe('let n = 1;\nn++;\nexport { n };\n');
+
+    env.core.comments.apply(s.id, c.id, here);
+    expect(readFileSync(file, 'utf8')).toBe('const n = 2;\nexport { n };\n');
+    expect(env.core.comments.list(s.id).map((x) => x.id)).toEqual([plain.id]);
+    expect(() => env.core.comments.apply(s.id, c.id, here)).toThrow(/no longer exists/);
+  });
 });
 
 describe('pushes straight to the base branch', () => {

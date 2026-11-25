@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, editKeySequence, flingVelocity, insertedChar, isSessionMenuKey, isTap, isTerminalReport, keySequence, pastePath, pasteText, TAP_MAX_MOVE, TAP_MAX_MS, touchCol, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
-import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
+import { keepFocusedInView, keyboardOpen } from '../../src/web/hooks/useMedia.js';
 import { isPassiveReport } from '../../src/shared/termreports.js';
 
 describe('terminal key bar', () => {
@@ -174,6 +174,44 @@ describe('on-screen keyboard', () => {
   it('ignores pinch zoom', () => {
     expect(keyboardOpen(844, 422, 2)).toBe(false);
     expect(keyboardOpen(844, 240, 2)).toBe(true);
+  });
+
+  describe('a focused field in a scroll box', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('is scrolled back into view when the box that scrolls it changes height, while focus is in it', () => {
+      const frames: (() => void)[] = [];
+      let resized = () => {};
+      vi.stubGlobal('requestAnimationFrame', (f: () => void) => frames.push(f));
+      vi.stubGlobal('cancelAnimationFrame', () => {});
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(cb: () => void) {
+          resized = cb;
+        }
+        observe() {}
+        disconnect() {}
+      });
+      const box = {};
+      const field = {};
+      const shown: unknown[] = [];
+      const el = {
+        contains: (x: unknown) => x === field,
+        scrollIntoView: (o: unknown) => shown.push(o),
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      };
+      const doc = { activeElement: null as unknown };
+      vi.stubGlobal('document', doc);
+      const stop = keepFocusedInView(el as unknown as HTMLElement, box as HTMLElement);
+      resized();
+      frames.shift()!();
+      expect(shown).toEqual([]); // focus is elsewhere
+      doc.activeElement = field;
+      resized();
+      frames.shift()!();
+      expect(shown).toEqual([{ block: 'nearest' }]);
+      stop();
+    });
   });
 });
 

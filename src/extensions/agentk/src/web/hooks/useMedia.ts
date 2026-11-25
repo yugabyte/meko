@@ -97,6 +97,35 @@ export function trackAppHeight(): () => void {
 }
 
 /**
+ * Keeps `el` in view in `box`, the box that scrolls it up and down, while focus is inside it, as
+ * the box's height changes. On a phone, the keyboard coming up shrinks the app (`trackAppHeight`),
+ * and a field the browser had shown is then left under the box's new bottom edge: the Changes
+ * panel's comment editor, opened on a row low in the diff. Also on focus, for a tap back into the
+ * field. The caller names the box: the nearest ancestor that scrolls can be one that scrolls only
+ * sideways (a diff's `overflow-x: auto` makes its `overflow-y` compute to `auto` too), whose
+ * height never changes with the keyboard.
+ */
+export function keepFocusedInView(el: HTMLElement, box: HTMLElement): () => void {
+  if (typeof ResizeObserver === 'undefined') return () => undefined;
+  let frame = 0;
+  const show = () => {
+    frame = 0;
+    if (el.contains(document.activeElement)) el.scrollIntoView({ block: 'nearest' });
+  };
+  const schedule = () => {
+    if (!frame) frame = requestAnimationFrame(show);
+  };
+  const ro = new ResizeObserver(schedule);
+  ro.observe(box);
+  el.addEventListener('focusin', schedule);
+  return () => {
+    ro.disconnect();
+    el.removeEventListener('focusin', schedule);
+    if (frame) cancelAnimationFrame(frame);
+  };
+}
+
+/**
  * Marks the root element `overlay-scrollbars` while scrollbars are drawn over a box's content and take
  * no room (macOS's default, phones), so a box that scrolls sideways can leave room under its last row.
  * macOS switches between overlay and classic scrollbars as a mouse comes and goes (Show scroll bars:

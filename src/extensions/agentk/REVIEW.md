@@ -165,6 +165,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `Content-Security-Policy: sandbox allow-scripts` with `default-src 'none'` (an opaque origin
       that can't reach Kode's API or the network), its scripts and stylesheets put inline, and the
       bundle's `play` line in a bar on top, HTML-escaped (`withBar`).
+- [ ] The browser writes a worktree file through one route only, **Apply** on a draft's suggested
+      change (`POST /api/sessions/:id/comments/:cid/apply`, `replaceLines()` in `changes.ts`):
+      a path inside the worktree by real path (a symlink out is refused) and never in a `.git`
+      folder, as asked or as it resolves, a text file of at most 1 MB, only while the lines are
+      exactly the text the panel sent and still end with the comment's excerpt, never while the
+      agent is mid-turn or has background tasks running, and never in a Review a PR session.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
       `allow-same-origin`, and the frame's content policy still blocks network requests and comes
       first in the frame's document. Markdown designs are sanitized with no forms or styles, by

@@ -295,6 +295,20 @@ export function pickComment(lines: DiffLine[], i: number, anchor: number | null)
   return { side, line: r.from, endLine: r.to, excerpt: r.rows.map((x) => x.text).join('\n'), anchor: from };
 }
 
+/**
+ * What Apply sends for a comment placed on `row` (its last line): where its lines are in the diff
+ * shown now, and their text. Null when the diff doesn't show every one of them in one run (a hunk
+ * edge between them), or the comment isn't on new-side lines.
+ */
+export function applyRange(lines: DiffLine[], row: DiffLine, c: { side: 'old' | 'new'; line: number; endLine: number }): { line: number; endLine: number; current: string[] } | null {
+  const end = c.side === 'new' ? sideLine(row, 'new') : null;
+  if (end === null) return null;
+  const start = end - (c.endLine - c.line);
+  const r = start >= 1 ? pickRange(lines, 'new', start, end) : null;
+  if (!r || r.from !== start || r.to !== end || r.rows.length !== end - start + 1) return null;
+  return { line: start, endLine: end, current: r.rows.map((l) => l.text) };
+}
+
 export interface Anchorable {
   side: 'old' | 'new';
   endLine: number;

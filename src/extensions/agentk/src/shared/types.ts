@@ -2322,6 +2322,18 @@ export interface NewComment {
 }
 
 /**
+ * POST /api/sessions/:id/comments/:cid/apply: writes a draft's suggested change into the worktree.
+ * `line` and `endLine` are where the comment's lines are in the diff shown now (they move as
+ * lines above them are added or removed), and `current` is their text there, one string a line:
+ * the server replaces them only while the file still has exactly that text.
+ */
+export interface ApplySuggestionRequest {
+  line: number;
+  endLine: number;
+  current: string[];
+}
+
+/**
  * Who wrote a held review: a person with a role on the repo (held in Yours only), a bot (held
  * except in All reviewers), or someone with no role on the repo (held in every mode).
  */
@@ -3052,6 +3064,7 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/comments NewComment → ReviewComment
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)
 // DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
+// POST   /api/sessions/:id/comments/:cid/apply ApplySuggestionRequest → 204   (a draft with one suggestion, on added or unchanged lines; not in Review a PR, nor while the agent is mid-turn)
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
 // GET    /api/sessions/:id/held-reviews        → HeldReview[]   (held for the user, oldest first)
 // POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to Kode in Pull Request, or dismiss)

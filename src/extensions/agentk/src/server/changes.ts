@@ -1,6 +1,6 @@
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { lstat, readFile, readlink } from 'node:fs/promises';
-import { isAbsolute, join, normalize, sep } from 'node:path';
+import { isAbsolute, join, normalize, relative, sep } from 'node:path';
 import { previewImageType, type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type DiffStat, type SessionChanges } from '../shared/types.js';
 import { gitBuffer, gitRaw, tryGit } from './git.js';
 
@@ -284,6 +284,59 @@ function worktreeFile(worktree: string, path: string, max: number, refusal: stri
 
 /** Largest file the Changes panel shows more unchanged lines of. */
 export const TEXT_EXPAND_MAX = 1024 * 1024;
+
+/** Why `replaceLines` didn't write: the file isn't one it can edit, or the lines aren't what the caller saw. */
+export class ReplaceError extends Error {
+  constructor(readonly reason: 'not-text' | 'changed', message: string) {
+    super(message);
+  }
+}
+
+/** Thrown for a path `replaceLines` never writes: outside the worktree by its real path, or in a `.git` folder. */
+export class OutsideRepoError extends Error {}
+
+/** Whether a relative path has a `.git` segment, in any case: git's own files (a hook there would run). */
+const inGitDir = (p: string) => normalize(p).split(sep).some((part) => part.toLowerCase() === '.git');
+
+/**
+ * Puts `replacement` in place of lines `line`–`endLine` (1-based) of a worktree file, if those
+ * lines are still `current` (compared without a line's trailing `\r`): a suggested change applied
+ * from the Changes panel. The lines written take the ending of the lines they replace (`\r\n` or
+ * `\n`), and the file keeps or lacks its final newline as before. Throws ReplaceError when the
+ * file is missing, larger than TEXT_EXPAND_MAX or not text, or the lines differ, and
+ * OutsideRepoError for a path outside the worktree or in a `.git` folder, as asked or as its
+ * symlinks resolve. Any other error is the file system's (a read-only file, a full disk).
+ */
+export function replaceLines(worktree: string, path: string, line: number, endLine: number, current: string[], replacement: string[]): void {
+  if (!safeRelative(path) || inGitDir(path)) throw new OutsideRepoError(path);
+  let real: string;
+  try {
+    real = realpathSync(join(worktree, path));
+  } catch {
+    throw new ReplaceError('not-text', `${path} isn't in the worktree, isn't text, or is too large to change here.`);
+  }
+  const root = realpathSync(worktree);
+  if (!real.startsWith(root + sep) || inGitDir(relative(root, real))) throw new OutsideRepoError(path);
+  const st = statSync(real);
+  const data = st.isFile() && st.size <= TEXT_EXPAND_MAX ? readFileSync(real) : null;
+  if (!data || data.includes(0)) throw new ReplaceError('not-text', `${path} isn't in the worktree, isn't text, or is too large to change here.`);
+  const lines = data.toString('utf8').split('\n');
+  // A final newline leaves an empty last item, which isn't a line.
+  const finalNewline = lines[lines.length - 1] === '';
+  const count = finalNewline ? lines.length - 1 : lines.length;
+  const bare = (l: string) => l.replace(/\r$/, '');
+  const span = line >= 1 && endLine >= line && endLine <= count ? lines.slice(line - 1, endLine) : [];
+  if (!span.length || span.length !== current.length || span.some((l, k) => bare(l) !== bare(current[k]))) {
+    throw new ReplaceError('changed', `Lines ${line === endLine ? line : `${line}–${endLine}`} of ${path} have changed since the diff was read. Refresh the changes and try again.`);
+  }
+  // The ending of the first line replaced, or, when that's the file's unterminated last line, of the one before.
+  const ref = finalNewline || line < count ? lines[line - 1] : (lines[line - 2] ?? '');
+  const cr = ref.endsWith('\r') ? '\r' : '';
+  lines.splice(line - 1, span.length, ...replacement.map((l) => bare(l) + cr));
+  // The file's last line had no ending, so whatever line is last now has none either.
+  if (!finalNewline && endLine === count && lines.length) lines[lines.length - 1] = bare(lines[lines.length - 1]);
+  writeFileSync(real, lines.join('\n'));
+}
 
 /** Thrown for a path that isn't one of the files the diff shown changes. */
 export class NotChangedError extends Error {}

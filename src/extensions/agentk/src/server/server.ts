@@ -541,6 +541,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.comments.remove(req.params.id, req.params.cid);
     return reply.code(204).send();
   });
+  app.post<{ Params: { id: string; cid: string }; Body: unknown }>('/api/sessions/:id/comments/:cid/apply', async (req, reply) => {
+    core.comments.apply(req.params.id, req.params.cid, req.body);
+    return reply.code(204).send();
+  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/design', async (req): Promise<DesignDoc> => {
     const row = core.sessions.row(req.params.id);
     const r = get<{ markdown: string; html: string | null; artifact_url: string | null; updated_at: number }>(

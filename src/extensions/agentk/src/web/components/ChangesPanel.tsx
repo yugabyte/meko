@@ -1,20 +1,22 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import {
   previewImageType,
-  type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type CommentSide, type CommentState, type ReviewComment, type Session,
+  type ApplySuggestionRequest, type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type CommentSide, type CommentState, type ReviewComment, type Session,
   type SessionChanges,
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
 import {
-  anchorComment, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, keepUnchanged, pathFilter, PHONE_BUDGET,
+  anchorComment, applyRange, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, keepUnchanged, pathFilter, PHONE_BUDGET,
   fitText, pickComment, reparse, revealLines, revealRow, sameItems, showsLine, sideLine, splitText, type DiffLine, type Gap,
 } from '../diff';
-import { matches, MOBILE_QUERY, useIsMobile, useTouch, watchSideways } from '../hooks/useMedia';
+import { keepFocusedInView, matches, MOBILE_QUERY, useIsMobile, useTouch, watchSideways } from '../hooks/useMedia';
 import { useRangeDrag, type CommentPick } from '../hooks/useRangeDrag';
+import { ScrollHide } from '../scrollhide';
 import { diffWrapToggle } from '../toggle';
 import { agentName, cx, idleStopped, relativeTime } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
+import { excerptMatches, excerptWhole, hasSuggestion, splitSuggestions, suggestionBlock, suggestions } from '../../shared/suggestion';
 
 const KIND: Record<ChangeKind, { letter: string; label: string }> = {
   added: { letter: 'A', label: 'added' },
@@ -26,6 +28,9 @@ const KIND: Record<ChangeKind, { letter: string; label: string }> = {
 
 const STATE_LABEL: Record<CommentState, string> = { draft: 'draft', queued: 'queued', sent: 'sent' };
 
+/** How long a note that something worked stays (errors stay until the next action). */
+const NOTE_FLASH_MS = 4000;
+
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
 /** A comment being written (id null) or edited, and the lines it's about. */
@@ -36,6 +41,11 @@ interface Editor {
   line: number;
   endLine: number;
   excerpt: string;
+  /**
+   * The lines Suggest a change puts in, whole and uncut; null when there's no button: removed
+   * lines, or a comment whose stored excerpt was cut and whose lines the diff doesn't show as written.
+   */
+  suggestFrom: string | null;
 }
 
 /** Where each visible comment goes: after a row of its file's diff, at the top of the file, or above every file. */
@@ -57,6 +67,8 @@ interface SectionActions {
   comment: (path: string, i: number, pick?: CommentPick) => void;
   edit: (c: ReviewComment) => void;
   remove: (c: ReviewComment) => Promise<void>;
+  /** Writes a draft's suggestion into the file; undefined where suggestions can't be applied (a PR review). */
+  apply: ((c: ReviewComment, at: ApplySuggestionRequest) => Promise<void>) | undefined;
   save: (text: string) => Promise<void>;
   cancel: () => void;
   section: (path: string, el: HTMLElement | null) => void;
@@ -168,6 +180,9 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
   const wrap = diffWrapToggle.use();
   const sections = useRef(new Map<string, HTMLElement>());
   const body = useRef<HTMLDivElement>(null);
+  const head = useRef<HTMLDivElement>(null);
+  /** On a phone, how far the header has slid up out of view while the diff scrolls down (0: shown). */
+  const [headShift, setHeadShift] = useState(0);
   /** The file last jumped to; short files at the end can't scroll to the top, so position alone can't tell. */
   const lastJump = useRef(-1);
 
@@ -179,6 +194,14 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
   /** The line a shift-click (or a second tap) extends a range from. */
   const [pick, setPick] = useState<{ path: string; side: CommentSide; line: number } | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** A note that something worked, gone after NOTE_FLASH_MS unless another note took its place. */
+  const flash = (text: string) => {
+    setNote(text);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setNote((n) => (n === text ? null : n)), NOTE_FLASH_MS);
+  };
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
   const [sending, setSending] = useState(false);
 
   // Refetch when the footer's numbers move (the server refreshes them periodically) or on Refresh.
@@ -221,6 +244,24 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
       cancelled = true;
     };
   }, [session.id, session.comments.drafts, session.comments.queued, tick]);
+
+  // On a phone the header slides away as the diff scrolls down and comes back as it scrolls up,
+  // as the browser's own bars do; never while focus is in it (a menu open, the base being picked).
+  useEffect(() => {
+    const el = body.current;
+    if (!mobile || !el) {
+      setHeadShift(0);
+      return;
+    }
+    const hide = new ScrollHide();
+    const scrolled = () => {
+      if (head.current?.contains(document.activeElement)) return;
+      const hidden = hide.update(el.scrollTop, performance.now(), el.scrollHeight - el.clientHeight);
+      setHeadShift((was) => (!hidden ? 0 : was || (head.current?.offsetHeight ?? 0)));
+    };
+    el.addEventListener('scroll', scrolled, { passive: true });
+    return () => el.removeEventListener('scroll', scrolled);
+  }, [mobile]);
 
   const files = useMemo(() => data?.files ?? [], [data]);
 
@@ -544,7 +585,7 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
     setPick({ path, side, line: c.anchor });
     // Switching from editing a comment starts a fresh one; a new comment keeps what was typed.
     if (editor?.id) draftText.current = '';
-    setEditor({ id: null, path, side, line: c.line, endLine: c.endLine, excerpt: c.excerpt });
+    setEditor({ id: null, path, side, line: c.line, endLine: c.endLine, excerpt: c.excerpt, suggestFrom: side === 'new' ? c.excerpt : null });
   };
 
   const closeEditor = () => {
@@ -567,7 +608,21 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
 
   const edit = (c: ReviewComment) => {
     draftText.current = c.body;
-    setEditor({ id: c.id, path: c.path, side: c.side, line: c.line, endLine: c.endLine, excerpt: c.excerpt });
+    setEditor({ id: c.id, path: c.path, side: c.side, line: c.line, endLine: c.endLine, excerpt: c.excerpt, suggestFrom: suggestFrom(c) });
+  };
+
+  /**
+   * What Suggest a change starts from when editing `c`: its lines as the diff shows them, while they
+   * still end with its excerpt; else the excerpt, only if the server kept it whole (its last 20
+   * lines, long ones cut, wouldn't do: applied, they'd replace the whole range).
+   */
+  const suggestFrom = (c: ReviewComment): string | null => {
+    if (c.side !== 'new') return null;
+    const lines = parsed.get(c.path);
+    const i = lines ? anchorComment(lines, c) : null;
+    const at = lines && i !== null ? applyRange(lines, lines[i], c) : null;
+    if (at && excerptMatches(at.current, c.excerpt)) return at.current.join('\n');
+    return excerptWhole(c.excerpt, c.endLine - c.line + 1) ? c.excerpt : null;
   };
 
   const remove = async (c: ReviewComment) => {
@@ -580,12 +635,24 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
     }
   };
 
+  const applySuggestion = async (c: ReviewComment, at: ApplySuggestionRequest) => {
+    setNote(null);
+    try {
+      await api.applySuggestion(session.id, c.id, at);
+      setComments((cs) => cs.filter((x) => x.id !== c.id));
+      flash(`Applied the suggestion to ${c.path}.`);
+      setTick((t) => t + 1);
+    } catch (e) {
+      setNote(errorMessage(e));
+    }
+  };
+
   const send = async () => {
     setSending(true);
     setNote(null);
     try {
       const r = await api.sendComments(session.id);
-      if (r.sent) setNote(`Sent ${plural(r.sent, 'comment')} to Kode.`);
+      if (r.sent) flash(`Sent ${plural(r.sent, 'comment')} to Kode.`);
       setComments(await api.comments(session.id));
     } catch (e) {
       setNote(errorMessage(e));
@@ -621,6 +688,7 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
     comment: startComment,
     edit,
     remove,
+    apply: applySuggestion,
     save,
     cancel: closeEditor,
     section: (path, el) => {
@@ -628,6 +696,8 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
       else sections.current.delete(path);
     },
   };
+  // In a PR review a suggestion is the user's review comment for the PR's author, never applied here.
+  const applies = session.kind !== 'review-pr';
   const actions = useMemo((): SectionActions => {
     const h = () => handlers.current as SectionActions;
     return {
@@ -636,12 +706,13 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
       comment: (path, i, pick) => h().comment(path, i, pick),
       edit: (c) => h().edit(c),
       remove: (c) => h().remove(c),
+      apply: applies ? (c, at) => (h().apply as NonNullable<SectionActions['apply']>)(c, at) : undefined,
       save: (text) => h().save(text),
       cancel: () => h().cancel(),
       section: (path, el) => h().section(path, el),
       expand: (path, g, how) => h().expand(path, g, how),
     };
-  }, []);
+  }, [applies]);
   const commitSha = data?.commit?.sha;
   const imageUrl = useCallback(
     (side: ChangeSide, path: string, v: number) => api.changeImageUrl(session.id, path, side, v, commitSha),
@@ -650,7 +721,7 @@ export function ChangesPanel({ session, onClose, reveal, onBack }: {
 
   return (
     <SidePanel name="changes" label="Changes" className="design-panel changes-panel" onKeyDown={keys}>
-      <div className="design-hd">
+      <div className="design-hd" ref={head} style={headShift ? { marginTop: -headShift } : undefined} inert={headShift > 0}>
         <b>Changes</b>
         {data && <CommitMenu commits={data.commits} current={data.commit} onPick={setCommit} />}
         {data && (
@@ -1144,8 +1215,10 @@ function CommentCard({
   away,
   shownAt,
   withPath,
+  applyAt,
   onEdit,
   onDelete,
+  onApply,
 }: {
   c: ReviewComment;
   /** Why the comment isn't on a row: its lines changed, or they aren't in the diff shown. */
@@ -1153,10 +1226,15 @@ function CommentCard({
   /** The line it's shown at now, which moves when lines are added or removed above it. */
   shownAt: number | null;
   withPath?: boolean;
+  /** Where its lines are now and their text, when its suggestion can be applied. */
+  applyAt?: ApplySuggestionRequest | null;
   onEdit: () => void;
   onDelete: () => Promise<void>;
+  onApply?: (at: ApplySuggestionRequest) => Promise<void>;
 }) {
   const shift = shownAt === null ? 0 : shownAt - c.endLine;
+  const parts = splitSuggestions(c.body);
+  const suggests = c.side === 'new' && parts.some((p) => p.kind === 'suggestion');
   return (
     <div className={cx('cmt', c.state === 'sent' && 'sent')}>
       <div className="cmt-meta">
@@ -1169,6 +1247,15 @@ function CommentCard({
         <span className="sp" />
         {c.state === 'draft' && (
           <>
+            {applyAt && onApply && (
+              <ConfirmButton
+                className="link-btn"
+                label="Apply"
+                confirmLabel="Apply"
+                prompt="Write this change into the file?"
+                onConfirm={() => onApply(applyAt)}
+              />
+            )}
             <button className="link-btn" onClick={onEdit}>
               Edit
             </button>
@@ -1176,15 +1263,63 @@ function CommentCard({
           </>
         )}
       </div>
-      {away && c.excerpt && (
-        <>
-          <p className={cx('cmt-outdated-note', away === 'hidden' && 'neutral')}>{AWAY_NOTE[away]}</p>
-          <pre className="cmt-excerpt">{c.excerpt}</pre>
-        </>
+      {away && (c.excerpt || suggests) && <p className={cx('cmt-outdated-note', away === 'hidden' && 'neutral')}>{AWAY_NOTE[away]}</p>}
+      {away && c.excerpt && !suggests && <pre className="cmt-excerpt">{c.excerpt}</pre>}
+      {suggests ? (
+        parts.map((p, k) =>
+          p.kind === 'text' ? (
+            <div key={k} className="cmt-body">
+              {p.text}
+            </div>
+          ) : (
+            <Suggestion key={k} c={c} lines={p.lines} />
+          ),
+        )
+      ) : (
+        <div className="cmt-body">{c.body}</div>
       )}
-      <div className="cmt-body">{c.body}</div>
     </div>
   );
+}
+
+/** A suggested change: the lines the comment was written on, then the lines suggested in their place. */
+export function Suggestion({ c, lines }: { c: Pick<ReviewComment, 'line' | 'endLine' | 'excerpt'>; lines: string[] }) {
+  const old = c.excerpt ? c.excerpt.split('\n') : [];
+  const cut = c.endLine - c.line + 1 - old.length;
+  return (
+    <div className="cmt-sugg">
+      <div className="cmt-sugg-hd">Suggested change</div>
+      <div className="cmt-sugg-box" ref={watchSideways}>
+        {cut > 0 && <div className="cmt-sugg-cut">{cut === 1 ? '1 earlier line not shown' : `${cut.toLocaleString()} earlier lines not shown`}</div>}
+        {old.map((l, k) => (
+          <div key={`o${k}`} className="cmt-sugg-ln dl-del">
+            <span className="sign" aria-label="removed">
+              −
+            </span>
+            <span className="code">{l.replace(/\r$/, '')}</span>
+          </div>
+        ))}
+        {lines.map((l, k) => (
+          <div key={`n${k}`} className="cmt-sugg-ln dl-add">
+            <span className="sign" aria-label="added">
+              +
+            </span>
+            <span className="code">{l}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Where Apply writes `c`'s suggestion, when it may: the lines it's drawn on now, while they still
+ * end with the text it was written on. A comment is drawn where its last line is, which needn't
+ * be its whole range (a line added inside it, a nearer match).
+ */
+function applyable(lines: DiffLine[], row: DiffLine, c: ReviewComment): ApplySuggestionRequest | null {
+  const at = applyRange(lines, row, c);
+  return at && excerptMatches(at.current, c.excerpt) ? at : null;
 }
 
 /** Comment cards, the one being edited as its editor: `away` for comments not placed on a row, `row` for the row the others follow. */
@@ -1197,6 +1332,7 @@ function Thread({
   away,
   withPath,
   row,
+  lines,
 }: {
   comments: ReviewComment[];
   editor: Editor | null;
@@ -1207,7 +1343,10 @@ function Thread({
   away?: boolean;
   withPath?: boolean;
   row?: DiffLine;
+  /** The file's rows, which a suggestion's Apply reads its lines from. */
+  lines?: DiffLine[] | null;
 }) {
+  const apply = actions.apply;
   return comments.map((c) =>
     editor?.id === c.id ? (
       <CommentEditor key={c.id} editor={editor} draft={draft} onSave={actions.save} onCancel={actions.cancel} />
@@ -1218,8 +1357,10 @@ function Thread({
         away={away ? (changed?.has(c.id) ? 'changed' : 'hidden') : undefined}
         shownAt={row ? sideLine(row, c.side) : null}
         withPath={withPath}
+        applyAt={apply && row && lines && c.state === 'draft' && suggestions(c.body).length === 1 ? applyable(lines, row, c) : null}
         onEdit={() => actions.edit(c)}
         onDelete={() => actions.remove(c)}
+        onApply={apply && ((at) => apply(c, at))}
       />
     ),
   );
@@ -1239,7 +1380,37 @@ function CommentEditor({
   const [text, setText] = useState(draft.current);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const card = useRef<HTMLDivElement>(null);
   const label = linesLabel(editor.side, editor.line, editor.endLine);
+  // The keyboard coming up shrinks the panel and would leave the editor under its bottom edge.
+  useEffect(() => {
+    const box = card.current?.closest<HTMLElement>('.changes-body');
+    return card.current && box ? keepFocusedInView(card.current, box) : undefined;
+  }, []);
+
+  const change = (next: string) => {
+    setText(next);
+    draft.current = next;
+  };
+
+  /** Puts the picked lines in a suggestion block at the cursor, on lines of their own, with the cursor on its first line. */
+  const suggest = () => {
+    const el = input.current;
+    const from = el?.selectionStart ?? text.length;
+    const to = el?.selectionEnd ?? text.length;
+    const before = text.slice(0, from);
+    const after = text.slice(to);
+    const block = suggestionBlock(editor.suggestFrom ?? '');
+    const lead = before && !before.endsWith('\n') ? '\n' : '';
+    const tail = after && !after.startsWith('\n') ? '\n' : '';
+    change(before + lead + block + tail + after);
+    const at = before.length + lead.length + block.indexOf('\n') + 1;
+    requestAnimationFrame(() => {
+      input.current?.focus();
+      input.current?.setSelectionRange(at, at);
+    });
+  };
 
   const submit = async () => {
     if (!text.trim() || busy) return;
@@ -1254,21 +1425,28 @@ function CommentEditor({
   };
 
   return (
-    <div className="cmt editing">
+    <div className="cmt editing" ref={card}>
       <div className="cmt-meta">
         {editor.id && <span className="cmt-state draft">editing</span>}
         <span>{label}</span>
+        <span className="sp" />
+        {editor.suggestFrom !== null && (
+          <button type="button" className="btn small cmt-suggest" onClick={suggest}>
+            <svg className="cmt-suggest-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path d="M8 1.5v7M4.5 5h7M4.5 13h7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+            Suggest a change
+          </button>
+        )}
       </div>
       <textarea
+        ref={input}
         id={`comment-editor-${editor.id ?? 'new'}`}
-        className="cmt-input"
+        className={cx('cmt-input', hasSuggestion(text) && 'code')}
         aria-label={`Comment on ${label}`}
         autoFocus
         value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          draft.current = e.target.value;
-        }}
+        onChange={(e) => change(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
@@ -1422,7 +1600,7 @@ const FileSection = memo(function FileSection({
               if (!cs && !here) return null;
               return (
                 <>
-                  {cs && <Thread comments={cs} editor={editor} draft={draft} actions={actions} row={lines?.[i]} />}
+                  {cs && <Thread comments={cs} editor={editor} draft={draft} actions={actions} row={lines?.[i]} lines={lines} />}
                   {here && <CommentEditor key="new" editor={editor} draft={draft} onSave={actions.save} onCancel={actions.cancel} />}
                 </>
               );

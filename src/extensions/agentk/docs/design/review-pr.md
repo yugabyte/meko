@@ -90,6 +90,9 @@ user asks; then Claude posts one review with their comments inline
 (`gh api repos/<owner>/<name>/pulls/<n>/reviews`), with the verdict they give. Comments left in
 the Changes panel go out through the `review-pr-comments` template: they're the user's review
 comments, to answer or draft as review comments, never changes to make or comments of Claude's own.
+A comment's suggested change (a ```` ```suggestion ```` block) is kept as it is in the drafted
+comment, over the same lines, so GitHub shows it as a suggestion the author can commit; it has no
+**Apply** here, since the worktree is the author's branch.
 
 **Keeping up with the PR.** The session is polled like a Pull Request one (every 45 seconds and at
 each turn end, `prWatch`), and nothing is sent to Claude by itself, so waiting costs no tokens.

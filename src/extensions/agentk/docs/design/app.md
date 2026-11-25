@@ -333,6 +333,44 @@ still shows its line with other text, otherwise as not in the diff shown. Deleti
 first. Sent comments are
 kept and shown with **Show sent**.
 
+### Suggested changes
+
+A comment on added or unchanged lines can suggest a change, as on GitHub: **± Suggest a change**
+in the comment's editor puts its lines in a ```` ```suggestion ```` block at the cursor, to edit
+into the text you want there (an empty block deletes them). Removed lines take no suggestion, and
+the server refuses one there. The suggestion stays in the comment's body, in GitHub's syntax
+(`src/shared/suggestion.ts`), so nothing new is stored and a Review a PR session can post it to
+GitHub as a real suggestion. Its card draws it as − and + lines, colored like the diff's rows, in
+a box of its own that scrolls sideways (or wraps with **Wrap lines**), with a line saying how many
+earlier lines the 20-line excerpt left out.
+
+Sent to Claude, each comment with a suggestion ends with a line saying what it means
+(`suggestionNote()` in `src/server/comments.ts`), so a repo's own `comments` or
+`review-pr-comments` template still carries it: in a task, the exact text to put in place of those
+lines; in a Review a PR session, the block to keep as it is in the review comment, posted over the
+same lines (`start_line` and `line`, side `RIGHT`) so GitHub shows it as a suggested change.
+
+A draft with one suggestion, shown on its lines, also has **Apply** (it asks first), outside a
+Review a PR session. It writes the suggestion into the worktree file at once, then deletes the
+draft (`POST /api/sessions/:id/comments/:cid/apply`, `CommentService.apply`, `replaceLines()` in
+`src/server/changes.ts`), and refreshes the footer's diff size. The panel sends where the lines are
+in the diff shown now and their text (`applyRange()` in `src/web/diff.ts`). A comment is drawn
+where its last line is, which needn't be its whole range, so both the panel and the server first
+check that those lines still end with the comment's excerpt, the text the suggestion was written
+against (`excerptMatches()` in `src/shared/suggestion.ts`). The server then writes only while the
+file still has exactly that text there, which the stored excerpt, cut short, couldn't prove. It
+refuses while the agent is mid-turn (starting, working or waiting on a prompt) or has background
+tasks running, so it never writes under the agent's edit, and keeps the file's line endings and
+final newline. It writes only inside the worktree, by real path, and never in a `.git` folder,
+as asked or as a symlink resolves. A failed write says why (a read-only file, a full disk).
+
+Editing a draft, **± Suggest a change** starts from its lines as the diff shows them, while they
+still end with its excerpt. Otherwise it starts from the stored excerpt, only if that holds the
+whole range uncut (`excerptWhole()`); with neither, the button isn't offered. The excerpt keeps
+only the last 20 lines and cuts long ones, so a suggestion built from it alone, once applied,
+would replace the whole range with part of it. A suggestion typed into a comment on removed
+lines is refused when it's saved, as when it's written.
+
 ## Side panels
 
 The design doc and the changes panel open on the right of the terminal, one at a time. Drag the
