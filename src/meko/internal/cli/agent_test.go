@@ -366,6 +366,9 @@ func TestFirstStartMovesAgentsBackOnce(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	// The move is recorded after Kiro's file is written: a stop before then leaves it for the next
+	// start, by design.
+	waitSetting(t, dir, keyAgentsOnThisMeko)
 	code, out, errs = run("stop", "--data-dir", dir, "--keep-extensions")
 	want(t, "stop", code, 0, out+errs, "stopped")
 	kiroAt(t, cloud+"/mcp", testCloudKey)
@@ -377,6 +380,24 @@ func TestFirstStartMovesAgentsBackOnce(t *testing.T) {
 	}
 	if _, err := os.Stat(agentsLock(paths.New(dir))); err != nil {
 		t.Errorf("the move took no lock: %v", err)
+	}
+}
+
+// waitSetting waits for the running server to record key in the data folder's database.
+func waitSetting(t *testing.T, dir, key string) {
+	t.Helper()
+	st, err := store.Open(paths.New(dir).DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if _, ok, err := st.Setting(context.Background(), key); err == nil && ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the server didn't record %s", key)
+		}
 	}
 }
 
