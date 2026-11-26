@@ -79,11 +79,11 @@ enum MekoError: LocalizedError {
     case noCLI, notRunning, unreachable(String), webOff, answersOff, api(String)
     var errorDescription: String? {
         switch self {
-        case .noCLI: return "Meko isn't installed: install it, then run meko menubar start."
-        case .notRunning: return "Meko isn't running: run meko start."
-        case .unreachable(let at): return "Meko isn't answering at \(at): run meko status."
-        case .webOff: return "Meko's web UI is off: run meko ui start to open it."
-        case .answersOff: return "Chat writes its answers through your own Claude Code: run meko answers use claude to turn it on."
+        case .noCLI: return "Meko isn't installed: install it, then run `meko menubar start`."
+        case .notRunning: return "Meko isn't running: run `meko start`."
+        case .unreachable(let at): return "Meko isn't answering at \(at): run `meko status`."
+        case .webOff: return "Meko's web UI is off: run `meko ui start` to open it."
+        case .answersOff: return "Chat writes its answers through your own Claude Code: run `meko answers use claude` to turn it on."
         case .api(let m): return m
         }
     }
