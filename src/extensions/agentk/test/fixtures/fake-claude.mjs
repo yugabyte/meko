@@ -117,7 +117,10 @@ for (let i = 0; i < args.length; i++) {
 // Like Claude Code: a group's matcher is a regex on the tool name ('*' or none matches all).
 const matches = (matcher, tool) => !matcher || matcher === '*' || !tool || new RegExp(`^(?:${matcher})$`).test(tool);
 
-/** Runs the hooks for an event; returns what they printed (a PreToolUse decision, if any). */
+/**
+ * Runs the hooks for an event; returns what they printed (a PreToolUse decision, if any). Each event
+ * fired goes to `hooks.jsonl` in the fake's dir once its hooks returned: the server has taken it then.
+ */
 function hook(event, extra = {}) {
   const groups = settings.hooks?.[event] ?? [];
   let out = '';
@@ -132,6 +135,7 @@ function hook(event, extra = {}) {
       }
     }
   }
+  appendFileSync(join(dir, 'hooks.jsonl'), JSON.stringify({ sessionId, event }) + '\n');
   return out;
 }
 

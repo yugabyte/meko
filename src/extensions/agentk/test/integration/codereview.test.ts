@@ -307,9 +307,10 @@ describe('code review before the PR (real session host + git, fake claude runnin
       const sent = prompts(claudeSessionId);
       expect(sent.at(-2)).toBe('Tidy up the tests.');
       expect(sent.filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
+      // The stage moves before the PR prompt is typed, and the review is marked sent once it is: after its step.
+      expect(await stepsDone(id)).toBe('done');
       expect(finished(id)).not.toBeNull();
       expect(env.core.sessions.row(id).queued_gate).toBeNull();
-      expect(await stepsDone(id)).toBe('done');
     }
 
     it('queues Open PR, and its PR prompt goes when the turn ends', async () => {

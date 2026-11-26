@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -116,18 +117,14 @@ func TestInstallPicksAFreePort(t *testing.T) {
 	noRealExtensions(t)
 	t.Setenv("MEKO_PORT", "") // the default port, in effect: nobody chose it
 	defaultPortTaken(t)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = ln.Close() }()
+	ln := portBelowEphemeral(t)
 	taken := tcpPort(t, ln)
 	l := paths.New(dir)
-	if err = l.Ensure(); err != nil {
+	if err := l.Ensure(); err != nil {
 		t.Fatal(err)
 	}
 	// A port an earlier install picked counts as nobody's choice too, so it moves again.
-	if err = config.SetPickedPort(l.Config, taken); err != nil {
+	if err := config.SetPickedPort(l.Config, taken); err != nil {
 		t.Fatal(err)
 	}
 	next := taken + 1
@@ -146,6 +143,29 @@ func TestInstallPicksAFreePort(t *testing.T) {
 	if p, _ := readInt(l.Port); p != next {
 		t.Errorf("the server listens on %d, want %d", p, next)
 	}
+}
+
+// portBelowEphemeral listens on a free port below the kernels' ephemeral ranges (Linux's from
+// 32768, macOS's from 49152) whose next port is free too. Install moves Meko to the next port, so
+// that port must be one no other program is handed meanwhile: Linux gives every outgoing
+// connection an even source port, one after a listener's odd :0 port, and macOS hands its ports
+// out in order, so a :0 port's next one is often a parallel test's.
+func portBelowEphemeral(t *testing.T) net.Listener {
+	t.Helper()
+	start := 20000 + 2*rand.IntN(5000) //nolint:gosec // G404: a test's port, not a secret
+	for p := start; p < start+400; p += 2 {
+		ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(p)))
+		if err != nil {
+			continue
+		}
+		if portFree(p+1) == nil {
+			t.Cleanup(func() { _ = ln.Close() })
+			return ln
+		}
+		_ = ln.Close()
+	}
+	t.Fatalf("no two free ports from %d", start)
+	return nil
 }
 
 // brokenService is a service whose server fails at every start, as serve does: its error in
