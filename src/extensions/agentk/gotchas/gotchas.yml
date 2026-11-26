@@ -14,15 +14,16 @@
 #
 # Each run mines the 7 whole days (UTC) before the day it runs, so weekly runs follow on from each
 # other however late each starts; or, run by hand with `since`, from that day until now: use that
-# to backfill, or to cover a run that failed. A PR counts by when it merged, but a direct commit by
-# its own date, so one pushed after the run that covered that date is missed: a run with `since`
-# picks it up. PRs merged into the default branch (with comments from the repo's owners, members and
-# collaborators) and direct commits are read with gh; claude -p, with no tools, answers with new
+# to backfill, or to cover a run that failed. A PR is mined in the week it merged, and a direct
+# commit in the week of its commit date, which can be days before it's pushed: a commit made on a
+# Friday but pushed after the next Monday's run is never mined, unless a run with `since` covers
+# that Friday. PRs merged into the default branch (with comments from the repo's owners, members
+# and collaborators) and direct commits are read with gh; claude -p, with no tools, answers with new
 # gotchas, updates and retirements as JSON; the script checks the answer and writes one Meko
 # document per gotcha (MG-1.md, MG-2.md, ...). Most weeks add nothing, which is expected. To remove
 # a gotcha, delete its document in Meko. Its id isn't given out again: the datapack's description
 # records the highest id issued, so leave that sentence in it.
-name: Gotchas
+name: Meko Gotchas
 
 on:
   schedule:
@@ -84,7 +85,7 @@ jobs:
           node-version: 22
 
       - name: Install Claude Code
-        run: npm install --prefix "$RUNNER_TEMP/claude" --no-audit --no-fund --loglevel=error @anthropic-ai/claude-code@2.1.319
+        run: npm install --prefix "$RUNNER_TEMP/claude" --no-audit --no-fund --loglevel=error @anthropic-ai/claude-code
 
       - name: Mine gotchas
         id: mine
@@ -277,7 +278,7 @@ jobs:
               [ "${#notes[@]}" -eq 0 ] || printf '%s\n\n' "${notes[@]}" | awk '!seen[$0]++'
               if [ "$created" = true ]; then
                 printf 'This run created the datapack `%s` (`%s`). For repos that use Kode, add it to `MEKO.md` at the repository'"'"'s root, as below; if that file already has this table, add only the last row to it:\n\n' "$datapack" "$datapack_id"
-                printf '```\n| Datapack | ID | What'"'"'s in it |\n|---|---|---|\n| `%s` | `%s` | Gotchas to watch out for in this repo: the mistakes reviewers here have caught before. Search it with `knowledgebase_search`, and don'"'"'t write to it: the Gotchas workflow fills it. |\n```\n' "$datapack" "$datapack_id"
+                printf '```\n| Datapack | ID | What'"'"'s in it |\n|---|---|---|\n| `%s` | `%s` | Gotchas to watch out for in this repo: the mistakes reviewers here have caught before. Search it with `knowledgebase_search`, and don'"'"'t write to it: the Meko Gotchas workflow fills it. |\n```\n' "$datapack" "$datapack_id"
               elif [ -n "$datapack_id" ]; then
                 printf 'Datapack `%s` (`%s`) holds %s gotcha(s).\n' "$datapack" "$datapack_id" "$corpus_size"
               elif [ "$dry" = true ] && [ "$looked" = true ]; then
@@ -623,7 +624,7 @@ jobs:
           looked=true
           if [ -z "$datapack_id" ] && [ "$dry" = false ] && [ "$chunks" -gt 0 ]; then
             # An API key can only create datapacks as meko_agent, the agent every account has.
-            description="Review gotchas mined from this repository's merged pull requests and commits by the Gotchas workflow."
+            description="Review gotchas mined from this repository's merged pull requests and commits by the Meko Gotchas workflow."
             datapack_id=$(meko POST /datapacks "$(jq -nc --arg n "$datapack" --arg d "$description" '{name: $n, agent_id: "meko_agent",
               description: $d}')" | jq -r '.datapack_id // empty')
             [ -n "$datapack_id" ] || die "Meko made the datapack $datapack but didn't say its id"
