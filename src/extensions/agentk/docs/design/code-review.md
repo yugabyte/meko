@@ -142,7 +142,17 @@ user cancels it, when another review replaces it, and with its task; a failed re
 Retry. Its edit guard denies every
 edit in the repo, and on Claude Code `--disallowedTools` takes Bash and the edit and web tools away
 from it and its subagents; OpenCode's session config denies them. Its first prompt is the first
-sweep's, and Kode sends each later step's prompt as the turn before ends.
+sweep's, and Kode sends each later step's prompt as the turn before ends. It's launched with
+`--add-dir` for its design folder and its review's run folder (`run/reviews/<review id>`). Newer
+Claude Code asks about each `--add-dir` folder it hasn't worked in ("Adding a new directory … Is
+this a directory you created or one you trust?") and fires no hooks until it's answered. With no
+tab to answer in, the review would look stuck. Kode trusts both folders before the launch, as it
+trusts the repo (`beforeLaunch`), and removes those entries when the session is archived
+(`untrustFolders`: checked again as an add is, best effort, since a Claude writing back its older
+copy of `~/.claude.json` can restore them). Whether that trust stops the dialog is unmeasured: it
+writes the folder-trust key, and the Claude Code here (2.1.319) doesn't show the dialog. What's
+tested is the fallback: `TRUST_PROMPT_RE` knows the dialog, and the review shows as waiting on you
+(below).
 
 **Steps.** The main thread only starts steps. Each pass and each scorer runs with a fresh context,
 as the cloud's separate processes do (`HARNESS_CAPS.reviewSteps`):

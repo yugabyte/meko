@@ -1337,21 +1337,25 @@ export class SessionManager {
     // kept. The launch's env gets it now; the row keeps it only once nothing still running is in the way.
     const first = opts.resume ? row.first_prompt : opts.prompt ? firstLine(opts.prompt) || null : null;
     const h = this.harness(row);
-    await h.beforeLaunch({ paths: this.core.paths, cfg: this.core.config, log: this.core.log, row, repo: sessionRepo(this.db, row) });
+    // A code-review session reads its steps' prompts from its review's run folder, and always has
+    // Kode's MCP server: its steps report through it, whatever `[tools] enabled` says.
+    const review = row.kind === 'code-review' ? this.core.reviews.launchForSession(row) : null;
+    // Its design folder, and a code-review session's run folder (its own review's on a resume): the
+    // same folders reconcile trusts and archive forgets.
+    const [designDir, ...runDirs] = this.launchDirs(row);
+    mkdirSync(designDir, { recursive: true });
+    for (const d of runDirs) mkdirSync(d, { recursive: true, mode: 0o700 });
+    const addDirs = [designDir, ...runDirs];
+    await h.beforeLaunch({ paths: this.core.paths, cfg: this.core.config, log: this.core.log, row, repo: sessionRepo(this.db, row), addDirs });
     this.pinDatapack(row);
     // In the background, reusing recent results: whether this session's Claude reaches Kode's Meko.
     if (this.core.mekoStatus.configured) void this.core.claudeMeko.refresh();
-    const designDir = join(this.core.paths.designs, row.id);
-    mkdirSync(designDir, { recursive: true });
     const modDir = (await h.modDir?.(this.core.paths, this.core.config)) ?? null;
     const conversation = await this.launchConversation(row, opts.conversation);
     const systemPrompt = this.systemPrompt(row, conversation);
     // A harness with no flag for it gets these lines from its context hook, at every start.
     this.systemLines.set(row.id, systemPrompt);
     const untrusted = !repoConfigTrusted(row);
-    // A code-review session reads its steps' prompts from its review's run folder, and always has
-    // Kode's MCP server: its steps report through it, whatever `[tools] enabled` says.
-    const review = row.kind === 'code-review' ? this.core.reviews.launchForSession(row) : null;
     const termTheme = this.core.termTheme();
     const script = writeLauncher(this.core.paths, h.launcher(this.core.paths, this.core.config, {
       row,
@@ -1360,7 +1364,7 @@ export class SessionManager {
       // Every launch, a resume's too: Claude Code resumed without --model runs on its default.
       model: row.model ?? null,
       systemPrompt,
-      addDirs: review ? [designDir, review.runDir] : [designDir],
+      addDirs,
       modDir,
       planMode: row.stage === 'design' && !!row.plan_mode,
       env: this.env({ ...row, first_prompt: first }),
@@ -2046,8 +2050,10 @@ export class SessionManager {
         const screen = await this.core.host.capture(row.tmux_name).catch(() => '');
         const h = this.harness(row);
         if (h.trustPrompt?.test(screen)) {
+          // So the next session (or this one's resume) skips it: the repo's dialog, or an --add-dir folder's.
           const repo = sessionRepo(this.db, row);
-          if (repo) await h.trustFolder?.(repo, this.core.log); // so the next session skips it
+          if (repo) await h.trustFolder?.(repo, this.core.log);
+          for (const d of this.launchDirs(row)) await h.trustFolder?.(claudePath(d), this.core.log);
           this.setStatus(row.id, 'needs_input', TRUST_DETAIL);
           this.notifyUser(row.id, 'Needs you', 'Confirm folder trust in the terminal.');
         } else if (h.setupPrompt?.test(screen) && row.status_detail !== SETUP_DETAIL) {
@@ -2640,6 +2646,15 @@ export class SessionManager {
   }
 
   /**
+   * Kode's own folders a session's launch passes as `--add-dir`: its design folder, and a
+   * code-review session's run folder. Only these get the trust `beforeLaunch` adds and archive takes back.
+   */
+  private launchDirs(row: SessionRow): string[] {
+    const runDir = this.core.reviews.runDirOf(row);
+    return [join(this.core.paths.designs, row.id), ...(runDir ? [runDir] : [])];
+  }
+
+  /**
    * Stops Claude and lets go of the worktree if it's clean (see freeWorktree). The branch is kept
    * unless asked. With force (Discard), uncommitted changes are thrown away first.
    */
@@ -2671,6 +2686,8 @@ export class SessionManager {
       // A review's copy of the PR's head (fetched again by any later review of it).
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
+      // The folder trust its launches added for its --add-dir folders (a resume adds it again).
+      await this.harness(row).untrustFolders?.(this.launchDirs(row), this.core.log);
       removePastes(this.core.paths.pastes, row.id);
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);
@@ -2783,8 +2800,10 @@ export class SessionManager {
         this.core.log.info(`kept the worktree of ${row.id} at ${row.worktree_path}: it has uncommitted changes`);
       }
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
-      // What its harness keeps for it (OpenCode's instructions and usage log): it can't run again.
+      // What its harness keeps for it (OpenCode's instructions and usage log, Claude Code's trust of
+      // its --add-dir folders): it can't run again.
       this.harness(row).forget?.(row);
+      await this.harness(row).untrustFolders?.(this.launchDirs(row), this.core.log);
       removePastes(this.core.paths.pastes, row.id);
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);

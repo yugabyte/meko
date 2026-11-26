@@ -222,10 +222,14 @@ Everything specific to one CLI sits behind one interface, `Harness` in `src/serv
 with an adapter per CLI (`claude.ts`, `opencode.ts`, `kiro.ts`) and the registry (`Harnesses` in `index.ts`). The
 session manager, projects and Ask Kode call a session's adapter rather than ask which harness it
 runs on. The adapter says how to prepare its files and settle what a launch needs first
-(`prepare`, `beforeLaunch`: Claude Code's folder trust and its first-run setup marked done, Kiro's
-agent file), which folders to trust and what its trust dialog and its first-run setup look like
+(`prepare`, `beforeLaunch`: Claude Code's folder trust, for the repo and for each of Kode's own
+folders the launch passes as `--add-dir` (`LaunchContext.addDirs`: the design folder, and a code
+review's run folder, which newer versions ask about too; whether the folder-trust key stops that
+dialog is unmeasured, and `trustPrompt` is the fallback), and its first-run setup marked done, Kiro's
+agent file), which folders to trust and what its trust dialogs and its first-run setup look like
 (`trustFolder`, `trustPrompt`, `setupPrompt`, Claude Code only: a session that shows either, before
-any hook, is marked as waiting on you, which takes the Starting panel off its terminal), its command line
+any hook, is marked as waiting on you, which takes the Starting panel off its terminal), the trust to
+take back for an archived session's `--add-dir` folders (`untrustFolders`, best effort), its command line
 (`launcher`, which also takes `LaunchInput.tools`: launch with [Kode's session tools](tools.md), and `LaunchInput.review`: a [code review](code-review.md)'s read-only subagents, one per model tier, as Claude Code's `--agents` and OpenCode's `agent` config; Kiro, whose `HARNESS_CAPS.reviewSteps` is `turns`, runs each step as a turn of its own, after `/clear` once the one before ends), its hooks (`normalize`, `deny`, `context`, `editedPaths`, and `mekoTool` for a CLI without the mod: which events open and close a Meko call for the dot's m), its conversation on disk
 (`canResume`, and `findConversation` for a CLI that picks its own id), the files a session's
 progress shows in (`activityFiles`, for the hookless fallback), whether a prompt sent between turns

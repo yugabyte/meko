@@ -10,7 +10,7 @@ import { errMsg, type Logger } from '../log.js';
 import { claudePath, type Paths } from '../paths.js';
 import { toolsMcpConfigPath, toolsPluginDir } from '../tools.js';
 import type { SessionRow } from '../store.js';
-import { SETUP_PROMPT_RE, TRUST_PROMPT_RE, skipClaudeSetup, trustFolder } from '../trust.js';
+import { SETUP_PROMPT_RE, TRUST_PROMPT_RE, skipClaudeSetup, trustFolder, untrustFolders } from '../trust.js';
 import { ingestSessionUsage, sessionTranscript } from '../usage.js';
 import type { CliStatus, Harness } from './types.js';
 
@@ -55,7 +55,7 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
       // wait for it, and New session and the banners know whether it's there.
       await deps.claudeCode.version();
     },
-    async beforeLaunch({ row, repo, log }) {
+    async beforeLaunch({ row, repo, addDirs, log }) {
       await skipClaudeSetup(log);
       // Claude Code keys folder trust by the git root, which for a worktree is the main repo, and
       // only the repo's own entry counts: a trusted home or repos folder doesn't.
@@ -64,8 +64,13 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
       // file names the stored spelling), so Claude asks about the worktree itself: trust exactly it.
       const cwd = claudePath(row.worktree_path);
       if (cwd !== row.worktree_path) await trustFolder(cwd, log);
+      // Newer versions ask about each --add-dir folder too ("Adding a new directory"). Which config
+      // key that dialog reads is unmeasured: this writes the folder-trust one, in the spelling the
+      // launcher passes. If it isn't that key, TRUST_PROMPT_RE still shows the session as waiting on you.
+      for (const d of addDirs) await trustFolder(claudePath(d), log);
     },
     trustFolder,
+    untrustFolders: (dirs, log) => untrustFolders([...new Set(dirs.flatMap((d) => [d, claudePath(d)]))], log),
     trustPrompt: TRUST_PROMPT_RE,
     setupPrompt: SETUP_PROMPT_RE,
     async modDir(paths, cfg) {

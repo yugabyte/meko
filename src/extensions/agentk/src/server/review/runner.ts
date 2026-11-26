@@ -754,6 +754,16 @@ export class CodeReviews {
     return task && r ? this.launchFor(r, task) : null;
   }
 
+  /**
+   * The run folder a code-review session reads (its `--add-dir`): its own review's, else, before the
+   * review names it, its task's latest one's (`launchForSession`). Null for any other session.
+   */
+  runDirOf(row: SessionRow): string | null {
+    if (row.kind !== 'code-review') return null;
+    const r = this.bySession(row.id);
+    return r ? join(this.core.paths.run, 'reviews', r.id) : (this.launchForSession(row)?.runDir ?? null);
+  }
+
   /** The subagents a review session gets, one per tier, on the harness's models. */
   launchFor(r: { id: string }, task: SessionRow): ReviewLaunch {
     const harness = harnessOf(task.harness);

@@ -1069,6 +1069,62 @@ describe('Claude folder trust', () => {
     expect(ensureOnboarded()).toBe('no-config');
     expect(exists(file)).toBe(false);
   });
+
+  it("forgets only the named folders' entries, by every spelling, and writes nothing when there's nothing to forget", async () => {
+    const { forgetWorkspaceTrust, ensureWorkspaceTrust } = await import('../../src/server/trust.js');
+    const { writeFileSync, readFileSync, mkdirSync, symlinkSync, realpathSync, mkdtempSync: mk, statSync, rmSync: rm } = await import('node:fs');
+    const dir = mk(join(tmpdir(), 'akl-untrust-'));
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    const file = join(dir, '.claude.json');
+    const read = () => JSON.parse(readFileSync(file, 'utf8')) as { other: number; projects: Record<string, unknown> };
+    writeFileSync(file, JSON.stringify({ projects: { '/home/u/code/demo': { hasTrustDialogAccepted: true } }, other: 1 }));
+    const real = join(dir, 'real', 'designs', 's1');
+    mkdirSync(real, { recursive: true });
+    symlinkSync(join(dir, 'real'), join(dir, 'link'));
+    const linked = join(dir, 'link', 'designs', 's1');
+    expect(ensureWorkspaceTrust(linked)).toBe('added');
+    expect(Object.keys(read().projects)).toEqual(['/home/u/code/demo', linked, realpathSync(real)]);
+    expect(forgetWorkspaceTrust([linked, join(dir, 'gone')])).toBe('removed');
+    expect(read()).toEqual({ projects: { '/home/u/code/demo': { hasTrustDialogAccepted: true } }, other: 1 });
+    const written = statSync(file).mtimeMs;
+    expect(forgetWorkspaceTrust([linked])).toBe('none');
+    expect(statSync(file).mtimeMs).toBe(written);
+    rm(file);
+    expect(forgetWorkspaceTrust([linked])).toBe('no-config');
+  });
+
+  it('removes an entry again when another Claude writes its older copy back right after', async () => {
+    const { untrustFolders } = await import('../../src/server/trust.js');
+    const { writeFileSync, readFileSync, mkdtempSync: mk } = await import('node:fs');
+    const dir = mk(join(tmpdir(), 'akl-untrust-again-'));
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    const file = join(dir, '.claude.json');
+    const old = JSON.stringify({ projects: { '/kode/designs/s1': { hasTrustDialogAccepted: true }, '/home/u/code/demo': { hasTrustDialogAccepted: true } } });
+    writeFileSync(file, old);
+    const { silentLogger: log } = await import('../../src/server/log.js');
+    const done = untrustFolders(['/kode/designs/s1'], log);
+    // An exiting Claude saves the copy it read before the removal.
+    await new Promise((r) => setTimeout(r, 100));
+    writeFileSync(file, old);
+    await done;
+    expect(JSON.parse(readFileSync(file, 'utf8')).projects).toEqual({ '/home/u/code/demo': { hasTrustDialogAccepted: true } });
+  });
+
+  it("knows Claude Code's folder-trust dialogs on screen, the --add-dir one's included", async () => {
+    const { TRUST_PROMPT_RE, SETUP_PROMPT_RE } = await import('../../src/server/trust.js');
+    // As a newer Claude Code draws it, the path wrapped across lines.
+    const addDir = [
+      ' Adding a new directory:', '', ' ~/.meko/extensions/kode/designs/acme--demo-review-26f9', ' 08', '',
+      " This session hasn't worked here before. Is this a directory", ' you created or one you trust?', '',
+      '   No, exit', ' ❯ Yes, add it', '', ' Enter to confirm · Esc to cancel',
+    ].join('\n');
+    const wrapped = " This session hasn't worked here before. Is this a directory\n you created or one you trust?";
+    for (const screen of [addDir, wrapped, 'Is this a project you created or one you trust?', 'Do you trust the files in this folder?', 'Yes, I trust this folder']) {
+      expect(TRUST_PROMPT_RE.test(screen), screen).toBe(true);
+    }
+    expect(SETUP_PROMPT_RE.test(addDir)).toBe(false);
+    expect(TRUST_PROMPT_RE.test('❯ review the change\n  ⏵⏵ auto mode on')).toBe(false);
+  });
 });
 
 describe('the Meko Kode uses', () => {
