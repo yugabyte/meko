@@ -154,7 +154,7 @@ answer 1 '{"new": [
  "retire": []}'
 mine || fail "first run failed: $(cat "$t/log")"
 [ "$(state '.packs | length')" = 1 ] || fail "first run: no datapack made"
-[ "$(state '.packs[].name')" = '"adlc/repo/demo-repo/workflow/gotchas"' ] || fail "first run: the datapack's name"
+[ "$(state '.packs[].name')" = '"adlc/repo/demo-repo/gotchas"' ] || fail "first run: the datapack's name"
 [ "$(state '.packs[].agent_id')" = '"meko_agent"' ] || fail "first run: the datapack's agent"
 has <(state -r '.packs[].description') "by the Gotchas workflow. Highest gotcha id issued: MG-1." "first run: the datapack's description"
 [ "$(state '[.docs[].filename]')" = "$(jq -n '["MG-1.md"]')" ] || fail "first run: documents $(state '[.docs[].filename]')"
@@ -243,9 +243,9 @@ has "$t/output" "added=0" "dry outputs"
 
 # --- Two documents for one id: the newer stays ------------------------------------------------
 
-curl -sSf -X POST "$meko/_seed" -d '{"datapack_name": "adlc/repo/demo-repo/workflow/gotchas", "filename": "MG-1.md",
+curl -sSf -X POST "$meko/_seed" -d '{"datapack_name": "adlc/repo/demo-repo/gotchas", "filename": "MG-1.md",
   "content": "# MG-1 — An old copy\n\nkind: other\n\nOld.\n", "uploaded_at": "2025-01-01T00:00:00Z"}' > /dev/null
-curl -sSf -X POST "$meko/_seed" -d '{"datapack_name": "adlc/repo/demo-repo/workflow/gotchas", "filename": "MG-1.md",
+curl -sSf -X POST "$meko/_seed" -d '{"datapack_name": "adlc/repo/demo-repo/gotchas", "filename": "MG-1.md",
   "content": "# MG-1 — A failed copy\n\nkind: other\n\nFailed.\n", "uploaded_at": "2027-01-01T00:00:00Z", "status": "FAILED"}' > /dev/null
 answer 5 '{"new": [{"title": "After a retire", "body": "b", "paths": [], "symbols": [], "kind": "other", "evidence": []}], "update": [], "retire": []}'
 mine || fail "the duplicate run failed: $(cat "$t/log")"
@@ -287,7 +287,7 @@ has "$t/claude/args.8" "[us.test-model]" "bedrock model"
 # --- Documents Meko won't give back are shown by id --------------------------------------------
 
 start_meko FAKE_MEKO_READ=refuse
-curl -sSf -X POST "$meko/_seed" -d '{"datapack_name": "adlc/repo/demo-repo/workflow/gotchas", "filename": "MG-4.md", "content": "# MG-4 — Hidden\n\nkind: other\n\nx\n"}' > /dev/null
+curl -sSf -X POST "$meko/_seed" -d '{"datapack_name": "adlc/repo/demo-repo/gotchas", "filename": "MG-4.md", "content": "# MG-4 — Hidden\n\nkind: other\n\nx\n"}' > /dev/null
 answer 9 '{"new": [{"title": "Next", "body": "n", "paths": [], "symbols": [], "kind": "other", "evidence": []}],
  "update": [{"id": "MG-4", "body": "y", "paths": [], "symbols": [], "add_evidence": [], "reason": "r"}], "retire": []}'
 mine || fail "the unreadable run failed: $(cat "$t/log")"
@@ -301,7 +301,7 @@ has "$t/doc" "Hidden" "an unreadable gotcha isn't rewritten"
 # --- Without since: the 7 whole days before today, and the highest id the description records --
 
 start_meko
-curl -sSf -X POST "$meko/_seed" -d '{"datapack_name": "adlc/repo/demo-repo/workflow/gotchas", "description": "Mine. Highest gotcha id issued: MG-8."}' > /dev/null
+curl -sSf -X POST "$meko/_seed" -d '{"datapack_name": "adlc/repo/demo-repo/gotchas", "description": "Mine. Highest gotcha id issued: MG-8."}' > /dev/null
 : > "$t/gh/calls"
 answer 10 '{"new": [{"title": "Numbered on", "body": "n", "paths": [], "symbols": [], "kind": "other", "evidence": []}], "update": [], "retire": []}'
 mine SINCE= || fail "the run without since failed: $(cat "$t/log")"

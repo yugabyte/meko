@@ -6,12 +6,8 @@
 # Set up:
 #   1. Copy this file to .github/workflows/gotchas.yml in your repository.
 #   2. Add a repository secret MEKO_TOKEN: a Meko API key with write access. Its account owns the
-#      datapack, adlc/repo/<repo name>/workflow/gotchas unless DATAPACK below names another. Give
-#      the workflow a datapack of its own: it numbers gotchas from what's in it, so another
-#      writer's MG-<n> documents would collide with its own. Keep the name ending in /gotchas:
-#      that's how Kode's code review knows a gotchas datapack. Run this workflow instead of Meko
-#      Cloud's gotchas miner for a repo, not beside it: both number from MG-1, and Kode's review
-#      names a gotcha by its id alone.
+#      datapack, adlc/repo/<repo name>/gotchas unless DATAPACK below names another. Keep the name
+#      ending in /gotchas: that's how Kode's code review knows a gotchas datapack.
 #   3. Add a repository secret ANTHROPIC_API_KEY, or use Bedrock (the commented lines below).
 #   4. Run it by hand from the Actions tab with dry-run on, and read the job summary: it lists what
 #      it would add. Then run it with dry-run off. From then on it runs every Monday.
@@ -54,7 +50,7 @@ concurrency:
 
 env:
   MEKO_URL: https://cloud.mekodata.ai
-  DATAPACK: '' # default adlc/repo/<repo name>/workflow/gotchas
+  DATAPACK: '' # default adlc/repo/<repo name>/gotchas
   PROVIDER: anthropic # or bedrock
   MODEL: '' # default opus; on Bedrock, a Claude model or inference profile id enabled in your account
   BUDGET: '15' # the most one run may spend on the model, in USD; 0 for no limit
@@ -115,7 +111,7 @@ jobs:
           }
 
           # The extraction prompt ({{REPO}}, {{CORPUS}} and {{MATERIAL}} are filled in per part), the JSON
-          # schema of Claude's answer, and a gotcha's document, MG-<n>.md: the cloud miner's, as they are.
+          # schema of Claude's answer, and a gotcha's document, MG-<n>.md.
           cat > "$work/prompt.md" << 'PROMPT'
           You are mining review knowledge for the repository {{REPO}}.
 
@@ -231,8 +227,8 @@ jobs:
           SCHEMA
           cat > "$work/document.jq" << 'DOCUMENT'
           # One gotcha as its knowledge-base document, MG-<n>.md: the id and title as the heading, the path
-          # and symbol scopes on their own lines, then the body. It's the cloud miner's format, which Kode's
-          # review reads; the upload carries no metadata, so everything is in the text.
+          # and symbol scopes on their own lines, then the body. It's the format Kode's review reads; the
+          # upload carries no metadata, so everything is in the text.
           #
           # Input: {body, kind, paths, symbols}. Arguments: $id and $t, the title.
           #
@@ -306,10 +302,10 @@ jobs:
 
           [ -n "$repo" ] || die "GITHUB_REPOSITORY isn't set: run this in GitHub Actions, or set it to owner/name"
           datapack=${DATAPACK:-}
-          [ -n "$datapack" ] || datapack=adlc/repo/${repo#*/}/workflow/gotchas
+          [ -n "$datapack" ] || datapack=adlc/repo/${repo#*/}/gotchas
           case $datapack in
             */gotchas) ;;
-            *) die "DATAPACK must end in /gotchas, as adlc/repo/${repo#*/}/workflow/gotchas does: Kode's code review only searches a gotchas datapack named that way, not $datapack" ;;
+            *) die "DATAPACK must end in /gotchas, as adlc/repo/${repo#*/}/gotchas does: Kode's code review only searches a gotchas datapack named that way, not $datapack" ;;
           esac
           api=${MEKO_URL:-https://cloud.mekodata.ai}
           api=${api%/}/api/v1
@@ -568,7 +564,7 @@ jobs:
           [ "$listed" -le 1000 ] ||
             die "$listed PRs merged in the window, more than the 1000 GitHub's search lists: run it by hand with a later since"
 
-          # Render as the cloud miner does: one block per commit and per PR, never split across chunks.
+          # Render the material as one block per commit and per PR, never split across chunks.
           # Commits a merged PR brought (its squash or merge commit, its branch's commits, its rebased
           # commits) are left out, since the PR is mined whole. PR titles, bodies and commit messages are
           # mined whoever wrote them, since a merge or a push endorses them; comments only from the repo's
