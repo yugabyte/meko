@@ -360,11 +360,15 @@ export async function readMergeBase(repo: string, branch: string): Promise<strin
 
 /**
  * Sets <branch>'s `gh-merge-base` to <base>. With `keep`, a value already there (one the user set
- * on an existing branch) stays. git drops the key with the branch.
+ * on an existing branch) stays. With `was` (the base Kode last kept there), it's replaced only
+ * when it's unset or still that value: one the user set stays. git drops the key with the branch.
  */
-export async function setMergeBase(repo: string, branch: string, base: string, o: { keep?: boolean } = {}): Promise<void> {
+export async function setMergeBase(repo: string, branch: string, base: string, o: { keep?: boolean; was?: string } = {}): Promise<void> {
   await checkBranchName(repo, branch);
-  if (o.keep && (await readMergeBase(repo, branch))) return;
+  if (o.keep || o.was !== undefined) {
+    const now = await readMergeBase(repo, branch);
+    if (now && (o.keep || now !== o.was)) return;
+  }
   await git(repo, 'config', mergeBaseKey(branch), base);
 }
 

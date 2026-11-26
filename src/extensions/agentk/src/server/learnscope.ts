@@ -1,5 +1,5 @@
 import type { LearnScope } from '../shared/types.js';
-import { gitWithin, tryGit } from './git.js';
+import { baseRemote, gitWithin, tryGit } from './git.js';
 import { learnSince } from './prompts.js';
 
 /** How long the estimate's tree and log reads may take before they're given up. */
@@ -90,14 +90,15 @@ export function parseTree(out: string): string[] {
 
 /**
  * How much a learn session's brief covers (`LearnScope`), from <repo>'s own git, with no fetch and
- * no GitHub calls: on `origin/<base>` as last fetched, else the local <base> (the worktree branches
- * from `origin/<base>` whenever it exists), the merged PRs in the window that starts `learnSince(months, now)`
+ * no GitHub calls: on `<remote>/<base>` as last fetched, the remote a new session's branch starts
+ * from (`baseRemote`: origin's, or a fork's upstream's when that's strictly ahead), else the local
+ * <base>, the merged PRs in the window that starts `learnSince(months, now)`
  * and the tracked files, both in the paths Where names, or in the whole repo when it names none.
  * The PRs are first-parent commits, one per PR for squash and merge commits (more for a repo that
  * rebases PRs in). Null when neither ref exists.
  */
 export async function learnScope(repo: string, base: string, where: string, months: number, now: number): Promise<LearnScope | null> {
-  const remote = `refs/remotes/origin/${base}`;
+  const remote = `refs/remotes/${await baseRemote(repo, base)}/${base}`;
   const ref = (await tryGit(repo, 'rev-parse', '--verify', '--quiet', remote)) ? remote
     : (await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${base}`)) ? `refs/heads/${base}` : null;
   if (!ref) return null;

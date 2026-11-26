@@ -284,7 +284,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       worktree), the same fast-forward of an existing branch a session starts on (from its remote,
       a fork's for a fork's PR), setting that branch's `branch.<b>.remote`/`.merge` to a fork's PR
       head, keeping a session's branch's `branch.<b>.gh-merge-base` at the session's base (never
-      over one the user set on an existing branch: `noteBase`), and an
+      over one the user set: `noteBase` writes it at the start only when it's unset, and on a base
+      change only while it still holds the old base), and an
       empty first commit on HEAD's branch of a repo with no commits and no files
       (`ensureFirstCommit()`, at project open or session start; a repo with files is refused, and an
       empty folder typed under Other folder is made a repo only after the name check), never a

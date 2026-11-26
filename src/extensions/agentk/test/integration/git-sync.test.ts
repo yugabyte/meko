@@ -258,6 +258,12 @@ describe("a fork's new sessions start from upstream's base when it's newer (real
     expect(await readMergeBase(repo, 'ak/x')).toBe('main');
     await setMergeBase(repo, 'ak/x', 'rel');
     expect(await readMergeBase(repo, 'ak/x')).toBe('rel');
+    // A base change replaces it only while it still holds the old base, so the user's value stays.
+    await setMergeBase(repo, 'ak/x', 'dev', { was: 'rel' });
+    expect(await readMergeBase(repo, 'ak/x')).toBe('dev');
+    git(repo, 'config', 'branch.ak/x.gh-merge-base', 'mine');
+    await setMergeBase(repo, 'ak/x', 'main', { was: 'dev' });
+    expect(await readMergeBase(repo, 'ak/x')).toBe('mine');
     git(repo, 'branch', '-D', 'ak/x');
     expect(await readMergeBase(repo, 'ak/x')).toBeNull(); // git drops it with the branch
   });

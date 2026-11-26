@@ -194,8 +194,8 @@ it (or in an idle worktree of the repo: see [Worktree reuse](projects-and-sessio
 local edits would be overwritten, or it is checked out in another session's worktree), the session starts from `origin/<base>` (or `upstream/<base>`) and the activity log
 says why. The new branch's `gh-merge-base` (gh's per-branch default base) is set to the session's
 base, and follows it whenever the base changes (the Changes panel, a PR's base), so
-`meko kode review` in its worktree reviews against it; on an existing branch, a value already
-there stays.
+`meko kode review` in its worktree reviews against it. A value the user set stays: at the start
+it's written only when unset, and on a base change only while it still holds the old base.
 
 **The dialog doesn't wait for the worktree.** On a big repo the fetch and checkout take minutes,
 so creating a session (`SessionManager.begin`) is in two parts. The quick checks come first and

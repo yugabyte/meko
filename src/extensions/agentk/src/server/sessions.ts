@@ -516,10 +516,12 @@ export class SessionManager {
   update(id: string, fields: Partial<Record<keyof SessionRow, string | number | null>>): void {
     const keys = Object.keys(fields);
     if (!keys.length) return;
+    // The base this replaces: its branch's gh-merge-base follows only while it still holds it.
+    const was = typeof fields.base_branch === 'string' ? sessionRow(this.db, id)?.base_branch : undefined;
     run(this.db, `UPDATE sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
       ...keys.map((k) => fields[k as keyof SessionRow] ?? null), id);
     // Every change of a session's base (a PR's, the Changes panel's) reaches its branch's gh-merge-base.
-    if (typeof fields.base_branch === 'string') void this.noteBase(id);
+    if (was !== undefined && was !== fields.base_branch) void this.noteBase(id, { was });
     this.core.changed();
   }
 
@@ -527,9 +529,11 @@ export class SessionManager {
    * Writes the session's base into its branch's `gh-merge-base` (git.ts `setMergeBase`), where
    * `meko kode review` run in its worktree finds it; the CLI never opens state.db. Not for a
    * Review a PR session, whose branch is Kode's own. With `keep` (a task started on an existing
-   * branch), a value the user set stays. Never fails: a review without it uses upstream/HEAD.
+   * branch), a value the user set stays; with `was` (a base change), it's replaced only while it
+   * still holds the old base, so a value the user set is never written over, by a change of theirs
+   * or one Kode makes (a PR's base). Never fails: a review without it uses upstream/HEAD.
    */
-  private async noteBase(id: string, o: { keep?: boolean } = {}): Promise<void> {
+  private async noteBase(id: string, o: { keep?: boolean; was?: string } = {}): Promise<void> {
     try {
       const r = sessionRow(this.db, id);
       if (!r || r.kind === 'review-pr' || !r.branch || !r.base_branch || r.base_branch === r.branch) return;
