@@ -1000,11 +1000,15 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await env.core.checkHookSocket();
     expect(existsSync(env.core.paths.hookSock)).toBe(true);
     await env.core.sessions.submit(s.id, 'second turn');
-    // The first turn ('hi') can still be running when the socket is bound again, and its Stop lands then:
-    // wait for the second turn's own end (its end_turn, then its Stop).
-    const fake = join(env.fakeDir, `${s.claudeSessionId}.jsonl`);
-    const ends = () => readFileSync(fake, 'utf8').split('"end_turn"').length - 1;
-    await waitFor(() => ends() >= 2 && env.core.sessions.get(s.id).status === 'idle', Boolean, 10000, "the second turn's Stop hook");
+    // The first turn ('hi') can still be running when the socket is bound again, and its Stop's handling
+    // sets idle only after awaits, so maybe after the second turn began: wait for the second turn's own
+    // Stop (the fake runs turns one after another, and logs a hook once the server took it), then for
+    // every turn end's handling.
+    const stops = () => readJsonl<{ sessionId: string; event: string }>(join(env.fakeDir, 'hooks.jsonl'))
+      .filter((h) => h.sessionId === s.claudeSessionId && h.event === 'Stop').length;
+    await waitFor(stops, (n) => n >= 2, 10000, "the second turn's Stop hook");
+    await env.core.sessions.turnEndsSettled();
+    expect(env.core.sessions.get(s.id).status).toBe('idle');
     // Hooks arrive again, so the transcript no longer sets the status.
     writeFileSync(transcript, '{}\n{}\n{}\n');
     await env.core.sessions.reconcile();
