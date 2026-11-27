@@ -80,16 +80,35 @@ test("the sign-in page comes back to an extension's page without leaving for it 
   expect(calls.find((c) => c.url === "/api/v1/auth/signin/start")?.body).toEqual({ next: "/ext/kode/" });
 });
 
-test("a Meko Cloud without sign-in says so on the sign-in page", async () => {
+test("a sign-in Meko can't start says why on the sign-in page", async () => {
   serve(signedOut, {
     "/api/v1/auth/signin/start": {
       status: 409,
-      error: { code: "CLOUD_SIGNIN_UNSUPPORTED", message: "This Meko Cloud can't sign you in to Meko yet." },
+      error: { code: "CLOUD_NOT_LINKED", message: "Meko isn't linked to Meko Cloud." },
     },
   });
   await open("/");
   await act(async () => click("Sign in with Meko Cloud"));
+  expect(document.body.textContent).toContain("Meko isn't linked to Meko Cloud.");
+});
+
+test("a Meko Cloud that can't finish a sign-in says so on the callback page", async () => {
+  serve(signedOut, {
+    "/api/v1/auth/signin/finish": {
+      status: 409,
+      error: { code: "CLOUD_SIGNIN_UNSUPPORTED", message: "This Meko Cloud can't sign you in to Meko yet." },
+    },
+  });
+  await open("/signin/callback?code=c4&state=s4");
   expect(document.body.textContent).toContain("This Meko Cloud can't sign you in to Meko yet.");
+});
+
+test("once signed in, /signin?next= an extension's page loads it without showing the app first", async () => {
+  serve(signedIn);
+  const replace = vi.spyOn(window.location, "replace").mockImplementation(() => {});
+  await open("/signin?next=%2Fext%2Fkode%2F");
+  expect(replace).toHaveBeenCalledWith("/ext/kode/");
+  expect(document.body.textContent?.trim()).toBe("Loading…");
 });
 
 test("once signed in, /signin goes on to next", async () => {

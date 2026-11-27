@@ -80,6 +80,8 @@ func (s *Service) replace(st *State) {
 	s.gen++
 	old := s.remote.reset(s.gen)
 	s.stateMu.Unlock()
+	// A sign-in waiting to finish was started for the link before: it can't sign anyone in now.
+	s.browserSignIns.forget()
 	if old != nil {
 		_ = old.Close()
 	}

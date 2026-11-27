@@ -40,8 +40,10 @@ The app runs `meko token --json` (with the job's `--data-dir`) for Meko's addres
 URL, plain http on 127.0.0.1, which Meko's port takes even under remote access: the REST API is at
 `/api/v1` beside it) and the client token, which it sends as `Authorization: Bearer`. It never
 calls `web_url`, the browsers' address, which is `""` after `meko ui stop` and HTTPS with Meko's own
-certificate under remote access; that's only where it opens pages (while the web UI is off it says
-to run `meko ui start`). It calls
+certificate under remote access, and doesn't open pages there either: `web_url` only says whether
+the web UI is on (while it's off it says to run `meko ui start`). Pages open on `url`'s address,
+this computer's own, which never asks to sign in, where the remote address would with
+`[web] signin = "cloud"` ([web.md](web.md#signing-in-to-remote-access)). It calls
 `GET /api/v1/datapacks` for the list,
 `POST /api/v1/datapacks/:id/search` for a search (with `agent_id` `meko_menubar`, so its searches
 show as its own in the call log and Context Gaps), and `POST /api/v1/datapacks/:id/answer` for a

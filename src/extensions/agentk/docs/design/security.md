@@ -6,8 +6,10 @@ The terminal is a shell running as your Unix user, so whoever can open Kode can 
 key can. Each install serves exactly one owner. Sharing the app means other people install their
 own copy.
 
-- **Meko is the front door.** Kode doesn't listen on the network and has no login of its own,
-  and Meko has none either.
+- **Meko is the front door.** Kode doesn't listen on the network and has no login of its own.
+  Meko has no password login either; with remote access it can have a browser on another device
+  sign in through the linked Meko Cloud first (`[web] signin = "cloud"`), which Kode only follows
+  (`src/web/signin.ts`).
   Its server listens only on a unix socket (`Paths.webSock`, `web.sock` in its home, or in its
   private socket folder in the temp dir when that path is too long), in a folder only you can open,
   and lets in every request that arrives there. The Meko on this computer serves it to browsers at

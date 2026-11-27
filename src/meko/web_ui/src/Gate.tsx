@@ -26,24 +26,25 @@ function Signed() {
   const status = useLoad(() => api.authStatus(), []);
   const [refused, setRefused] = useState(false);
   const [signedOut, setSignedOut] = useState(false);
+  const [moved, setMoved] = useState(false);
   const auth = status.data;
   const signedIn = !!auth?.signed_in && !signedOut;
+  // The app reads its route from the address, so an old one is replaced before the app renders:
+  // until then it shows Loading. Only once in: a browser that must sign in stays on its address, to
+  // come back to after.
+  const target = signedIn && !moved ? oldAddressTarget(window.location.pathname, window.location.search) : null;
 
   useEffect(() => onUnauthorized(() => setRefused(true)), []);
   useEffect(() => onSignInRequired(() => setSignedOut(true)), []);
-  // The app reads its route from the address, so an old one is replaced before it renders. Only
-  // once in: a browser that must sign in stays on its address, to come back to after.
   useEffect(() => {
-    if (!signedIn) return;
-    const to = oldAddressTarget(window.location.pathname, window.location.search);
-    if (to === null) return;
-    if (!isAppPath(new URL(to, window.location.origin).pathname)) {
-      window.location.replace(to);
+    if (target === null) return;
+    if (!isAppPath(new URL(target, window.location.origin).pathname)) {
+      window.location.replace(target);
       return;
     }
-    history.replaceState(null, "", to);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, [signedIn]);
+    history.replaceState(null, "", target);
+    setMoved(true);
+  }, [target]);
 
   if (!auth) return status.error ? <UnreachablePage error={status.error} onRetry={status.reload} /> : <Loading />;
   if (!signedIn && (auth.signin === "cloud" || signedOut)) {
@@ -52,5 +53,6 @@ function Signed() {
   }
   // Shown in place, not loaded again, so a server that keeps refusing can't loop the page.
   if (refused) return <NotLocalPage />;
+  if (target !== null) return <Loading />;
   return <App auth={auth} />;
 }

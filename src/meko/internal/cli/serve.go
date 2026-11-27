@@ -221,9 +221,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err != nil {
 		return err
 	}
-	if err = signInNeedsLink(cfg, cloudSt); err != nil {
-		return err
-	}
 
 	// The store API the context engine calls, on its unix socket with a per-start token of its own.
 	internalToken, err := auth.NewToken()
@@ -720,26 +717,6 @@ var keychainRetry = 10 * time.Second
 // ensureClientToken gets the client token from where this install keeps it. A Keychain that
 // refuses is waited for, not given up on: under launchd, exiting would only start the server again
 // and again.
-// errSignInUnlinked stops serve when [web] signin = "cloud" while Meko Cloud isn't linked: no one
-// could sign in from another computer.
-var errSignInUnlinked = errors.New(`[web] signin = "cloud" needs Meko linked to Meko Cloud. ` +
-	`Link it with meko cloud-link, or set signin = "none" in config.toml`)
-
-// signInNeedsLink refuses Meko Cloud sign-in while there's no link to sign in through.
-func signInNeedsLink(cfg config.Config, cloudSt cloudlink.Store) error {
-	if cfg.Web.SignIn != config.SignInCloud {
-		return nil
-	}
-	cur, err := cloudSt.Load()
-	if err != nil {
-		return err
-	}
-	if !cur.Linked {
-		return errSignInUnlinked
-	}
-	return nil
-}
-
 func ensureClientToken(ctx context.Context, l paths.Layout, cfg config.Config, log *slog.Logger) (string, error) {
 	ct, err := clientTokens(l, cfg)
 	if err != nil {

@@ -15,8 +15,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       Migrations are append-only (`internal/store/migrations/`), like Kode's.
 - [ ] Meko has one port, `[server] port` ([docs/web.md](docs/web.md)): nothing listens on
       another, and `[web] port` stays refused. Every route but `/healthz`, the UI's files,
-      `/api/v1/auth/status`, `/ext/<name>` (the slash redirect) and the knowledge-file links needs a
-      credential, checked on the matched route (`c.Path()`), never the raw URL. The links
+      `/api/v1/auth/status`, `/ext/<name>` (the slash redirect), the knowledge-file links and, with
+      Meko Cloud sign-in, `/api/v1/auth/signin/start` and `/finish` (which go on only over TLS at
+      Meko's own address, and check that before they use anything up) needs a credential, checked on the matched route (`c.Path()`), never the raw URL. The links
       (`/api/v1/knowledge-uploads/:ticket`, `/api/v1/knowledge-downloads/:ticket`) take a one-time
       ticket instead: 256 random bits, 5 minutes, an upload's bound to its datapack, key, size and
       SHA-256 ([docs/knowledge.md](docs/knowledge.md)). Otherwise it's the admin token on

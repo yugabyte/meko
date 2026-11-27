@@ -43,6 +43,11 @@ const SessionCookie = "__Host-meko_session"
 // Cloud link ends them all.
 const SessionLength = 7 * 24 * time.Hour
 
+// signInBrowserCookie ties a sign-in to the browser that started it: a random nonce start sets and
+// finish requires, so a callback address (code and state) copied before it's used signs no one else
+// in. It lives as long as a started sign-in waits.
+const signInBrowserCookie = "__Host-meko_signin"
+
 // SignInCallbackPath is the web UI's page Meko Cloud sends a signing-in browser back to.
 const SignInCallbackPath = "/signin/callback"
 
@@ -90,31 +95,40 @@ func (s *Server) signInStart(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return envelope.Fail(c, http.StatusBadRequest, "VALIDATION_ERROR", "Send a JSON body.")
 	}
-	if err := s.signInHere(c); err != nil {
+	if refused, err := s.refuseSignIn(c); refused {
+		return err
+	}
+	nonce, err := randomToken()
+	if err != nil {
 		return err
 	}
 	to, err := s.opts.Cloud.StartBrowserSignIn(c.Request().Context(),
-		strings.TrimRight(s.opts.Web.Address, "/")+SignInCallbackPath, safeNext(body.Next))
+		strings.TrimRight(s.opts.Web.Address, "/")+SignInCallbackPath, safeNext(body.Next), tokenSHA256(nonce))
 	if err != nil {
 		return signInError(c, err)
 	}
+	c.SetCookie(&http.Cookie{Name: signInBrowserCookie, Value: nonce, Path: "/",
+		MaxAge: int(cloudlink.BrowserSignInWait / time.Second), Secure: true, HttpOnly: true,
+		SameSite: http.SameSiteLaxMode})
 	return envelope.OK(c, map[string]string{"url": to})
 }
 
-// signInHere refuses a sign-in that isn't over TLS (Meko on its own computer needs none) or that
-// came to another address than the one Meko is set up with ([web] name, or this host's FQDN). The
-// address Meko Cloud sends the code back to is that one, never the request's Host, which the
-// client writes: a Host of another site's would have Meko Cloud send the code there.
-func (s *Server) signInHere(c echo.Context) error {
+// refuseSignIn answers a sign-in that isn't over TLS (Meko on its own computer needs none) or that
+// came to another address than the one Meko is set up with ([web] name, or this host's FQDN), and
+// says it did: the caller then stops. The address Meko Cloud sends the code back to is that one,
+// never the request's Host, which the client writes: a Host of another site's would have Meko
+// Cloud send the code there.
+func (s *Server) refuseSignIn(c echo.Context) (bool, error) {
 	r := c.Request()
 	if r.TLS == nil {
-		return envelope.Fail(c, http.StatusBadRequest, "SIGNIN_NOT_NEEDED", "Meko on this computer needs no sign-in.")
+		return true, envelope.Fail(c, http.StatusBadRequest, "SIGNIN_NOT_NEEDED",
+			"Meko on this computer needs no sign-in.")
 	}
 	if !sameAddress(r.Host, s.opts.Web.Address) {
-		return envelope.Fail(c, http.StatusBadRequest, "WRONG_ADDRESS",
+		return true, envelope.Fail(c, http.StatusBadRequest, "WRONG_ADDRESS",
 			"Sign in at "+s.opts.Web.Address+", the address Meko is set up with.")
 	}
-	return nil
+	return false, nil
 }
 
 // sameAddress says whether host (a request's Host) names the host and port of address.
@@ -153,11 +167,18 @@ func (s *Server) signInFinish(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return envelope.Fail(c, http.StatusBadRequest, "VALIDATION_ERROR", "Send a JSON body.")
 	}
-	if err := s.signInHere(c); err != nil {
+	if refused, err := s.refuseSignIn(c); refused {
 		return err
 	}
 	r := c.Request()
-	got, err := s.opts.Cloud.FinishBrowserSignIn(r.Context(), body.Code, body.State)
+	browser := ""
+	if ck, err := r.Cookie(signInBrowserCookie); err == nil && ck.Value != "" {
+		browser = tokenSHA256(ck.Value)
+	}
+	// The nonce is for this one sign-in, whatever it comes to.
+	c.SetCookie(&http.Cookie{Name: signInBrowserCookie, Value: "", Path: "/", MaxAge: -1, Secure: true,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	got, err := s.opts.Cloud.FinishBrowserSignIn(r.Context(), body.Code, body.State, browser)
 	if err != nil {
 		return signInError(c, err)
 	}
@@ -169,15 +190,22 @@ func (s *Server) signInFinish(c echo.Context) error {
 	if s.opts.Web.Sessions == nil {
 		return errors.New("no session store")
 	}
-	b := make([]byte, 32)
-	if _, err = rand.Read(b); err != nil {
+	cookie, err := randomToken()
+	if err != nil {
 		return err
 	}
-	cookie := base64.RawURLEncoding.EncodeToString(b)
 	expires := time.Now().Add(SessionLength)
 	if err = s.opts.Web.Sessions.CreateSession(r.Context(), tokenSHA256(cookie), expires,
 		clip(r.UserAgent(), 256), peerIP(r)); err != nil {
 		return err
+	}
+	// The link may have changed while Meko Cloud was asked: then the owner it named is gone, and the
+	// change's end of every session may have run before this one was stored.
+	if !s.opts.Cloud.BrowserSignInCurrent(got) {
+		if err = s.opts.Web.Sessions.DeleteSession(r.Context(), tokenSHA256(cookie)); err != nil {
+			return err
+		}
+		return signInError(c, cloudlink.ErrSignInExpired)
 	}
 	c.SetCookie(&http.Cookie{Name: SessionCookie, Value: cookie, Path: "/", MaxAge: int(SessionLength / time.Second),
 		Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
@@ -235,6 +263,15 @@ func navigation(r *http.Request) bool {
 		return mode == "navigate"
 	}
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+// randomToken is 32 random bytes, base64url: a session cookie's value, or a sign-in's nonce.
+func randomToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func tokenSHA256(cookie string) string {

@@ -3,8 +3,9 @@
 // with one: each question is searched, then answered from the results by the user's own Claude Code
 // (meko answers use claude). It reaches Meko's REST API at /api/v1 beside the MCP URL (plain http on
 // 127.0.0.1, which Meko's port takes even under remote access) with the client token, both from
-// `meko token --json`; the web UI's address (web_url) is only for opening pages, and is "" while the
-// web UI is off. `meko menubar start` runs it at login; see src/meko/docs/menubar.md.
+// `meko token --json`. Pages open at that same address too (Meko's web UI is on it under remote
+// access as well), never at the remote one: there, with Meko Cloud sign-in, this computer's browser
+// would have to sign in. web_url only says whether the web UI is on: it's "" while it's off. `meko menubar start` runs it at login; see src/meko/docs/menubar.md.
 import AppKit
 import SwiftUI
 
@@ -16,11 +17,14 @@ struct Connection: Decodable {
     let web_url: String?
     let running: Bool?
 
-    var api: String {
+    /// Meko on this computer: plain http on 127.0.0.1, which needs no sign-in.
+    var local: String {
         var u = url
         if u.hasSuffix("/mcp") { u.removeLast(4) }
-        return u + "/api/v1"
+        return u
     }
+
+    var api: String { local + "/api/v1" }
 }
 
 struct Datapack: Decodable, Identifiable, Hashable {
@@ -219,8 +223,9 @@ final class MekoClient: @unchecked Sendable {
             return
         }
         let c = try connection()
+        // web_url only says the web UI is on: the page opens at this computer's own address.
         guard let web = c.web_url, !web.isEmpty else { throw MekoError.webOff }
-        if let u = URL(string: web + (path ?? "")) { NSWorkspace.shared.open(u) }
+        if let u = URL(string: c.local + (path ?? "")) { NSWorkspace.shared.open(u) }
     }
 }
 

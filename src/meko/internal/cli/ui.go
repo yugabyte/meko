@@ -34,7 +34,10 @@ var openBrowser = func(url string) error {
 }
 
 // runUI opens Meko's web UI in the browser, when there's one here, and prints its link. The link
-// carries no credential: there's no login, with local or remote access.
+// carries no credential: with local access there's no login, and with remote access only another
+// computer's browser signs in ([web] signin = "cloud"). So with sign-in on, the browser here is
+// sent to this computer's own address (plain HTTP on 127.0.0.1), which needs none; the remote
+// address is still printed where there's no browser to open (over SSH, say).
 func runUI(l paths.Layout, stdout, stderr io.Writer) int {
 	up, err := running(l.Lock)
 	if err != nil {
@@ -76,12 +79,26 @@ func runUI(l paths.Layout, stdout, stderr io.Writer) int {
 	}
 	link := w.URL + "/"
 	if canOpenBrowser() {
+		link = localUILink(l, w, link)
 		if err = openBrowser(link); err != nil {
 			fmt.Fprintf(stderr, "meko: couldn't open the browser (%v); open the link below instead\n", err)
 		}
 	}
 	fmt.Fprintln(stdout, link)
 	return exitOK
+}
+
+// localUILink is the link to open in a browser on this computer: this computer's own address while
+// remote access asks other computers to sign in, else link.
+func localUILink(l paths.Layout, w *server.WebStatus, link string) string {
+	if w.Access != config.AccessRemote {
+		return link
+	}
+	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
+	if err != nil || cfg.Web.SignIn != config.SignInCloud {
+		return link
+	}
+	return webURL(config.Web{Access: config.AccessLocal}, cfg.Server.Port) + "/"
 }
 
 var errWebOff = errors.New("the web UI is off. Turn it on with meko ui start")

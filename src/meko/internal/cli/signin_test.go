@@ -2,40 +2,15 @@ package cli
 
 import (
 	"context"
-	"errors"
-	"path/filepath"
+	"os"
 	"testing"
 	"time"
 
-	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
-	"github.com/yugabyte/meko/src/meko/internal/secrets"
+	"github.com/yugabyte/meko/src/meko/internal/server"
 	"github.com/yugabyte/meko/src/meko/internal/store"
 )
-
-// serve refuses Meko Cloud sign-in while Meko Cloud isn't linked: no one could sign in.
-func TestSignInNeedsLink(t *testing.T) {
-	dir := t.TempDir()
-	st := cloudlink.Store{File: filepath.Join(dir, "cloud.toml"), Secrets: secrets.NewFiles(dir)}
-	cfg := config.Default()
-	if err := signInNeedsLink(cfg, st); err != nil {
-		t.Fatalf("signin none: %v", err)
-	}
-	cfg.Web.SignIn = config.SignInCloud
-	if err := signInNeedsLink(cfg, st); !errors.Is(err, errSignInUnlinked) {
-		t.Fatalf("signin cloud, unlinked: %v", err)
-	}
-	svc := &cloudlink.Service{Store: st, Check: func(context.Context, string, string) error { return nil },
-		CheckAPI: func(context.Context, string) error { return nil }}
-	key := testCloudKey
-	if _, err := svc.Link(context.Background(), cloudlink.Update{Key: &key}); err != nil {
-		t.Fatal(err)
-	}
-	if err := signInNeedsLink(cfg, st); err != nil {
-		t.Fatalf("signin cloud, linked: %v", err)
-	}
-}
 
 // A link change made with no server running ends the browsers' sessions too.
 func TestEndSessions(t *testing.T) {
@@ -66,5 +41,27 @@ func TestEndSessions(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	if ok, err := st.SessionValid(ctx, "sha", time.Now()); ok || err != nil {
 		t.Fatalf("session still valid after endSessions: %v", err)
+	}
+}
+
+// meko ui opens this computer's own address while remote access asks other computers to sign in,
+// so the owner here never meets the sign-in page; else the server's link.
+func TestLocalUILink(t *testing.T) {
+	t.Setenv("MEKO_PORT", "7123") // another test's server may have set it
+	l := paths.New(t.TempDir())
+	remote := &server.WebStatus{URL: "https://my-meko.example:7123", Access: config.AccessRemote}
+	link := remote.URL + "/"
+	if got := localUILink(l, remote, link); got != link {
+		t.Errorf("no config, so no sign-in: %q", got)
+	}
+	if err := os.WriteFile(l.Config, []byte("[server]\nport = 7123\n\n[web]\nsignin = \"cloud\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := localUILink(l, remote, link); got != "http://127.0.0.1:7123/" {
+		t.Errorf("remote with sign-in: %q", got)
+	}
+	local := &server.WebStatus{URL: "http://127.0.0.1:7123", Access: config.AccessLocal}
+	if got := localUILink(l, local, local.URL+"/"); got != local.URL+"/" {
+		t.Errorf("local access: %q", got)
 	}
 }

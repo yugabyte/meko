@@ -133,22 +133,46 @@ func startSignInWeb(t *testing.T) (base, local string, st *store.Store, cloud *s
 	return base, local, st, cloud
 }
 
-// signIn goes through the whole sign-in as the browser would, and returns finish's status, body and
-// the session cookie it set ("" for none).
-func signIn(t *testing.T, base string, cloud *signInCloud, owner bool) (int, string, string) {
+// startSignIn is the browser starting a sign-in: start's reply and the nonce cookie it set.
+func startSignIn(t *testing.T, base string) (reply, nonce string) {
 	t.Helper()
-	code, b := send(t, http.MethodPost, base+signInStartRoute, `{"next":"/ext/kode/"}`, nil)
+	req, _ := http.NewRequest(http.MethodPost, base+signInStartRoute, strings.NewReader(`{"next":"/ext/kode/"}`))
+	req.Header.Set("Content-Type", "application/json")
+	code, b, h := body(t, req)
 	if code != 200 {
 		t.Fatalf("start: %d %s", code, b)
 	}
-	c, state, returnTo := cloud.allow(t, b, owner)
-	if returnTo != base+SignInCallbackPath {
-		t.Fatalf("return_to %q, want this Meko's callback page", returnTo)
+	for _, ck := range (&http.Response{Header: h}).Cookies() {
+		if ck.Name == signInBrowserCookie {
+			if !ck.Secure || !ck.HttpOnly || ck.SameSite != http.SameSiteLaxMode || ck.Path != "/" || ck.MaxAge <= 0 {
+				t.Errorf("nonce cookie %+v", ck)
+			}
+			nonce = ck.Value
+		}
 	}
+	if nonce == "" {
+		t.Fatal("start set no nonce cookie")
+	}
+	return b, nonce
+}
+
+// finishSignIn is a browser posting the callback's code and state, with nonce as its nonce cookie
+// ("" for none) and host as the Host ("" for base's): finish's status, body and session cookie.
+func finishSignIn(t *testing.T, base, code, state, nonce, host string) (int, string, string) {
+	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, base+signInFinishRoute,
-		strings.NewReader(fmt.Sprintf(`{"code":%q,"state":%q}`, c, state)))
+		strings.NewReader(fmt.Sprintf(`{"code":%q,"state":%q}`, code, state)))
 	req.Header.Set("Content-Type", "application/json")
+	if nonce != "" {
+		req.Header.Set("Cookie", signInBrowserCookie+"="+nonce)
+	}
+	if host != "" {
+		req.Host = host
+	}
 	status, out, h := body(t, req)
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("finish wrote more than one reply: %s", out)
+	}
 	cookie := ""
 	for _, ck := range (&http.Response{Header: h}).Cookies() {
 		if ck.Name == SessionCookie {
@@ -159,6 +183,18 @@ func signIn(t *testing.T, base string, cloud *signInCloud, owner bool) (int, str
 		}
 	}
 	return status, out, cookie
+}
+
+// signIn goes through the whole sign-in as the browser would, and returns finish's status, body and
+// the session cookie it set ("" for none).
+func signIn(t *testing.T, base string, cloud *signInCloud, owner bool) (int, string, string) {
+	t.Helper()
+	b, nonce := startSignIn(t, base)
+	c, state, returnTo := cloud.allow(t, b, owner)
+	if returnTo != base+SignInCallbackPath {
+		t.Fatalf("return_to %q, want this Meko's callback page", returnTo)
+	}
+	return finishSignIn(t, base, c, state, nonce, "")
 }
 
 func withCookie(cookie string) map[string]string {
@@ -251,13 +287,33 @@ func TestSignInRefusals(t *testing.T) {
 	if code != 400 || !strings.Contains(b, "SIGNIN_EXPIRED") {
 		t.Fatalf("unknown state: %d %s", code, b)
 	}
-	// A request naming another host never gets a sign-in that comes back there.
+	// A request naming another host never gets a sign-in that comes back there, and the refusal is
+	// the whole reply: no sign-in page and no nonce follow it.
 	req, _ := http.NewRequest(http.MethodPost, base+signInStartRoute, strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "evil.example"
-	if got, out, _ := body(t, req); got != 400 || !strings.Contains(out, "WRONG_ADDRESS") ||
-		!strings.Contains(out, base) {
+	if got, out, h := body(t, req); got != 400 || !json.Valid([]byte(out)) || !strings.Contains(out, "WRONG_ADDRESS") ||
+		!strings.Contains(out, base) || strings.Contains(h.Get("Set-Cookie"), signInBrowserCookie) {
 		t.Fatalf("another host: %d %s", got, out)
+	}
+	// A finish naming another host is refused before it uses the sign-in up: the right one still works.
+	b, nonce := startSignIn(t, base)
+	c, state, _ := cloud.allow(t, b, true)
+	if got, out, ck := finishSignIn(t, base, c, state, nonce, "evil.example"); got != 400 ||
+		!strings.Contains(out, "WRONG_ADDRESS") || ck != "" {
+		t.Fatalf("finish at another host: %d %s", got, out)
+	}
+	if got, out, ck := finishSignIn(t, base, c, state, nonce, ""); got != 200 || ck == "" {
+		t.Fatalf("finish after the refused one: %d %s", got, out)
+	}
+	// The callback's address copied to another browser (no nonce, or another's) signs no one in.
+	b, _ = startSignIn(t, base)
+	c, state, _ = cloud.allow(t, b, true)
+	for _, other := range []string{"", "someone-elses"} {
+		if got, out, ck := finishSignIn(t, base, c, state, other, ""); got != 400 ||
+			!strings.Contains(out, "SIGNIN_EXPIRED") || ck != "" {
+			t.Fatalf("finish from another browser (%q): %d %s", other, got, out)
+		}
 	}
 	// An expired session is refused.
 	past := time.Now().Add(-time.Second)

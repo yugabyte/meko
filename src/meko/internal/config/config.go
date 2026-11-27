@@ -49,7 +49,7 @@ type Web struct {
 	// SignIn is "none" (the default: remote access lets in any browser that reaches the port) or
 	// "cloud" (with remote access, a browser on another computer signs in through the linked Meko
 	// Cloud first; docs/web.md). Set only in config.toml, never web.toml, so nothing a browser can
-	// change turns it off. serve refuses "cloud" while Meko Cloud isn't linked. Also MEKO_WEB_SIGNIN.
+	// change turns it off. While Meko Cloud isn't linked, no one signs in. Also MEKO_WEB_SIGNIN.
 	SignIn string `toml:"signin"`
 	// Name is the host name links to the web UI use; empty is this host's FQDN (remote) or
 	// 127.0.0.1 (local).
