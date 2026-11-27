@@ -24,6 +24,7 @@ import (
 
 	"github.com/yugabyte/meko/src/meko/internal/agents"
 	"github.com/yugabyte/meko/src/meko/internal/callhome"
+	"github.com/yugabyte/meko/src/meko/internal/callhome/callhometest"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
@@ -34,6 +35,9 @@ import (
 // TestMain doubles as the meko binary: start re-runs os.Executable() (this test binary)
 // as "serve ...".
 func TestMain(m *testing.M) {
+	// Never YugabyteDB's call home service: a report to callhome.DefaultURL is turned away and fails
+	// the run, here and in the serve and _launch this binary runs as.
+	callhometest.Guard()
 	for _, k := range []string{paths.HomeEnv, "MEKO_LOG_LEVEL"} {
 		_ = os.Unsetenv(k)
 	}
@@ -44,6 +48,8 @@ func TestMain(m *testing.M) {
 	agents.SystemFolders = nil
 	agents.Applications = ""
 	agents.LoginShell = ""
+	// Never this computer's launchd: meko install starts the menu bar app on macOS.
+	newMenuBar = func() (menuBarJob, error) { return &fakeMenuBar{}, nil }
 	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_HOME", "XDG_CONFIG_HOME"} {
 		_ = os.Unsetenv(k)
 	}
@@ -75,7 +81,7 @@ func TestMain(m *testing.M) {
 		}
 		_ = ln.Close()
 	}
-	os.Exit(m.Run())
+	os.Exit(callhometest.Run(m))
 }
 
 // testEmbedderEnv passes testEmbedder to the serve a test starts (as this test binary).
@@ -193,6 +199,7 @@ func shortDir(t *testing.T) string {
 // (noRealExtensions), and stopping the extensions would find and stop this machine's real Kode.
 func setup(t *testing.T) (dir, port string) {
 	t.Helper()
+	callhometest.Check(t) // first, so it runs after the test's other cleanups
 	t.Setenv("HOME", t.TempDir())
 	dir = shortDir(t)
 	port = strconv.Itoa(freePort(t))

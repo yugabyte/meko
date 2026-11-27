@@ -15,12 +15,16 @@ CONTEXT_ENGINE_SRC := $(wildcard context_engine/src/*.ts) context_engine/tsconfi
 WEB_UI_SRC := $(shell find web_ui/src web_ui/public -type f 2>/dev/null) web_ui/index.html web_ui/vite.config.ts \
 	web_ui/tsconfig.json
 
-.PHONY: build context_engine web_ui test bench lint fmt clean
+.PHONY: build menubar context_engine web_ui test bench fuzz lint fmt clean
 
 # bin/meko-cli is meko under its other name (cmd/meko picks the commands by it).
 build:
 	go build -tags $(TAGS) -ldflags "$(LDFLAGS)" -o bin/meko ./cmd/meko
 	ln -sf meko bin/meko-cli
+
+# The menu bar app (macOS only), bin/Meko.app beside bin/meko, where meko menubar start finds it.
+menubar:
+	sh menubar/build.sh $(VERSION) bin
 
 # The context engine's dependencies, installed again only when the lockfile changes. onnxruntime-node's
 # install script would download a CUDA provider on linux-x64 (and time out on CI runners); Meko runs
@@ -52,6 +56,11 @@ test: context_engine web_ui/node_modules/.package-lock.json
 # The search budget at 200 MB of content (a few minutes; not in CI).
 bench: context_engine
 	go test -tags $(TAGS),bench -run 'TestSearchBudget|TestKnowledgeBudget' -v -timeout 90m ./internal/memory/
+
+# Markdown's heading finder: windowed parsing against whole-file parsing, for 5 minutes (not in CI;
+# go test runs its seeds). An input it fails on is saved under internal/knowledge/testdata/fuzz.
+fuzz:
+	go test -run '^$$' -fuzz FuzzMarkdownHeadings -fuzztime 5m ./internal/knowledge/
 
 # golangci-lint v2 (https://golangci-lint.run) must be installed; CI pins its version.
 lint: context_engine/node_modules/.package-lock.json web_ui/node_modules/.package-lock.json

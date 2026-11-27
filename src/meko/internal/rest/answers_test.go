@@ -3,11 +3,14 @@ package rest_test
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
+	"github.com/yugabyte/meko/src/meko/internal/secrets"
 	"github.com/yugabyte/meko/src/meko/internal/testenv"
 )
 
@@ -77,4 +80,56 @@ func TestSearchAnswers(t *testing.T) {
 		obj(r.Data)["enabled"] != false {
 		t.Errorf("off: %+v", r)
 	}
+}
+
+// A linked Meko Cloud's datapack gets its answer here, from the passages sent: Meko Cloud is asked
+// only whether it exists. One that exists on neither side is a 404 with no call of the user's quota,
+// linked or not.
+func TestSearchAnswersCloud(t *testing.T) {
+	a := &fakeAnswerer{reply: memory.SearchAnswer{Answer: "Nightly [1].", Cited: []int{1}}}
+	fakeClaude(t)
+	cloud := newFakeCloud(t)
+	dir := t.TempDir()
+	link := &cloudlink.Service{
+		Store:    cloudlink.Store{File: filepath.Join(dir, "cloud.toml"), Secrets: secrets.NewFiles(dir)},
+		Check:    func(context.Context, string, string) error { return nil },
+		CheckAPI: func(context.Context, string) error { return nil },
+	}
+	e := testenv.Start(t, testenv.Options{Answerer: a, Cloud: link})
+	if r := asAdmin(t, e, "/settings/answers", map[string]any{"harness": "claude"}); r.Status != 200 {
+		t.Fatalf("set up: %+v", r)
+	}
+	path := "/datapacks/" + cloudDP + "/answer"
+	ask := map[string]any{"query": "when does the build run?",
+		"passages": []map[string]string{{"source": "memory", "id": "m1", "text": "the build runs nightly"}}}
+	wantErr(t, e, "POST", path, ask, 404, "NOT_FOUND")
+
+	if _, err := link.Link(context.Background(), cloudlink.Update{URL: ptr(cloud.URL + "/mcp"),
+		APIURL: ptr(cloud.URL + "/api/v1"), Key: ptr(cloudKey)}); err != nil {
+		t.Fatal(err)
+	}
+	asked := func() []string {
+		cloud.mu.Lock()
+		defer cloud.mu.Unlock()
+		return append([]string(nil), cloud.calls...)
+	}
+	answered := len(a.inputs)
+	wantErr(t, e, "POST", "/datapacks/00000000-0000-4000-8000-00000000dead/answer", ask, 404, "NOT_FOUND")
+	if len(a.inputs) != answered {
+		t.Error("a datapack that exists nowhere was answered")
+	}
+	calls := len(asked())
+	got := obj(okData(t, e, "POST", path, ask, 200))
+	if got["answer"] != "Nightly [1]." || fmt.Sprint(got["cited"]) != "[1]" {
+		t.Errorf("answer %v", got)
+	}
+	if in := a.inputs[len(a.inputs)-1]; !strings.Contains(in, "[1] (memory) the build runs nightly") {
+		t.Errorf("input:\n%s", in)
+	}
+	if made := asked()[calls:]; len(made) != 1 || !strings.Contains(made[0], "GET /api/v1/datapacks/"+cloudDP) {
+		t.Errorf("Meko Cloud was asked %v, not only whether the datapack exists", made)
+	}
+	wantErr(t, e, "POST", path, map[string]any{"query": " "}, 400, "VALIDATION_ERROR")
+	// This Meko's own datapack is still answered here as before.
+	okData(t, e, "POST", "/datapacks/"+e.DatapackID+"/answer", ask, 200)
 }

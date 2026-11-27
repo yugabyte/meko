@@ -94,5 +94,17 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
     expect(text).toContain(local(join(env.core.paths.run, 'reviews', review!.id, 'r1')));
     expect(text).toMatch(new RegExp(`patch: ${local(join(env.core.paths.run, 'reviews', review!.id, 'r1', 'patches'))}/`));
     expect(text).not.toContain(row.worktree_path);
+
+    // Newer Claude Code asks about each --add-dir folder it hasn't worked in, and a review's session has
+    // no tab to answer in: its design and run folders are trusted before it starts, in the spelling it's given.
+    const trusted = () => JSON.parse(readFileSync(join(process.env.CLAUDE_CONFIG_DIR!, '.claude.json'), 'utf8')).projects as Record<string, unknown>;
+    const reviewSession = (await waitFor(() => env.core.sessions.get(s.id).codeReview?.sessionId, (id) => !!id, 10000, "the review's session"))!;
+    const folders = [join(env.core.paths.designs, s.id), join(env.core.paths.designs, reviewSession), join(env.core.paths.run, 'reviews', review!.id)];
+    for (const d of folders) expect(trusted()[local(d)], d).toEqual({ hasTrustDialogAccepted: true });
+    // Archived, they're forgotten again, every spelling; the worktree's own trust stays.
+    await env.core.sessions.archive(env.core.sessions.row(s.id), { keepBranch: true });
+    const left = Object.keys(trusted());
+    for (const d of folders) expect(left.filter((k) => k.endsWith(d.slice(d.lastIndexOf('/')))), d).toEqual([]);
+    expect(trusted()[local(row.worktree_path)]).toEqual({ hasTrustDialogAccepted: true });
   });
 });

@@ -156,7 +156,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       user confirms Upload to Meko's question, which names the datapack.
 - [ ] Repo files served to the browser are limited to what the Changes panel needs: image
       previews (`/changes/image`) to image types inside the worktree, the base commit, or one of
-      the branch's listed commits and its parent, with the sandboxing content policy; a file's text
+      the branch's listed commits and its parent, with the sandboxing content policy (an SVG,
+      which can hold script, is drawn only as an `<img>`, never inline or as a page of its own
+      but this route's); a file's text
       (`/changes/file`, JSON) to a file the diff shown changes (never an unchanged, untracked or
       gitignored one), inside the repo, text only, at most 1 MB. The one other case is the tour's
       demo, played (`GET /api/workshops/:id/play/:where/*`, `playFile` in `tour.ts`): only a
@@ -165,6 +167,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `Content-Security-Policy: sandbox allow-scripts` with `default-src 'none'` (an opaque origin
       that can't reach Kode's API or the network), its scripts and stylesheets put inline, and the
       bundle's `play` line in a bar on top, HTML-escaped (`withBar`).
+- [ ] The browser writes a worktree file through one route only, **Apply** on a draft's suggested
+      change (`POST /api/sessions/:id/comments/:cid/apply`, `replaceLines()` in `changes.ts`):
+      a path inside the worktree by real path (a symlink out is refused) and never in a `.git`
+      folder, as asked or as it resolves, a text file of at most 1 MB, only while the lines are
+      exactly the text the panel sent and still end with the comment's excerpt, never while the
+      agent is mid-turn or has background tasks running, and never in a Review a PR session.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
       `allow-same-origin`, and the frame's content policy still blocks network requests and comes
       first in the frame's document. Markdown designs are sanitized with no forms or styles, by
@@ -271,9 +279,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       sessions kept in it (through git), and only the datapacks named as the tour names its own.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
       session starts (`merge --ff-only` with autostash off in the main checkout, or a non-forced
-      `git fetch . refs/remotes/origin/<b>:refs/heads/<b>`; never inside another worktree), the same
-      fast-forward of an existing branch a session starts on (from its remote, a fork's for a fork's
-      PR), setting that branch's `branch.<b>.remote`/`.merge` to a fork's PR head, and an
+      `git fetch . refs/remotes/<remote>/<b>:refs/heads/<b>`, from origin, or from a fork's upstream
+      only when `upstream/<b>` is strictly ahead of `origin/<b>`: `baseRemote`; never inside another
+      worktree), the same fast-forward of an existing branch a session starts on (from its remote,
+      a fork's for a fork's PR), setting that branch's `branch.<b>.remote`/`.merge` to a fork's PR
+      head, keeping a session's branch's `branch.<b>.gh-merge-base` at the session's base (never
+      over one the user set: `noteBase` writes it at the start only when it's unset, and on a base
+      change only while it still holds the old base), and an
       empty first commit on HEAD's branch of a repo with no commits and no files
       (`ensureFirstCommit()`, at project open or session start; a repo with files is refused, and an
       empty folder typed under Other folder is made a repo only after the name check), never a

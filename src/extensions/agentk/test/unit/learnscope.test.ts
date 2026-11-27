@@ -100,6 +100,16 @@ describe('learnScope, on a real repo', () => {
     expect(await learnScope(clone, 'main', '', 12, now)).toMatchObject({ prs: 3, files: 6 });
     expect(await learnScope(clone, 'nope', '', 12, now)).toBeNull();
   });
+
+  it("reads a fork's upstream branch when it's ahead of origin's, as a new session starts from it", async () => {
+    const clone = join(home, 'clone');
+    execFileSync('git', ['clone', '-q', repo, clone], { stdio: 'ignore' });
+    const g = (...a: string[]) => execFileSync('git', a, { cwd: clone, stdio: 'ignore' });
+    // The fork's own main lags two commits behind upstream's.
+    g('update-ref', 'refs/remotes/upstream/main', 'refs/remotes/origin/main');
+    g('update-ref', 'refs/remotes/origin/main', 'refs/remotes/origin/main~2');
+    expect(await learnScope(clone, 'main', '', 12, now)).toMatchObject({ prs: 3, files: 6 });
+  });
 });
 
 describe("the New session dialog's estimate for a learn session", () => {

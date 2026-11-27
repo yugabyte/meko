@@ -66,6 +66,8 @@ export interface LaunchContext {
   row: SessionRow;
   /** The session's repo (its main checkout), or null when it's gone. */
   repo: string | null;
+  /** Kode's own folders the launch passes as extra workspace folders (`LaunchInput.addDirs`). */
+  addDirs: string[];
 }
 
 /** A session's new usage, read by `readUsage`. */
@@ -114,6 +116,11 @@ export interface Harness {
    * itself counts, never one for a parent. Never throws.
    */
   trustFolder?(dir: string, log: Logger): Promise<void>;
+  /**
+   * Takes back what `beforeLaunch` trusted for a session's extra folders once it's archived (Kode's
+   * own folders only, never a repo or a worktree). Best effort. Never throws.
+   */
+  untrustFolders?(dirs: string[], log: Logger): Promise<void>;
   /** Text its folder-trust dialog shows on screen; the CLI fires no hooks until it's answered. */
   trustPrompt?: RegExp;
   /** Text its first-run setup shows on screen (Claude Code's text style and sign-in); no hooks fire until it's done either. */

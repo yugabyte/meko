@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  anchorComment, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, keepUnchanged, parsePatch, pathFilter, PHONE_BUDGET, pickComment, pickRange,
+  anchorComment, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, imageVersion, keepUnchanged, parsePatch, pathFilter, PHONE_BUDGET, pickComment, pickRange,
   fitText, reparse, revealLines, revealRow, sameLine, showsLine, splitText, type DiffLine, type RowBudget,
 } from '../../src/web/diff.js';
 
@@ -148,6 +148,31 @@ describe('parsing again after a refetch', () => {
     expect(next[0]).toBe(prev[0]);
     expect(next.slice(1)).toEqual([{ path: 'b', added: 2, patch: 'y' }, { path: 'c', added: 1, patch: 'z' }]);
     expect(next[1]).not.toBe(prev[1]);
+  });
+});
+
+describe("an image preview's version", () => {
+  const f = (path: string, patch: string | null, binary = false, uncommitted = false, truncated = false) => ({ path, patch, binary, uncommitted, truncated });
+
+  it('is 0 for a file with no preview, so a refetch leaves its section alone', () => {
+    expect(imageVersion(f('a.txt', '+a'), 42)).toBe(0);
+    expect(imageVersion(f('blob.bin', null, true), 42)).toBe(0);
+    // A raster image git diffs as text (a Git LFS pointer, a symlink): just its diff.
+    expect(imageVersion(f('lfs.png', '+version https://git-lfs.github.com/spec/v1'), 42)).toBe(0);
+  });
+
+  it("follows the fetch for a binary image, whose bytes the panel can't see, and an SVG whose patch was left out or cut short", () => {
+    expect(imageVersion(f('a.png', null, true), 42)).toBe(42);
+    expect(imageVersion(f('a.svg', null), 42)).toBe(42);
+    expect(imageVersion(f('a.svg', '+<svg>', false, false, true), 42)).toBe(42);
+  });
+
+  it("changes for an SVG only when its patch, or whether it's committed, does", () => {
+    const v = imageVersion(f('a.svg', '+<svg/>'), 1);
+    expect(imageVersion(f('a.svg', '+<svg/>'), 2)).toBe(v);
+    expect(imageVersion(f('a.svg', '+<svg />'), 1)).not.toBe(v);
+    expect(imageVersion(f('a.svg', '+<svg/>', false, true), 1)).not.toBe(v);
+    expect(v).toBeGreaterThan(0);
   });
 });
 

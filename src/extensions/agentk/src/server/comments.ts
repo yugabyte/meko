@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { CommentSide, CommentState, NewComment, ReviewComment, SendCommentsResult, Stage } from '../shared/types.js';
+import { existsSync } from 'node:fs';
+import { EXCERPT_LINE_CHARS, excerptMatches, fence, hasSuggestion, suggestions } from '../shared/suggestion.js';
+import type { CommentSide, CommentState, NewComment, ReviewComment, SendCommentsResult, SessionStatus, Stage } from '../shared/types.js';
+import { OutsideRepoError, ReplaceError, replaceLines } from './changes.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { errMsg } from './log.js';
@@ -13,11 +16,12 @@ export const BATCH_MAX = 50;
 /** Excerpts keep this many lines, from the end of the range. */
 export const EXCERPT_LINES = 20;
 const EXCERPT_CHARS = 4000;
-/** Longer excerpt lines are cut to this many characters plus '…'. */
-export const EXCERPT_LINE_CHARS = 1000;
+export { EXCERPT_LINE_CHARS };
 const PATH_MAX = 4096;
 /** Stages in which Claude works on the diff (or helps review it), so queued comments can go to it. */
 const COMMENT_STAGES: Stage[] = ['explore', 'code', 'review', 'reviewing-pr'];
+/** While the agent is in one of these, Apply waits: it would write under the agent's edit. */
+const MID_TURN: SessionStatus[] = ['starting', 'working', 'needs_input'];
 
 interface CommentRow {
   id: string;
@@ -57,6 +61,12 @@ function checkBody(body: unknown): string {
   return b;
 }
 
+/** A body for a comment on `side`: a suggestion only on added or unchanged lines, as on GitHub. */
+function checkSide(side: CommentSide, body: string): string {
+  if (side === 'old' && hasSuggestion(body)) throw new HttpError(400, 'Suggestions go on added or unchanged lines, not removed ones.');
+  return body;
+}
+
 /**
  * An excerpt line as stored: cut to EXCERPT_LINE_CHARS plus '…' when longer. The diff view
  * clips its rows the same way when it re-anchors a comment, so long lines still match.
@@ -75,25 +85,37 @@ export function checkNewComment(b: unknown): NewComment {
     throw new HttpError(400, 'The comment needs a line range: line and endLine are line numbers, with endLine ≥ line.');
   }
   if (typeof c.excerpt !== 'string') throw new HttpError(400, 'The comment needs the excerpt of the lines it is about.');
+  const body = checkSide(c.side, checkBody(c.body));
   // Whole lines only, dropped from the front: the last line is what re-anchors the comment.
   const lines = c.excerpt.split('\n').slice(-EXCERPT_LINES).map(clipExcerptLine);
   while (lines.length > 1 && lines.join('\n').length > EXCERPT_CHARS) lines.shift();
-  return { path: c.path, side: c.side, line: line as number, endLine: end as number, excerpt: lines.join('\n'), body: checkBody(c.body) };
+  return { path: c.path, side: c.side, line: line as number, endLine: end as number, excerpt: lines.join('\n'), body };
 }
 
-/** A code fence longer than any run of backticks in the text. */
-function fence(text: string): string {
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((m) => m.length));
-  return '`'.repeat(Math.max(3, longest + 1));
+function lineRange(c: ReviewComment): string {
+  return c.line === c.endLine ? `line ${c.line}` : `lines ${c.line}–${c.endLine}`;
 }
 
 function where(c: ReviewComment): string {
-  const lines = c.line === c.endLine ? `line ${c.line}` : `lines ${c.line}–${c.endLine}`;
+  const lines = lineRange(c);
   return c.side === 'new' ? lines[0].toUpperCase() + lines.slice(1) : `Removed ${lines} (numbered as in the base)`;
 }
 
-/** The comments as markdown for Claude: grouped by file in path order, then by line. */
-export function formatComments(comments: ReviewComment[]): string {
+/**
+ * What a suggestion block in a comment means, said after the comment, so every prompt override
+ * carries it. In a PR review (`review`) it's the user's suggestion for the PR's author, which
+ * GitHub shows as one when it's posted as is over the same lines.
+ */
+export function suggestionNote(c: ReviewComment, review = false): string {
+  if (review) {
+    const span = c.line === c.endLine ? `"line" ${c.line}` : `"start_line" ${c.line} and "line" ${c.endLine}`;
+    return `Keep the suggestion block above as it is in this review comment's body, on ${span} (side RIGHT), so GitHub shows it as a suggested change.`;
+  }
+  return `The suggestion block above is the exact text the user wants in place of ${lineRange(c)}. Apply it as written unless it's wrong, and say so if it is.`;
+}
+
+/** The comments as markdown for Claude: grouped by file in path order, then by line; `review` for a PR review's. */
+export function formatComments(comments: ReviewComment[], review = false): string {
   const byPath = new Map<string, ReviewComment[]>();
   for (const c of comments) byPath.set(c.path, [...(byPath.get(c.path) ?? []), c]);
   const out: string[] = [];
@@ -102,7 +124,8 @@ export function formatComments(comments: ReviewComment[]): string {
     const cs = byPath.get(path)!.sort((a, b) => a.endLine - b.endLine || (a.side === b.side ? 0 : a.side === 'old' ? -1 : 1) || a.createdAt - b.createdAt);
     for (const c of cs) {
       const f = fence(c.excerpt);
-      out.push(c.excerpt ? `${where(c)}:\n${f}\n${c.excerpt}\n${f}\n${c.body}` : `${where(c)}:\n${c.body}`);
+      const body = c.side === 'new' && hasSuggestion(c.body) ? `${c.body}\n${suggestionNote(c, review)}` : c.body;
+      out.push(c.excerpt ? `${where(c)}:\n${f}\n${c.excerpt}\n${f}\n${body}` : `${where(c)}:\n${body}`);
     }
   }
   return out.join('\n\n');
@@ -162,8 +185,8 @@ export class CommentService {
 
   edit(sessionId: string, id: string, body: unknown): ReviewComment {
     this.running(sessionId);
-    this.draft(sessionId, id);
-    run(this.db, 'UPDATE review_comments SET body = ?, updated_at = ? WHERE id = ?', checkBody(body), Date.now(), id);
+    const c = this.draft(sessionId, id);
+    run(this.db, 'UPDATE review_comments SET body = ?, updated_at = ? WHERE id = ?', checkSide(c.side, checkBody(body)), Date.now(), id);
     return toComment(this.one(sessionId, id));
   }
 
@@ -172,6 +195,51 @@ export class CommentService {
     this.draft(sessionId, id);
     run(this.db, 'DELETE FROM review_comments WHERE id = ?', id);
     this.core.changed();
+  }
+
+  /**
+   * Writes a draft's suggested change into the worktree, then deletes the draft: the Changes
+   * panel's Apply. Only while the agent is between turns with nothing left running in the
+   * background, so it never writes under the agent's edit, and only while the lines are still the
+   * text the panel shows (`current`), which still ends with the text the suggestion was written on.
+   */
+  apply(sessionId: string, id: string, body: unknown): void {
+    const row = this.running(sessionId);
+    const c = this.draft(sessionId, id);
+    if (row.kind === 'review-pr') throw new HttpError(409, 'In a PR review, suggestions are review comments for the PR\'s author. Send them to Kode to draft.');
+    if (c.side !== 'new') throw new HttpError(409, 'Suggestions go on added or unchanged lines, not removed ones.');
+    const found = suggestions(c.body);
+    if (found.length !== 1) throw new HttpError(409, found.length ? 'This comment has more than one suggestion. Send it to Kode, or keep one.' : 'This comment has no suggestion to apply.');
+    const r = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+    const { line, endLine, current } = r;
+    if (!Number.isInteger(line) || !Number.isInteger(endLine) || (line as number) < 1 || (endLine as number) < (line as number)
+      || !Array.isArray(current) || current.length !== (endLine as number) - (line as number) + 1 || current.some((l) => typeof l !== 'string')) {
+      throw new HttpError(400, 'Applying a suggestion needs the lines it replaces: line, endLine, and their text in current.');
+    }
+    // The lines it would replace must still end with the text the suggestion was written against:
+    // the panel draws a comment where its last line is now, which needn't be its whole range.
+    if (c.end_line - c.line !== (endLine as number) - (line as number) || !excerptMatches(current as string[], c.excerpt)) {
+      throw new HttpError(409, 'The suggestion\'s lines have changed since the comment was written. Send it to Kode instead.');
+    }
+    // Background subagents and shells a turn left running may be editing files too.
+    const rt = this.core.sessions.runtime(sessionId);
+    if (MID_TURN.includes(row.status) || rt.busy || rt.background.length) {
+      throw new HttpError(409, 'Kode is working. Apply the suggestion once it\'s idle, or send it to Kode.');
+    }
+    if (!existsSync(row.worktree_path) || !this.core.sessions.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there\'s nothing to apply the suggestion to.');
+    try {
+      replaceLines(row.worktree_path, c.path, line as number, endLine as number, current as string[], found[0]);
+    } catch (e) {
+      if (e instanceof ReplaceError) throw new HttpError(409, e.message);
+      if (e instanceof OutsideRepoError) throw new HttpError(400, 'Only files inside this session\'s repo can be changed.');
+      const code = (e as NodeJS.ErrnoException).code;
+      throw new HttpError(500, `Couldn't write the suggestion into ${c.path}${code ? ` (${code})` : ''}: ${errMsg(e)}`);
+    }
+    run(this.db, 'DELETE FROM review_comments WHERE id = ?', id);
+    this.core.sessions.event(sessionId, 'suggestion', `Applied a suggestion to ${c.path}`);
+    this.core.changed();
+    // The footer's diff size, now rather than at the next periodic refresh.
+    void this.core.sessions.refreshDiff(sessionId).catch(() => undefined);
   }
 
   /** Queues every draft, then pastes the queue into Claude if it's between turns. */
@@ -215,7 +283,7 @@ export class CommentService {
       const count = `${queued.length} comment${queued.length === 1 ? '' : 's'}`;
       // In a Review a PR session they're the user's review comments on someone else's PR, not changes to make.
       const prompt = row.kind === 'review-pr' ? 'review-pr-comments' : 'comments';
-      await this.core.sessions.submit(sessionId, this.core.sessions.prompt(row, prompt, { count, comments: formatComments(queued) }));
+      await this.core.sessions.submit(sessionId, this.core.sessions.prompt(row, prompt, { count, comments: formatComments(queued, row.kind === 'review-pr') }));
       const now = Date.now();
       tx(this.db, () => {
         for (const c of queued) run(this.db, `UPDATE review_comments SET state = 'sent', sent_at = ?, updated_at = ? WHERE id = ?`, now, now, c.id);

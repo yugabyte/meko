@@ -37,7 +37,8 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   **Open project** starts one; **Close project** stops its sessions when you're done. The repo,
   branches and datapack stay: opening its datapack again brings the same project back, with its
   sessions, settings and usage.
-  New sessions start from the base branch after it's fast-forwarded to `origin`, on a branch
+  New sessions start from the base branch after it's fast-forwarded to `origin` (in a fork, to
+  `upstream` when its base is newer than the fork's), on a branch
   named `ak_<your GitHub login>/<task>` (the prefix is a project setting). Under
   **Advanced** a session can work in another of your repos, on a new branch you name, or pick up
   existing work: an **existing branch** (its open PR is linked), or one of your open **pull
@@ -161,6 +162,10 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
 - **Changes panel:** click the `N files · +N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
   **Files** menu (its filter takes a regex too) or `[` / `]`, and leave review comments on lines (drag the **+** to cover a range) that go to Claude as one prompt.
+  A comment can suggest a change, as on GitHub (**± Suggest a change**): send it to Claude, or
+  **Apply** it to the file yourself while Kode is idle.
+  A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO or SVG, untracked ones too) shows as
+  *Before* and *After* side by side, an SVG above its diff.
   Click ↑ or ↓ on a hunk to see more of the file around it, 20 lines a click, as on GitHub, and
   turn on **Wrap lines** to wrap long lines instead of scrolling sideways. The
   **All changes ▾** menu shows one of the branch's commits alone instead (read-only).

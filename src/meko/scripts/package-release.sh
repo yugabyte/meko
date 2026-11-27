@@ -7,6 +7,7 @@
 # onnxruntime and sharp are native), after:
 #
 #   make build VERSION=<version>          bin/meko
+#   make menubar VERSION=<version>        bin/Meko.app, on macOS only
 #   make context_engine                    context_engine/dist and its dependencies
 #   (cd context_engine && npm prune --omit=dev)   production dependencies only
 #
@@ -16,6 +17,7 @@
 #
 #   meko-<version>/
 #     bin/meko                   the CLI and server
+#     bin/Meko.app               the menu bar app (macOS only), which meko menubar start runs
 #     node/bin/node, node/LICENSE  Meko's own Node
 #     context_engine/package.json, dist/, node_modules/, stubs/
 #                                the context engine, trimmed to this platform
@@ -47,6 +49,11 @@ for p in "$meko/bin/meko" "$meko/context_engine/dist/main.js" "$meko/context_eng
   "$meko/web_ui/dist/index.html" "$node_dir/bin/node"; do
   [ -e "$p" ] || { echo "missing $p (build first)" >&2; exit 1; }
 done
+if [ $platform = darwin ]; then
+  [ -x "$meko/bin/Meko.app/Contents/MacOS/meko-menubar" ] || { echo "missing $meko/bin/Meko.app: make menubar" >&2; exit 1; }
+  plutil -extract CFBundleVersion raw "$meko/bin/Meko.app/Contents/Info.plist" | grep -qx "$version" ||
+    { echo "bin/Meko.app isn't version $version: make menubar VERSION=$version" >&2; exit 1; }
+fi
 [ -d "$meko/context_engine/node_modules/typescript" ] && { echo "context_engine/node_modules has dev dependencies: run npm prune --omit=dev" >&2; exit 1; }
 v=$("$meko/bin/meko" version --json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
 [ "$v" = "$version" ] || { echo "bin/meko is version $v, not $version: make build VERSION=$version" >&2; exit 1; }
@@ -59,6 +66,7 @@ mkdir -p "$root/bin" "$root/node/bin" "$root/context_engine" "$root/web_ui"
 
 cp "$meko/bin/meko" "$root/bin/meko"
 chmod 755 "$root/bin/meko"
+[ $platform = darwin ] && cp -R "$meko/bin/Meko.app" "$root/bin/Meko.app"
 cp "$node_dir/bin/node" "$root/node/bin/node"
 cp "$node_dir/LICENSE" "$root/node/LICENSE"
 cp "$meko/context_engine/package.json" "$root/context_engine/package.json"

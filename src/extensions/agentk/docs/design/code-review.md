@@ -142,7 +142,17 @@ user cancels it, when another review replaces it, and with its task; a failed re
 Retry. Its edit guard denies every
 edit in the repo, and on Claude Code `--disallowedTools` takes Bash and the edit and web tools away
 from it and its subagents; OpenCode's session config denies them. Its first prompt is the first
-sweep's, and Kode sends each later step's prompt as the turn before ends.
+sweep's, and Kode sends each later step's prompt as the turn before ends. It's launched with
+`--add-dir` for its design folder and its review's run folder (`run/reviews/<review id>`). Newer
+Claude Code asks about each `--add-dir` folder it hasn't worked in ("Adding a new directory … Is
+this a directory you created or one you trust?") and fires no hooks until it's answered. With no
+tab to answer in, the review would look stuck. Kode trusts both folders before the launch, as it
+trusts the repo (`beforeLaunch`), and removes those entries when the session is archived
+(`untrustFolders`: checked again as an add is, best effort, since a Claude writing back its older
+copy of `~/.claude.json` can restore them). Whether that trust stops the dialog is unmeasured: it
+writes the folder-trust key, and the Claude Code here (2.1.319) doesn't show the dialog. What's
+tested is the fallback: `TRUST_PROMPT_RE` knows the dialog, and the review shows as waiting on you
+(below).
 
 **Steps.** The main thread only starts steps. Each pass and each scorer runs with a fresh context,
 as the cloud's separate processes do (`HARNESS_CAPS.reviewSteps`):
@@ -364,9 +374,12 @@ found and runs it again, with `--prior` for what came of the earlier runs.
 meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--issue <issue>]... [--prior <file>] [--depth 1-5] [--strategy <id>] [--model [<tier>=]<model>]... [--out-dir <dir>] [--json]
 ```
 
-- **What it reviews against.** `--base`, origin's copy of the branch first (as `baseRefIn` reads a
-  task's), else `--pr`'s base branch, else the branch `origin/HEAD` names, else `main`, then
-  `master` (`pickBase`).
+- **What it reviews against.** `--base`, else `--pr`'s base branch, else the branch's
+  `gh-merge-base` (a Kode session's base, which Kode keeps there: the CLI never opens `state.db`),
+  else the branch `upstream/HEAD` names (in a fork, origin's default branch is the fork's own, which can lag far
+  behind), else `origin/HEAD`'s, else `main`, then `master` (`pickBase`). Like a task's review,
+  it reads the change from that branch as the Changes panel does (`diffBase`): from origin's copy
+  or, in a fork, upstream's, whichever the branch left last.
 - **The author's account.** `--pr` (a number, `owner/name#n` or a link) reads that PR's title and
   description with gh; `--description` takes text. One or the other: with neither, the passes
   have the diff alone. Either reaches them as the PR description does in Pull Request, quoted and
@@ -475,14 +488,17 @@ transcripts.
 ## Context the passes get
 
 The base prompt follows the cloud's `BuildPrompt`, for a change rather than a PR: the branch
-against its base (origin's copy when there is one), the PR title and description the task wrote,
+against its base (origin's or, in a fork, upstream's copy, whichever the branch left last: `diffBase`, as the Changes panel reads it), the PR title and description the task wrote,
 its first prompt and where its design is, `git log` of its commits, the change from the merge-base to the working tree (untracked
 files included, since nothing is committed before the PR prompt), the review guides (REVIEW.md at
 the root and in each ancestor folder of a changed file), the history of the rewritten lines
 (`git blame` and recent commits, since the passes have no git), the task's linked issues (its work
 item's GitHub issues fetched into the run folder; other links by name), and earlier rounds. Secret
 files, deleted files and generated files are withheld (`withhold.go`, `generated.go`). A diff over
-256 KiB is written one patch per file instead of inline. The description is the PR title and
+256 KiB is written one patch per file instead of inline. A change over git's 32 MB of output
+(`GIT_MAX_OUTPUT`) fails the review with a sentence naming the base and how many commits the
+branch is past it, since its base is nearly always wrong (such as a fork's own base far behind
+upstream's). The description is the PR title and
 description the task wrote, quoted, followed by the task it was written for; with none, the
 task alone. Left out: the cloud's injection screen and budget caps (the change is the user's own, on
 their own account), and the PR description's skip patterns.

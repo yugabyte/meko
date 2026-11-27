@@ -56,6 +56,19 @@ func callHomeReports(t *testing.T) func() []callhome.FailureEnvelope {
 	}
 }
 
+// callHomeSink points call home at a test server that drops what it gets, unless the test already
+// pointed it at its own (callHomeReports, leavingReports): a test that fakes a release install
+// would otherwise send its reports to callhome.DefaultURL.
+func callHomeSink(t *testing.T) {
+	t.Helper()
+	if os.Getenv("MEKO_CALL_HOME_URL") != "" {
+		return
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(srv.Close)
+	t.Setenv("MEKO_CALL_HOME_URL", srv.URL)
+}
+
 // defaultPortTaken has install's check find the default port taken, whatever holds it on this
 // machine: a test must never move a Meko onto the real 7777.
 func defaultPortTaken(t *testing.T) {
@@ -71,9 +84,11 @@ func defaultPortTaken(t *testing.T) {
 }
 
 // testRelease makes a release install whose versions are folders with a bin/meko, runs this test
-// as its version 0.2.0, and points app/current at current ("" for none).
+// as its version 0.2.0, and points app/current at current ("" for none). Call home goes to a test
+// server: the test's own, set before, or a sink (callHomeSink).
 func testRelease(t *testing.T, current string, versions ...string) update.App {
 	t.Helper()
+	callHomeSink(t)
 	app := update.App{Root: filepath.Join(t.TempDir(), "app")}
 	for _, v := range versions {
 		if err := os.MkdirAll(filepath.Join(app.Dir(v), "bin"), 0o755); err != nil {

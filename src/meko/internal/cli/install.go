@@ -79,7 +79,14 @@ var runningRelease = update.Running
 // running the installer again finishes: app/setup-pending says which version's setup didn't finish
 // until its server answers. An upgrade with a service goes on probation as an automatic update does
 // (update.App.Switch), so a new version that can't start is rolled back, data and all.
-func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout, stderr io.Writer) int {
+// installOptions are meko install's flags.
+type installOptions struct {
+	noService, noUI, noMenuBar bool
+	access                     string
+}
+
+func runInstall(l paths.Layout, opts installOptions, stdout, stderr io.Writer) int {
+	noService, access, noUI := opts.noService, opts.access, opts.noUI
 	r := newReport(stdout)
 	if access != "" && access != config.AccessLocal && access != config.AccessRemote {
 		return fail(stderr, fmt.Errorf("--access takes local or remote, not %q", access))
@@ -284,6 +291,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 		verb = "restarted"
 	}
 	starting.Done(verb + " in " + seconds(time.Since(began)))
+	installMenuBar(l, r, exe, opts.noMenuBar)
 	o := runningOptions{kind: nextInstall, verb: "installed", since: run.started, newTerminal: newTerminal}
 	if run.from != "" {
 		o.verb = "upgraded"
@@ -400,6 +408,13 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 			return fail(stderr, err)
 		}
 		fmt.Fprintf(stdout, "Removed the %s service\n", m.Kind())
+	}
+	// The menu bar app runs from the releases removed below.
+	if job, jerr := newMenuBar(); jerr == nil && job.Installed() {
+		if err = job.Remove(); err != nil {
+			return fail(stderr, err)
+		}
+		fmt.Fprintln(stdout, "Removed the menu bar app")
 	}
 	if up, _ := running(l.Lock); up {
 		if code := stopMeko(l, stdout, stderr); code != exitOK {

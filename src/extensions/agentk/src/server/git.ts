@@ -17,9 +17,12 @@ export async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await gitRaw(cwd, ...args)).trim();
 }
 
+/** The most output git() and gitRaw() take; more fails with ERR_CHILD_PROCESS_STDIO_MAXBUFFER. */
+export const GIT_MAX_OUTPUT = 32 * 1024 * 1024;
+
 /** Like git(), but stdout is returned untrimmed (porcelain lines can start with a space). */
 export async function gitRaw(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await exec('git', args, { cwd, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, ...GIT_ENV } });
+  const { stdout } = await exec('git', args, { cwd, maxBuffer: GIT_MAX_OUTPUT, env: { ...process.env, ...GIT_ENV } });
   return stdout;
 }
 
@@ -189,10 +192,13 @@ export async function listBaseBranches(repo: string): Promise<string[]> {
   return [...names];
 }
 
-/** What happened to the local base branch before a new session branched from it. */
+/**
+ * What happened to the local base branch before a new session branched from it. `remote` is set
+ * only when it was synced with a remote other than origin (a fork's `upstream`: `startPoint`).
+ */
 export type SyncResult =
-  | { kind: 'updated' | 'current' | 'no-upstream' }
-  | { kind: 'skipped'; reason: string };
+  | { kind: 'updated' | 'current' | 'no-upstream'; remote?: string }
+  | { kind: 'skipped'; reason: string; remote?: string };
 
 /**
  * Throws unless <name> is a plain branch name git accepts. Names reach git as
@@ -281,16 +287,17 @@ export async function baseExists(repo: string, base: string): Promise<boolean> {
 
 /**
  * Creates a worktree. A new branch starts from the local <base>, fast-forwarded
- * to origin/<base> first (after a fetch) so new work starts from the latest
- * upstream. If <base> can't be fast-forwarded, the branch starts from
- * origin/<base> instead. Returns null when the branch already existed. With
- * <from>, a branch that is only on that remote (fetched by existingBranch) gets
- * a local branch at its remote-tracking ref.
+ * first (after a fetch) to origin/<base>, or in a fork to upstream/<base> when
+ * that's newer (`startPoint`), so new work starts from the latest base. If
+ * <base> can't be fast-forwarded, the branch starts from that remote's <base>
+ * instead. Returns null when the branch already existed. With <from>, a branch
+ * that is only on that remote (fetched by existingBranch) gets a local branch
+ * at its remote-tracking ref.
  */
 export async function addWorktree(repo: string, path: string, branch: string, base: string, from: BranchSource | null = null): Promise<SyncResult | null> {
   await checkBranchName(repo, base);
   await checkBranchName(repo, branch);
-  await tryGit(repo, 'fetch', '--quiet', 'origin', base);
+  await fetchBase(repo, base);
   if (await revParse(repo, `refs/heads/${branch}`)) {
     await git(repo, 'worktree', 'add', path, branch);
     return null;
@@ -305,13 +312,64 @@ export async function addWorktree(repo: string, path: string, branch: string, ba
 }
 
 /**
- * Where a new branch starts: the local <base> after fast-forwarding it, or origin/<base>
- * when that was skipped. <base> must already be fetched.
+ * Fetches <base> from origin and, in a fork, from upstream too, side by side. Neither may fail
+ * the start: a remote without <base>, or one that can't be reached, leaves its ref as it was.
+ */
+async function fetchBase(repo: string, base: string): Promise<void> {
+  const fork = !!(await readRemotes(repo)).upstream;
+  await Promise.all([
+    tryGit(repo, 'fetch', '--quiet', 'origin', base),
+    fork ? tryGit(repo, 'fetch', '--quiet', 'upstream', `+refs/heads/${base}:refs/remotes/upstream/${base}`) : null,
+  ]);
+}
+
+/**
+ * The remote a new branch's <base> comes from: upstream when the repo is a fork whose
+ * upstream/<base> is strictly ahead of origin/<base> (origin's is an ancestor of it, or origin has
+ * none), else origin. A fork's own <base> can lag upstream's by months; one with commits upstream
+ * lacks (diverged) keeps its own. <base> must already be fetched.
+ */
+export async function baseRemote(repo: string, base: string): Promise<'origin' | 'upstream'> {
+  const up = await revParse(repo, `refs/remotes/upstream/${base}`);
+  if (!up) return 'origin';
+  const origin = await revParse(repo, `refs/remotes/origin/${base}`);
+  if (!origin) return 'upstream';
+  if (origin === up) return 'origin';
+  return (await tryGit(repo, 'merge-base', '--is-ancestor', origin, up)) === null ? 'origin' : 'upstream';
+}
+
+/**
+ * Where a new branch starts: the local <base> after fast-forwarding it to its remote's
+ * (`baseRemote`), or that remote's <base> when that was skipped. <base> must already be fetched.
  */
 async function startPoint(repo: string, base: string): Promise<{ sync: SyncResult; start: string }> {
-  const sync = await fastForward(repo, base);
-  const start = sync.kind === 'skipped' && (await revParse(repo, `refs/remotes/origin/${base}`)) ? `origin/${base}` : base;
+  const remote = await baseRemote(repo, base);
+  const ff = await fastForward(repo, base, { remote, branch: base });
+  const sync: SyncResult = remote === 'origin' ? ff : { ...ff, remote };
+  const start = sync.kind === 'skipped' && (await revParse(repo, `refs/remotes/${remote}/${base}`)) ? `${remote}/${base}` : base;
   return { sync, start };
+}
+
+/** gh's per-branch default base (`gh pr create`), which Kode keeps as a session's base: `meko kode review` reads it. */
+const mergeBaseKey = (branch: string) => `branch.${branch}.gh-merge-base`;
+
+/** <branch>'s `gh-merge-base`, or null when it has none. */
+export async function readMergeBase(repo: string, branch: string): Promise<string | null> {
+  return (await tryGit(repo, 'config', '--get', mergeBaseKey(branch))) || null;
+}
+
+/**
+ * Sets <branch>'s `gh-merge-base` to <base>. With `keep`, a value already there (one the user set
+ * on an existing branch) stays. With `was` (the base Kode last kept there), it's replaced only
+ * when it's unset or still that value: one the user set stays. git drops the key with the branch.
+ */
+export async function setMergeBase(repo: string, branch: string, base: string, o: { keep?: boolean; was?: string } = {}): Promise<void> {
+  await checkBranchName(repo, branch);
+  if (o.keep || o.was !== undefined) {
+    const now = await readMergeBase(repo, branch);
+    if (now && (o.keep || now !== o.was)) return;
+  }
+  await git(repo, 'config', mergeBaseKey(branch), base);
 }
 
 /**
@@ -324,7 +382,7 @@ export async function reuseWorktree(repo: string, path: string, branch: string, 
   await checkBranchName(repo, base);
   await checkBranchName(repo, branch);
   if (!(await isIdleWorktree(repo, path))) throw new Error(`${path} isn't a clean worktree of ${repo} with a detached HEAD`);
-  await tryGit(repo, 'fetch', '--quiet', 'origin', base);
+  await fetchBase(repo, base);
   if (await revParse(repo, `refs/heads/${branch}`)) {
     await git(path, 'checkout', '--quiet', branch);
     return null;

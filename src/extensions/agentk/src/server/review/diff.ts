@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { lstat, open, readFile, readlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { diffBase, matchPatches, newFilePatch, parseNameStatus, parseNumstat, splitPatch } from '../changes.js';
-import { gitRaw } from '../git.js';
+import { GIT_MAX_OUTPUT, gitRaw } from '../git.js';
 import type { Diff, FileChange, Withheld } from './types.js';
 
 /** The cloud's REVIEW_INLINE_DIFF_BYTES: a patch up to this goes in the prompt whole. */
@@ -212,6 +212,18 @@ function blank(path: string, oldPath: string | null, status: FileChange['status'
   };
 }
 
+/**
+ * The error for a change too large for git's output buffer (`gitRaw`'s `GIT_MAX_OUTPUT`). A branch's own work
+ * is rarely that big: its base is nearly always wrong, such as a fork's own base far behind the
+ * upstream one the branch left. So it names the base, how many commits it's behind, and what to check.
+ */
+async function tooLarge(worktree: string, mb: { ref: string; sha: string }): Promise<Error> {
+  const n = Number((await gitRaw(worktree, 'rev-list', '--count', `${mb.sha}..HEAD`).catch(() => '')).trim());
+  const since = Number.isFinite(n) && n > 0 ? `, ${n} commit${n === 1 ? '' : 's'} since ${mb.sha.slice(0, 11)}` : '';
+  return new Error(`The change against ${mb.ref} is too large to review (over ${GIT_MAX_OUTPUT / 1024 / 1024} MB of diff${since}). `
+    + `Its base is probably wrong: check that ${mb.ref} is the branch the work started from, and fetch it if it's behind.`);
+}
+
 /** A repo path as one file name, so the patches folder stays one level deep. */
 function patchFileName(path: string): string {
   return `${path.split('/').join('__')}.patch`;
@@ -231,7 +243,10 @@ export async function readDiff(worktree: string, base: string, runDir: string, o
     gitDiff(worktree, '--numstat', '-z', mb.sha),
     gitDiff(worktree, `--unified=${DIFF_CONTEXT}`, mb.sha),
     gitRaw(worktree, 'ls-files', '--others', '--exclude-standard', '-z').catch(() => ''),
-  ]);
+  ]).catch(async (e: unknown) => {
+    if ((e as NodeJS.ErrnoException)?.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw e;
+    throw await tooLarge(worktree, mb);
+  });
   const entries = parseNameStatus(status);
   const counts = parseNumstat(numstat);
   const patches = matchPatches(entries, splitPatch(whole));

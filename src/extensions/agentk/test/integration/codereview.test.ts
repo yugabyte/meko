@@ -840,6 +840,22 @@ describe('code review before the PR (real session host + git, fake claude runnin
     expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
   });
 
+  it("says the review waits on you when its Claude asks about an --add-dir folder before starting, and goes on once that's answered", async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    // Newer Claude Code's "Adding a new directory" dialog: no hooks until it's answered.
+    writeFileSync(join(env.fakeDir, 'add-dir-prompt'), '');
+    await env.core.sessions.action(s.id, 'open-pr');
+    const childId = (await waitFor(() => env.core.sessions.get(s.id).codeReview?.sessionId, (id) => !!id, 10000, "the review's session"))!;
+    await waitFor(async () => {
+      await env.core.sessions.reconcile();
+      return env.core.sessions.get(s.id).codeReview!;
+    }, (r) => r.waiting, 15000, 'the review to wait on the dialog');
+    expect(env.core.sessions.get(childId)).toMatchObject({ status: 'needs_input', statusDetail: expect.stringMatching(/trust this folder/) });
+    rmSync(join(env.fakeDir, 'add-dir-prompt'));
+    await env.core.host.sendKeys(env.core.sessions.get(childId).paneName, 'Enter');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+  });
+
   it('archives the review session with its task, and leaves the task\'s worktree and branch alone', async () => {
     const s = await task({ review: { strategy: 'sirius-1.0' } });
     fake('review-skip', ['r1s1:all']);

@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +98,203 @@ func TestSplitText(t *testing.T) {
 	for _, c := range splitText(strings.Repeat("é ", 1500), ChunkSize, ChunkOverlap) {
 		if runes(c) > ChunkSize {
 			t.Errorf("a chunk is %d characters", runes(c))
+		}
+	}
+	// A word longer than a chunk is cut between characters, with no overlap across the words
+	// around it.
+	got := splitText("hi there abcdefghijklmnopqrstuvwxyz ok bye", 10, 3)
+	want := []string{"hi there", "abcdefghij", "hijklmnopq", "opqrstuvwx", "vwxyz", "ok bye"}
+	if !slices.Equal(got, want) {
+		t.Errorf("long word:\n got %q\nwant %q", got, want)
+	}
+}
+
+// mergeChars is how unbroken text was cut before cutRunes: a string per character, packed by merge.
+func mergeChars(text string, size, overlap int) []string {
+	return refMerge(strings.Split(text, ""), "", size, overlap)
+}
+
+// TestCutRunes checks cutRunes gives exactly the chunks merge gave, on the lengths where a window
+// could be a character off and on random text.
+func TestCutRunes(t *testing.T) {
+	check := func(text string, size, overlap int) {
+		t.Helper()
+		if got, want := cutRunes(text, size, overlap), mergeChars(text, size, overlap); !slices.Equal(got, want) {
+			t.Errorf("cutRunes(%q, %d, %d):\n got %q\nwant %q", text, size, overlap, got, want)
+		}
+	}
+	abc := "abcdefghijklmnopqrstuvwxyz"
+	for n := 0; n <= len(abc); n++ { // size 10, step 7: windows end at 10, 17 and 24
+		check(abc[:n], 10, 3)
+	}
+	for _, overlap := range []int{-1, 0, 1, 9, 10, 11, 50} { // overlap of size or more keeps size-1
+		check(abc, 10, overlap)
+	}
+	for _, size := range []int{1, 2, 3} {
+		check(abc, size, 1)
+	}
+	check(strings.Repeat("é中😀a", 20), 7, 2)             // windows count characters, not bytes
+	check("aaaa"+strings.Repeat("\t", 12)+"bbbb", 6, 2) // blank windows are dropped
+	check(" \r x \t", 2, 1)
+	check(strings.Repeat("[", 5000), ChunkSize, ChunkOverlap)
+	check(strings.Repeat("x", 3000), minBody, minBody/4)
+
+	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // G404: seeded so every run checks the same texts
+	alphabet := []string{"a", "b", "é", "中", "😀", "\t", "\r", " ", " ", "\xff"}
+	for range 3000 {
+		var b strings.Builder
+		for range rng.IntN(120) {
+			b.WriteString(alphabet[rng.IntN(len(alphabet))])
+		}
+		check(b.String(), 1+rng.IntN(30), rng.IntN(35)-2)
+	}
+}
+
+func FuzzCutRunes(f *testing.F) {
+	f.Add("abcdefghijklmnopqrstuvwxyz", 10, 3)
+	f.Add("é中😀\t x", 3, 1)
+	f.Fuzz(func(t *testing.T, text string, size, overlap int) {
+		size = 1 + abs(size)%64
+		overlap = abs(overlap) % 80
+		if got, want := cutRunes(text, size, overlap), mergeChars(text, size, overlap); !slices.Equal(got, want) {
+			t.Errorf("cutRunes(%q, %d, %d):\n got %q\nwant %q", text, size, overlap, got, want)
+		}
+	})
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+// randomText builds text from words, spaces, newlines, blank lines, tabs, \r, multibyte
+// characters and words longer than small chunks, so every level of the splitter, empty pieces
+// and over-long pieces get exercised.
+func randomText(rng *rand.Rand, tokens int) string {
+	parts := []string{
+		"a", "bb", "ccc", "é", "中", "😀", "\xff",
+		" ", " ", "  ", "\n", "\n", "\n\n", "\n\n\n", "\t", "\r", "\r\n", " ",
+	}
+	var b strings.Builder
+	for range tokens {
+		if rng.IntN(12) == 0 {
+			b.WriteString(strings.Repeat("x", rng.IntN(60)))
+			continue
+		}
+		b.WriteString(parts[rng.IntN(len(parts))])
+	}
+	return b.String()
+}
+
+// TestSplitTextMatchesReference checks the splitter that packs by position gives exactly the
+// chunks the one that split into strings gave (chunk_reference_test.go), at every level.
+func TestSplitTextMatchesReference(t *testing.T) {
+	check := func(text string, size, overlap int) {
+		t.Helper()
+		if got, want := splitText(text, size, overlap), refSplitText(text, size, overlap); !slices.Equal(got, want) {
+			t.Errorf("splitText(%q, %d, %d):\n got %q\nwant %q", text, size, overlap, got, want)
+		}
+	}
+	for _, text := range []string{"", " ", "\n", "a  b", "a\n\n\nb", " a ", "a b\nc d\n\ne f",
+		words(300, "alpha") + "\n\n" + words(300, "beta"), "hi there abcdefghijklmnopqrstuvwxyz ok bye"} {
+		for _, so := range [][2]int{{1, 0}, {2, 1}, {5, 2}, {10, 3}, {10, 10}, {10, 50}, {ChunkSize, ChunkOverlap}} {
+			check(text, so[0], so[1])
+		}
+	}
+	rng := rand.New(rand.NewPCG(3, 4)) //nolint:gosec // G404: seeded so every run checks the same texts
+	for range 3000 {
+		check(randomText(rng, rng.IntN(80)), 1+rng.IntN(40), rng.IntN(45)-2)
+	}
+	for range 50 { // the sizes files are chunked at, on longer text
+		size := minBody + rng.IntN(ChunkSize-minBody+1)
+		check(randomText(rng, 2000+rng.IntN(3000)), size, min(ChunkOverlap, size/4))
+	}
+}
+
+// TestPackLinesMatchesReference does the same for CSV lines, with lines longer than a chunk and
+// lines ending in a stray \r, which packLines trims.
+func TestPackLinesMatchesReference(t *testing.T) {
+	rng := rand.New(rand.NewPCG(5, 6)) //nolint:gosec // G404: seeded so every run checks the same texts
+	for range 300 {
+		var b strings.Builder
+		for i := range rng.IntN(40) {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			n := rng.IntN(120)
+			if rng.IntN(10) == 0 {
+				n = 900 + rng.IntN(400) // around a chunk's size, some longer
+			}
+			b.WriteString(randomText(rng, n/4))
+			b.WriteString(strings.Repeat("\r", rng.IntN(3)/2+rng.IntN(5)/4))
+		}
+		text := b.String()
+		if got, want := packLines(text), refPackLines(text); !slices.Equal(got, want) {
+			t.Errorf("packLines(%q):\n got %q\nwant %q", text, got, want)
+		}
+	}
+}
+
+func FuzzSplitText(f *testing.F) {
+	f.Add("a b\nc d\n\ne f", 5, 2)
+	f.Add("hi there abcdefghijklmnopqrstuvwxyz ok bye", 10, 3)
+	f.Fuzz(func(t *testing.T, text string, size, overlap int) {
+		size = 1 + abs(size)%64
+		overlap = abs(overlap) % 80
+		if got, want := splitText(text, size, overlap), refSplitText(text, size, overlap); !slices.Equal(got, want) {
+			t.Errorf("splitText(%q, %d, %d):\n got %q\nwant %q", text, size, overlap, got, want)
+		}
+	})
+}
+
+func FuzzPackLines(f *testing.F) {
+	f.Add("name,city\nAda,London\r\nBob,Paris\r")
+	f.Fuzz(func(t *testing.T, text string) {
+		if got, want := packLines(text), refPackLines(text); !slices.Equal(got, want) {
+			t.Errorf("packLines(%q):\n got %q\nwant %q", text, got, want)
+		}
+	})
+}
+
+// TestSplitTextAllocs guards against packing a string per piece. With no separator that made a
+// string per character: about 4.5 GB on a 50 MiB file, and on 1 MiB about 4,100 allocations and
+// 148 MB. Single characters between spaces or newlines did the same one level up: on 1 MiB about
+// 3,600 allocations and 71 MB. Packing by position takes a few dozen, whatever the pieces. The
+// chunks are checked against the reference on 64 KiB, since the reference is the slow splitter. A
+// CRLF CSV goes through extract, which turns \r\n into \n, so its chunks are sliced, not joined.
+func TestSplitTextAllocs(t *testing.T) {
+	split := func(text string) []string { return splitText(text, ChunkSize, ChunkOverlap) }
+	refSplit := func(text string) []string { return refSplitText(text, ChunkSize, ChunkOverlap) }
+	csv := func(text string) []string {
+		chunks, err := extract(context.Background(), "a.csv", []byte(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return chunks
+	}
+	refCSV := func(text string) []string { return refPackLines(strings.ReplaceAll(text, "\r\n", "\n")) }
+	for _, c := range []struct {
+		name      string
+		unit      string // repeated to make the text
+		got, want func(string) []string
+	}{
+		{"unbroken", "[", split, refSplit},
+		{"a character, then a space", "[ ", split, refSplit},
+		{"a character, then a newline", "[\n", split, refSplit},
+		{"short words", "abcd ", split, refSplit},
+		{"CSV of one-character lines", "[\n", packLines, refPackLines},
+		{"CRLF CSV of one-character lines", "[\r\n", csv, refCSV},
+	} {
+		text := func(size int) string { return strings.Repeat(c.unit, size/len(c.unit)) }
+		small := text(1 << 16)
+		if got, want := c.got(small), c.want(small); !slices.Equal(got, want) {
+			t.Errorf("%s: %d chunks differ from the reference's %d", c.name, len(got), len(want))
+		}
+		big := text(1 << 20)
+		if allocs := testing.AllocsPerRun(5, func() { c.got(big) }); allocs > 100 {
+			t.Errorf("%s: 1 MiB took %.0f allocations, want at most 100", c.name, allocs)
 		}
 	}
 }

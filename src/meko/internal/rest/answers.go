@@ -3,6 +3,7 @@ package rest
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -65,10 +66,21 @@ func namedCommand(c echo.Context) error {
 }
 
 // answer is POST /datapacks/:id/answer {query, passages: [{source, id, text}]}: an answer to query
-// written from the passages a search returned, {answer, cited, model}.
+// written from the passages a search returned, {answer, cited, model}. It's written here, by the
+// harness answers use, for this Meko's datapacks and for the linked Meko Cloud's alike (inCloud):
+// the passages come in the body, so Meko Cloud is asked only whether the datapack exists, and one
+// that doesn't is its 404, as on the routes byID passes on.
 func (a *api) answer(c echo.Context) error {
-	id, ok, err := a.pathDatapack(c)
+	cloud, ok, err := a.inCloud(c)
 	if !ok {
+		return err
+	}
+	id := ""
+	if cloud {
+		if _, err = a.Cloud.API(ctx(c), http.MethodGet, "/datapacks/"+strings.TrimSpace(c.Param("id")), nil); err != nil {
+			return cloudError(c, err)
+		}
+	} else if id, ok, err = a.pathDatapack(c); !ok {
 		return err
 	}
 	var body struct {
@@ -78,7 +90,12 @@ func (a *api) answer(c echo.Context) error {
 	if ok, berr := bind(c, &body); !ok {
 		return berr
 	}
-	out, err := a.Service.Answer(ctx(c), id, body.Query, body.Passages)
+	var out memory.SearchAnswer
+	if cloud {
+		out, err = a.Service.AnswerFrom(ctx(c), body.Query, body.Passages)
+	} else {
+		out, err = a.Service.Answer(ctx(c), id, body.Query, body.Passages)
+	}
 	switch {
 	case errors.Is(err, memory.ErrAnswersOff):
 		return envelope.Fail(c, http.StatusConflict, "ANSWERS_OFF", err.Error())

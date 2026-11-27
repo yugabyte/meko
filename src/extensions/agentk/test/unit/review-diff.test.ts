@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { anchorsLine, generatedByName, readDiff, secretPath } from '../../src/server/review/diff.js';
+import { readChange } from '../../src/server/review/context.js';
 import { findGuides, findMekoMds } from '../../src/server/review/guides.js';
 import { readCommits, readHistory } from '../../src/server/review/history.js';
+import { pickBase } from '../../src/server/reviewcli.js';
 
 /** A repo on `main` with one commit (test/helpers.ts has one too, but loads the whole server). */
 function gitRepo(dir: string): string {
@@ -66,6 +68,48 @@ describe('the change a review reads', () => {
   });
 
   afterEach(() => rmSync(join(dir, '..'), { recursive: true, force: true }));
+
+  it("reads a fork's change from upstream's base when origin's lags behind it", async () => {
+    // origin/main is the fork's own main, still at the first commit; the branch left upstream/main.
+    g('update-ref', 'refs/remotes/origin/main', 'main~1');
+    g('update-ref', 'refs/remotes/upstream/main', 'main');
+    const { ctx, diff } = await readChange({
+      folder: dir, repo: dir, base: 'main', dir: runDir, branch: 'feature', title: 't', prDescription: null, description: '', design: null,
+      meko: false, issues: async () => [], prior: [],
+    });
+    expect(diff.files.map((f) => f.path)).toEqual(['src/app.ts']);
+    expect(ctx.baseRef).toBe('upstream/main');
+    expect(ctx.baseSha).toBe(g('rev-parse', 'main').trim());
+    expect(ctx.commits).toHaveLength(1);
+  });
+
+  it("says a change too large to read has the wrong base, rather than git's buffer", async () => {
+    // Over git's 32 MB output: a branch's own work is rarely that big.
+    writeFileSync(join(dir, 'huge.txt'), `${'x'.repeat(1023)}\n`.repeat(33 * 1024));
+    g('add', 'huge.txt');
+    g('commit', '-q', '-m', 'huge');
+    await expect(readDiff(dir, 'main', runDir)).rejects.toThrow(
+      /^The change against main is too large to review \(over 32 MB of diff, 2 commits since [0-9a-f]{11}\)\. Its base is probably wrong/,
+    );
+  });
+
+  it("picks meko kode review's base: --base, the PR's, the session's, upstream/HEAD's, origin/HEAD's, then main", async () => {
+    g('branch', 'rel', 'main');
+    g('branch', 'trunk', 'main');
+    expect(await pickBase(dir, {})).toBe('main'); // no remotes: main or master
+    g('update-ref', 'refs/remotes/origin/trunk', 'main');
+    g('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+    expect(await pickBase(dir, {})).toBe('trunk');
+    g('update-ref', 'refs/remotes/upstream/main', 'main');
+    g('symbolic-ref', 'refs/remotes/upstream/HEAD', 'refs/remotes/upstream/main');
+    expect(await pickBase(dir, {})).toBe('main'); // a fork's own default branch can lag upstream's
+    g('config', 'branch.feature.gh-merge-base', 'gone');
+    expect(await pickBase(dir, {})).toBe('main'); // a base that isn't here is passed over
+    g('config', 'branch.feature.gh-merge-base', 'rel');
+    expect(await pickBase(dir, {})).toBe('rel'); // the Kode session's base
+    expect(await pickBase(dir, { prBase: 'trunk', pr: '7' })).toBe('trunk');
+    expect(await pickBase(dir, { base: 'main', prBase: 'trunk', pr: '7' })).toBe('main');
+  });
 
   it('reads committed, uncommitted and untracked changes, and withholds credentials and generated files', async () => {
     write('src/review/x.ts', 'export const x = 1;\n'); // untracked

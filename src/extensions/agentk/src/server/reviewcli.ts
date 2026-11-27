@@ -20,7 +20,7 @@ import { isRepoName, parseGithubRef, parsePrInput } from '../shared/github-refs.
 import { checkModel } from '../shared/harnesses.js';
 import { REVIEW_MEKO_SERVER, signInSettings } from './claude.js';
 import { loadConfig, type Config } from './config.js';
-import { git } from './git.js';
+import { git, readMergeBase } from './git.js';
 import { issueOrPr, repoVisibility } from './github.js';
 import { SESSION_MARKERS } from './launcher.js';
 import { errMsg } from './log.js';
@@ -28,7 +28,7 @@ import { probeLocalMeko, type LocalMeko } from './mekolocal.js';
 import { mekoDirOf } from './movehome.js';
 import { claudePath, type Paths } from './paths.js';
 import { cliReviewsDir, sweepOldRecords, writeCliRecord, CLI_RECORD_V, type CliReviewRecord } from './review/clirecords.js';
-import { baseRefIn, commitRef, readChange, repoNameOf, writeIssue } from './review/context.js';
+import { baseIn, commitRef, readChange, repoNameOf, writeIssue } from './review/context.js';
 import {
   HeadlessReview, ReviewFailed, claudeSteps, noUsage, serveTools, toolsToken, type HeadlessProgress, type HeadlessResult, type PassRun, type StepRunner,
   type StepUsage,
@@ -49,7 +49,8 @@ it found and exits 0, or 2 when a pass didn't report, so the review went on with
 couldn't review.
 
   --base <branch>        The base to review against (default: the PR's base with --pr, else the
-                         branch origin/HEAD names, else main or master)
+                         Kode session's base, else the branch upstream/HEAD or origin/HEAD
+                         names, else main or master)
   --pr <pr>              The PR this change is for (a number, owner/name#number or a link): its
                          title and description go to the review, which checks the change against them
   --description <text>   What the change is meant to do, for the review to check it against
@@ -235,26 +236,31 @@ async function readPr(folder: string, input: string, env: NodeJS.ProcessEnv): Pr
 }
 
 /**
- * The base the change is read against, as a ref that names a commit here: `--base` (origin's copy
- * of a branch first, as a task's review reads it), else the PR's base, else the branch origin/HEAD
- * names, else main or master.
+ * The base the change is read against, as a branch name (or a commit) here, which `readDiff`
+ * resolves to origin's or, in a fork, upstream's copy, whichever the branch left last: `--base`,
+ * else the PR's base, else the branch's `gh-merge-base` (a Kode session's base, which Kode keeps
+ * there), else the branch upstream/HEAD names (a fork's origin/HEAD is the fork's own default
+ * branch, which can lag far behind), else origin/HEAD's, else main or master.
  */
 export async function pickBase(folder: string, a: { base?: string; prBase?: string; pr?: string }): Promise<string> {
   if (a.base) {
-    const ref = (await commitRef(folder, `origin/${a.base}`)) ?? (await commitRef(folder, a.base));
-    if (!ref) throw new UsageError(`There's no branch or commit ${a.base} here. Fetch it, or name another with --base.`);
-    return ref;
+    if (!(await baseIn(folder, a.base))) throw new UsageError(`There's no branch or commit ${a.base} here. Fetch it, or name another with --base.`);
+    return a.base;
   }
   if (a.prBase) {
-    const ref = await baseRefIn(folder, a.prBase);
-    if (!(await commitRef(folder, ref))) throw new UsageError(`PR ${a.pr}'s base, ${a.prBase}, isn't here. Fetch it (git fetch origin ${a.prBase}), or name the base with --base.`);
-    return ref;
+    if (!(await baseIn(folder, a.prBase))) throw new UsageError(`PR ${a.pr}'s base, ${a.prBase}, isn't here. Fetch it (git fetch origin ${a.prBase}), or name the base with --base.`);
+    return a.prBase;
   }
-  const head = await git(folder, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD').catch(() => '');
-  if (head && (await commitRef(folder, head))) return head;
+  const branch = await git(folder, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '');
+  const kept = branch ? await readMergeBase(folder, branch) : null;
+  if (kept && kept !== branch && (await baseIn(folder, kept))) return kept;
+  for (const remote of ['upstream', 'origin']) {
+    const head = await git(folder, 'symbolic-ref', '--quiet', '--short', `refs/remotes/${remote}/HEAD`).catch(() => '');
+    const name = head.startsWith(`${remote}/`) ? head.slice(remote.length + 1) : '';
+    if (name && (await commitRef(folder, head))) return name;
+  }
   for (const b of ['main', 'master']) {
-    const ref = await baseRefIn(folder, b);
-    if (await commitRef(folder, ref)) return ref;
+    if (await baseIn(folder, b)) return b;
   }
   throw new UsageError("Kode couldn't tell this repo's base branch. Name it with --base.");
 }

@@ -262,11 +262,20 @@ a file scrolled back into view. Measured in Chromium at phone size with the CPU 
 rows over several files open in about 0.7 s (2,000 rows took 2.2–2.5 s before), a push takes
 4–5 ms (60–110 ms before), and a refetch that changes nothing 18–25 ms of script (66–99 ms before).
 Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of untracked files is
-read per refresh. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
-shown as *Before* and *After* side by side with its size, instead of "Binary file";
+read per refresh. Untracked images (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) are known by their
+names: binary at any size, and never read, so they don't use up that budget (`isRasterImage`).
+A changed image (those, and SVG) is
+shown as *Before* and *After* side by side with its size: a binary one instead of "Binary file",
+an SVG, which is text, above its diff, so its rows still take comments, suggestions and ↑ ↓ (no
+Preview/Diff toggle, and no swipe or onion skin), while a raster image git diffs as text (a Git
+LFS pointer, a symlink) shows only its diff (`showsImage()` in `src/web/diff.ts`). An SVG is only
+ever an `<img>`, never inline, so a script in it never runs, and its preview reloads only when its
+patch changes (`imageVersion()`; a binary image's, or an SVG's whose patch was cut short or left
+out, reloads with each fetch);
 `GET /api/sessions/:id/changes/image` serves the base's version from git or the worktree's from
 disk (in a commit's view, its parent's and its own, from git), only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
-a sandboxing content policy so the bytes can never run as a page. The footer counts use the same
+a sandboxing content policy so the bytes can never run as a page, an SVG's included when
+**Open full size** opens it in a tab of its own. The footer counts use the same
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
 (*4 / 12*), and `[` / `]` step to the previous or next file. The filter keeps a file whose path or
@@ -332,6 +341,44 @@ its lines can't be found it's shown at the top of its file, still sendable: as c
 still shows its line with other text, otherwise as not in the diff shown. Deleting a draft asks
 first. Sent comments are
 kept and shown with **Show sent**.
+
+### Suggested changes
+
+A comment on added or unchanged lines can suggest a change, as on GitHub: **± Suggest a change**
+in the comment's editor puts its lines in a ```` ```suggestion ```` block at the cursor, to edit
+into the text you want there (an empty block deletes them). Removed lines take no suggestion, and
+the server refuses one there. The suggestion stays in the comment's body, in GitHub's syntax
+(`src/shared/suggestion.ts`), so nothing new is stored and a Review a PR session can post it to
+GitHub as a real suggestion. Its card draws it as − and + lines, colored like the diff's rows, in
+a box of its own that scrolls sideways (or wraps with **Wrap lines**), with a line saying how many
+earlier lines the 20-line excerpt left out.
+
+Sent to Claude, each comment with a suggestion ends with a line saying what it means
+(`suggestionNote()` in `src/server/comments.ts`), so a repo's own `comments` or
+`review-pr-comments` template still carries it: in a task, the exact text to put in place of those
+lines; in a Review a PR session, the block to keep as it is in the review comment, posted over the
+same lines (`start_line` and `line`, side `RIGHT`) so GitHub shows it as a suggested change.
+
+A draft with one suggestion, shown on its lines, also has **Apply** (it asks first), outside a
+Review a PR session. It writes the suggestion into the worktree file at once, then deletes the
+draft (`POST /api/sessions/:id/comments/:cid/apply`, `CommentService.apply`, `replaceLines()` in
+`src/server/changes.ts`), and refreshes the footer's diff size. The panel sends where the lines are
+in the diff shown now and their text (`applyRange()` in `src/web/diff.ts`). A comment is drawn
+where its last line is, which needn't be its whole range, so both the panel and the server first
+check that those lines still end with the comment's excerpt, the text the suggestion was written
+against (`excerptMatches()` in `src/shared/suggestion.ts`). The server then writes only while the
+file still has exactly that text there, which the stored excerpt, cut short, couldn't prove. It
+refuses while the agent is mid-turn (starting, working or waiting on a prompt) or has background
+tasks running, so it never writes under the agent's edit, and keeps the file's line endings and
+final newline. It writes only inside the worktree, by real path, and never in a `.git` folder,
+as asked or as a symlink resolves. A failed write says why (a read-only file, a full disk).
+
+Editing a draft, **± Suggest a change** starts from its lines as the diff shows them, while they
+still end with its excerpt. Otherwise it starts from the stored excerpt, only if that holds the
+whole range uncut (`excerptWhole()`); with neither, the button isn't offered. The excerpt keeps
+only the last 20 lines and cuts long ones, so a suggestion built from it alone, once applied,
+would replace the whole range with part of it. A suggestion typed into a comment on removed
+lines is refused when it's saved, as when it's written.
 
 ## Side panels
 

@@ -95,6 +95,26 @@ export function ensureWorkspaceTrust(dir: string): 'already' | 'added' | 'no-con
 }
 
 /**
+ * Removes Claude Code's `projects` entries for `dirs` (each spelling: as given and its real path),
+ * for Kode's own folders a session no longer passes as `--add-dir` (`ensureWorkspaceTrust` added
+ * them). Never a repo's or a worktree's. 'none' when there was nothing to remove. Like an add, a
+ * removal can be undone by a Claude that writes back its older copy of the file (one exiting at
+ * the archive, or one starting), so `untrustFolders` runs it again while it still finds entries.
+ */
+export function forgetWorkspaceTrust(dirs: string[]): 'removed' | 'none' | 'no-config' {
+  const file = claudeConfigPath();
+  if (!existsSync(file)) return 'no-config';
+  const keys = [...new Set(dirs.flatMap(spellings))];
+  const cfg = JSON.parse(readFileSync(file, 'utf8')) as ClaudeJson;
+  const projects = cfg.projects ?? {};
+  const gone = keys.filter((k) => k in projects);
+  if (!gone.length) return 'none';
+  for (const k of gone) delete projects[k];
+  writeClaudeJson(file, cfg);
+  return 'removed';
+}
+
+/**
  * Claude Code opens on its first-run setup (the text style, then how to sign in) until its config
  * says `hasCompletedOnboarding`, which signing in with `claude auth login` doesn't set. It fires no
  * hooks meanwhile, so a session Kode starts would wait there behind the Starting panel: before a
@@ -140,21 +160,29 @@ export function copyClaudeProjects(map: (dir: string) => string | null): number 
   return added;
 }
 
-/** Text Claude Code shows in its folder-trust dialog. */
-export const TRUST_PROMPT_RE = /trust this folder|do you trust the files|Is this a project you created or one you trust/i;
+/**
+ * Text Claude Code shows in its folder-trust dialogs: the one for the folder it starts in, and the
+ * one newer versions show for each `--add-dir` folder it hasn't worked in ("Adding a new directory:
+ * <path> … Is this a directory you created or one you trust?"). Any run of white space between
+ * words, since a narrow terminal wraps the dialog's lines.
+ */
+export const TRUST_PROMPT_RE =
+  /trust\s+this\s+folder|do\s+you\s+trust\s+the\s+files|Is\s+this\s+a\s+(?:project|directory)\s+you\s+created\s+or\s+one\s+you\s+trust|Adding\s+a\s+new\s+directory/i;
 
 /** Text Claude Code shows in its first-run setup (measured on 2.1.319): its text style, then how to sign in. */
 export const SETUP_PROMPT_RE = /Choose the text style that looks best with your terminal|Select login method/i;
 
 /**
  * Runs a write to ~/.claude.json until it sticks. Other Claude processes rewrite the file with
- * their own copy when they start, which can drop a fresh entry, so a write that added something is
- * checked again after a moment. `done` is logged once. Never throws.
+ * their own copy when they start or exit, which can drop a fresh entry or bring back a removed one,
+ * so a write that changed something ('added', 'removed') is checked again after a moment, up to 3
+ * times. `done` is logged once. Never throws.
  */
 async function keepWritten(write: () => string, done: string, failed: string, log: Logger): Promise<void> {
   try {
     for (let i = 0; i < 3; i++) {
-      if (write() !== 'added') return;
+      const r = write();
+      if (r !== 'added' && r !== 'removed') return;
       if (i === 0) log.info(done);
       await new Promise((r) => setTimeout(r, 400));
     }
@@ -167,6 +195,16 @@ async function keepWritten(write: () => string, done: string, failed: string, lo
 export async function trustFolder(dir: string, log: Logger): Promise<void> {
   await keepWritten(() => ensureWorkspaceTrust(dir), `trusted ${dir} in Claude Code, so sessions there skip its folder-trust prompt`,
     `could not mark ${dir} as trusted in Claude Code`, log);
+}
+
+/**
+ * Removes Claude Code's trust entries for `dirs` (`forgetWorkspaceTrust`), checked again as an add
+ * is. Best effort: a Claude that writes its older copy back after the last check keeps them, which
+ * leaves a stale entry for a Kode folder, nothing more. Never throws.
+ */
+export async function untrustFolders(dirs: string[], log: Logger): Promise<void> {
+  await keepWritten(() => forgetWorkspaceTrust(dirs), `removed Claude Code's folder trust for ${dirs.join(', ')}`,
+    `could not remove Claude Code's folder trust for ${dirs.join(', ')}`, log);
 }
 
 /** Makes sure Claude Code's first-run setup is marked done (`ensureOnboarded`). Never throws. */

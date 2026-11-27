@@ -516,9 +516,13 @@ process.on('SIGHUP', () => {
 // (1,024 bytes on macOS, 4,096 on Linux) and a longer typed prompt never arrives whole.
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding('utf8');
-// Like Claude Code in an untrusted folder, or before its first-run setup is done: no hooks until
-// the dialog is answered.
-for (const [marker, text] of [['trust-prompt', 'Do you trust the files in this folder?'], ['setup-prompt', 'Choose the text style that looks best with your terminal']]) {
+// Like Claude Code in an untrusted folder, with an --add-dir folder it hasn't worked in (newer
+// versions), or before its first-run setup is done: no hooks until the dialog is answered.
+for (const [marker, text] of [
+  ['trust-prompt', 'Do you trust the files in this folder?'],
+  ['add-dir-prompt', `Adding a new directory:\r\n ${opt('--add-dir') ?? ''}\r\nThis session hasn't worked here before. Is this a directory you created or one you trust?`],
+  ['setup-prompt', 'Choose the text style that looks best with your terminal'],
+]) {
   if (existsSync(join(dir, marker))) {
     process.stdout.write(text + '\r\n');
     await new Promise((r) => process.stdin.once('data', r));

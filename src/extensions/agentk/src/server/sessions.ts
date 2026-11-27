@@ -10,7 +10,7 @@ import { changedImage, changedText, changes, diffBase, NotChangedError, diffStat
 import {
   BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fastForward, isMainRepo,
   fetchPrHead, git, gitRaw, isIdleWorktree, listBaseBranches, prLocalBranch, prRef, remoteFor, remoteOf, remoteRepo, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
-  worktreeClean, type BranchSource, type SyncResult,
+  setMergeBase, worktreeClean, type BranchSource, type SyncResult,
 } from './git.js';
 import type { GuardDecision, HookContext, HookPayload, ModReply } from './hooks.js';
 import { findPr, isRepoName, issueText, prInfo, repoVisibility, type PrInfo } from './github.js';
@@ -257,10 +257,12 @@ function startedText(branch: string, base: string, sync: SyncResult | null, reus
       : sync?.kind === 'skipped' ? `; it wasn't updated from ${remote}: ${sync.reason}` : '';
     return `${on} (base ${base})${note}`;
   }
+  // origin's base, or a fork's upstream's when that's newer (`startPoint` in git.ts).
+  const remote = sync?.remote ?? 'origin';
   switch (sync?.kind) {
-    case 'updated': return `Started on ${branch} from ${base} (fast-forwarded ${base} to origin/${base})`;
-    case 'current': return `Started on ${branch} from ${base} (already up to date with origin)`;
-    case 'skipped': return `Started on ${branch} from origin/${base}; local ${base} wasn't updated: ${sync.reason}`;
+    case 'updated': return `Started on ${branch} from ${base} (fast-forwarded ${base} to ${remote}/${base})`;
+    case 'current': return `Started on ${branch} from ${base} (already up to date with ${remote})`;
+    case 'skipped': return `Started on ${branch} from ${remote}/${base}; local ${base} wasn't updated: ${sync.reason}`;
     default: return `Started on ${branch} from ${base}`;
   }
 }
@@ -514,9 +516,34 @@ export class SessionManager {
   update(id: string, fields: Partial<Record<keyof SessionRow, string | number | null>>): void {
     const keys = Object.keys(fields);
     if (!keys.length) return;
+    // The base this replaces: its branch's gh-merge-base follows only while it still holds it.
+    const was = typeof fields.base_branch === 'string' ? sessionRow(this.db, id)?.base_branch : undefined;
     run(this.db, `UPDATE sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
       ...keys.map((k) => fields[k as keyof SessionRow] ?? null), id);
+    // Every change of a session's base (a PR's, the Changes panel's) reaches its branch's gh-merge-base.
+    if (was !== undefined && was !== fields.base_branch) void this.noteBase(id, { was });
     this.core.changed();
+  }
+
+  /**
+   * Writes the session's base into its branch's `gh-merge-base` (git.ts `setMergeBase`), where
+   * `meko kode review` run in its worktree finds it; the CLI never opens state.db. Not for a
+   * Review a PR session, whose branch is Kode's own. With `keep` (a task started on an existing
+   * branch), a value the user set stays; with `was` (a base change), it's replaced only while it
+   * still holds the old base, so a value the user set is never written over, by a change of theirs
+   * or one Kode makes (a PR's base). Never fails: a review without it uses upstream/HEAD.
+   */
+  private async noteBase(id: string, o: { keep?: boolean; was?: string } = {}): Promise<void> {
+    try {
+      const r = sessionRow(this.db, id);
+      if (!r || r.kind === 'review-pr' || !r.branch || !r.base_branch || r.base_branch === r.branch) return;
+      const repo = r.repo_path ?? r.worktree_path;
+      if (!repo || !existsSync(repo)) return;
+      await setMergeBase(repo, r.branch, r.base_branch, o);
+    } catch (e) {
+      // Also a database closed by a shutdown while git ran.
+      this.core.log.warn(`couldn't set the gh-merge-base of ${id}'s branch`, errMsg(e));
+    }
   }
 
   setStatus(id: string, status: SessionStatus, detail: string | null = null): void {
@@ -823,6 +850,7 @@ export class SessionManager {
       ? `Checked out PR #${review.info.number} of ${review.repo} at ${sha.slice(0, 7)} on ${branch} (base ${base})`
       : startedText(branch, base, c.where ? caughtUp : made.sync, !!c.where, c.where ? c.from : undefined, c.attach?.info.number);
     this.event(id, 'created', started + (made.reused ? ` in a reused worktree (${basename(made.path)})` : ''), { reused: made.reused });
+    if (!review) await this.noteBase(id, { keep: !!c.where });
     if (c.linkPr) {
       // An answer after the wait is dropped: Claude's prompts are written by then.
       let waiting = true;
@@ -1337,21 +1365,25 @@ export class SessionManager {
     // kept. The launch's env gets it now; the row keeps it only once nothing still running is in the way.
     const first = opts.resume ? row.first_prompt : opts.prompt ? firstLine(opts.prompt) || null : null;
     const h = this.harness(row);
-    await h.beforeLaunch({ paths: this.core.paths, cfg: this.core.config, log: this.core.log, row, repo: sessionRepo(this.db, row) });
+    // A code-review session reads its steps' prompts from its review's run folder, and always has
+    // Kode's MCP server: its steps report through it, whatever `[tools] enabled` says.
+    const review = row.kind === 'code-review' ? this.core.reviews.launchForSession(row) : null;
+    // Its design folder, and a code-review session's run folder (its own review's on a resume): the
+    // same folders reconcile trusts and archive forgets.
+    const [designDir, ...runDirs] = this.launchDirs(row);
+    mkdirSync(designDir, { recursive: true });
+    for (const d of runDirs) mkdirSync(d, { recursive: true, mode: 0o700 });
+    const addDirs = [designDir, ...runDirs];
+    await h.beforeLaunch({ paths: this.core.paths, cfg: this.core.config, log: this.core.log, row, repo: sessionRepo(this.db, row), addDirs });
     this.pinDatapack(row);
     // In the background, reusing recent results: whether this session's Claude reaches Kode's Meko.
     if (this.core.mekoStatus.configured) void this.core.claudeMeko.refresh();
-    const designDir = join(this.core.paths.designs, row.id);
-    mkdirSync(designDir, { recursive: true });
     const modDir = (await h.modDir?.(this.core.paths, this.core.config)) ?? null;
     const conversation = await this.launchConversation(row, opts.conversation);
     const systemPrompt = this.systemPrompt(row, conversation);
     // A harness with no flag for it gets these lines from its context hook, at every start.
     this.systemLines.set(row.id, systemPrompt);
     const untrusted = !repoConfigTrusted(row);
-    // A code-review session reads its steps' prompts from its review's run folder, and always has
-    // Kode's MCP server: its steps report through it, whatever `[tools] enabled` says.
-    const review = row.kind === 'code-review' ? this.core.reviews.launchForSession(row) : null;
     const termTheme = this.core.termTheme();
     const script = writeLauncher(this.core.paths, h.launcher(this.core.paths, this.core.config, {
       row,
@@ -1360,7 +1392,7 @@ export class SessionManager {
       // Every launch, a resume's too: Claude Code resumed without --model runs on its default.
       model: row.model ?? null,
       systemPrompt,
-      addDirs: review ? [designDir, review.runDir] : [designDir],
+      addDirs,
       modDir,
       planMode: row.stage === 'design' && !!row.plan_mode,
       env: this.env({ ...row, first_prompt: first }),
@@ -2046,8 +2078,10 @@ export class SessionManager {
         const screen = await this.core.host.capture(row.tmux_name).catch(() => '');
         const h = this.harness(row);
         if (h.trustPrompt?.test(screen)) {
+          // So the next session (or this one's resume) skips it: the repo's dialog, or an --add-dir folder's.
           const repo = sessionRepo(this.db, row);
-          if (repo) await h.trustFolder?.(repo, this.core.log); // so the next session skips it
+          if (repo) await h.trustFolder?.(repo, this.core.log);
+          for (const d of this.launchDirs(row)) await h.trustFolder?.(claudePath(d), this.core.log);
           this.setStatus(row.id, 'needs_input', TRUST_DETAIL);
           this.notifyUser(row.id, 'Needs you', 'Confirm folder trust in the terminal.');
         } else if (h.setupPrompt?.test(screen) && row.status_detail !== SETUP_DETAIL) {
@@ -2640,6 +2674,15 @@ export class SessionManager {
   }
 
   /**
+   * Kode's own folders a session's launch passes as `--add-dir`: its design folder, and a
+   * code-review session's run folder. Only these get the trust `beforeLaunch` adds and archive takes back.
+   */
+  private launchDirs(row: SessionRow): string[] {
+    const runDir = this.core.reviews.runDirOf(row);
+    return [join(this.core.paths.designs, row.id), ...(runDir ? [runDir] : [])];
+  }
+
+  /**
    * Stops Claude and lets go of the worktree if it's clean (see freeWorktree). The branch is kept
    * unless asked. With force (Discard), uncommitted changes are thrown away first.
    */
@@ -2671,6 +2714,8 @@ export class SessionManager {
       // A review's copy of the PR's head (fetched again by any later review of it).
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
+      // The folder trust its launches added for its --add-dir folders (a resume adds it again).
+      await this.harness(row).untrustFolders?.(this.launchDirs(row), this.core.log);
       removePastes(this.core.paths.pastes, row.id);
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);
@@ -2783,8 +2828,10 @@ export class SessionManager {
         this.core.log.info(`kept the worktree of ${row.id} at ${row.worktree_path}: it has uncommitted changes`);
       }
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
-      // What its harness keeps for it (OpenCode's instructions and usage log): it can't run again.
+      // What its harness keeps for it (OpenCode's instructions and usage log, Claude Code's trust of
+      // its --add-dir folders): it can't run again.
       this.harness(row).forget?.(row);
+      await this.harness(row).untrustFolders?.(this.launchDirs(row), this.core.log);
       removePastes(this.core.paths.pastes, row.id);
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);

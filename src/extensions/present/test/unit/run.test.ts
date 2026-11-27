@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyOps } from '../../src/shared/ops.js';
 import { atChoice, fitRun, navigate, startRun, type NavAction, type RunState } from '../../src/shared/run.js';
-import { sampleDeck } from '../helpers.js';
+import { sampleDeck, slide } from '../helpers.js';
 
 const deck = sampleDeck();
 const play = (...actions: NavAction[]) => actions.reduce((r, a) => navigate(deck, r, a), startRun(deck, 'r', 'dp', 'overview', 0));
@@ -24,6 +24,13 @@ describe('a live run', () => {
     ['goes back through bullets', [N, { action: 'choose', key: '1' }, N, { action: 'choose', key: '1' }, N, N, { action: 'back' }], 'xcluster:0:1'],
   ])('%s', (_n, actions, want) => {
     expect(at(play(...actions))).toBe(want);
+  });
+
+  it('ignores a choice before the last slide of a multi-slide fork', () => {
+    const d = applyOps(deck, [{ op: 'addSlide', scene: 'menu', slide: slide('s-menu-2'), index: 1 }]);
+    const r = navigate(d, startRun(d, 'r', 'dp', 'overview', 0), N);
+    expect(atChoice(d, r)).toBe(false);
+    expect(navigate(d, r, { action: 'choose', key: '1' })).toBe(r);
   });
 
   it('remembers what it has shown, and the room\'s choices', () => {

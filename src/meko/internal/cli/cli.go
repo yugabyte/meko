@@ -1,7 +1,7 @@
 // Package cli is the meko and meko-cli commands, one binary run by either name. meko runs Meko:
-// install, start, stop, restart, status, logs, update, version, token, ui, ui start|stop, cloud-link,
-// destroy, uninstall, extension list|install|update|delete, agent list|connect|disconnect (agent.go)
-// and serve. meko-cli
+// install, start, stop, restart, status, logs, update, version, token, ui, ui start|stop,
+// menubar start|stop (menubar.go), cloud-link, destroy, uninstall, extension
+// list|install|update|delete, agent list|connect|disconnect (agent.go) and serve. meko-cli
 // works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
 // (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search, add_memory, upload
 // and upload_status, one command a run. help.go has each command's help.
@@ -43,14 +43,14 @@ var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
 type cmdFlags struct {
-	keepExtensions, noService, noUI, purge, check, follow, force, withExtensions bool
-	verbose                                                                      bool
-	lines                                                                        int
-	server, contextEngine, service                                               bool
-	access                                                                       string
-	all                                                                          bool
-	auto, version                                                                string
-	extra                                                                        []string // after --
+	keepExtensions, noService, noUI, noMenuBar, purge, check, follow, force, withExtensions bool
+	verbose                                                                                 bool
+	lines                                                                                   int
+	server, contextEngine, service                                                          bool
+	access                                                                                  string
+	all                                                                                     bool
+	auto, version                                                                           string
+	extra                                                                                   []string // after --
 }
 
 // Main runs the program argv0 names (meko-cli, or else meko) with args and returns the exit code.
@@ -213,6 +213,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer, tr *tracked) 
 		fs.BoolVar(&c.noService, "no-service", false, "don't set up the login service")
 		fs.StringVar(&c.access, "access", "", "how browsers reach the web UI: local or remote")
 		fs.BoolVar(&c.noUI, "no-ui", false, "leave the web UI off (meko ui start turns it on)")
+		fs.BoolVar(&c.noMenuBar, "no-menubar", false, "macOS: leave the menu bar app off (meko menubar start turns it on)")
 	case "uninstall":
 		fs.BoolVar(&c.purge, "purge", false, "also destroy the data folder and its secrets")
 		fs.BoolVar(&c.force, "force", false, "with --purge, destroy without asking")
@@ -388,13 +389,18 @@ func runProg(prog string, args []string, stdout, stderr io.Writer, tr *tracked) 
 		return runUISwitch(l, true, stdout, stderr)
 	case "ui stop":
 		return runUISwitch(l, false, stdout, stderr)
+	case "menubar start":
+		return runMenuBar(l, true, stdout, stderr)
+	case "menubar stop":
+		return runMenuBar(l, false, stdout, stderr)
 	case "cloud-link":
 		return runCloudLink(l, cl, stdin, stdout, stderr)
 	case "destroy":
 		return runDestroy(l, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdin, stdout, stderr)
 	case "install":
 		_, before := os.Stat(l.FirstCommands)
-		code := runInstall(l, c.noService, c.access, c.noUI, stdout, stderr)
+		code := runInstall(l, installOptions{noService: c.noService, access: c.access, noUI: c.noUI,
+			noMenuBar: c.noMenuBar}, stdout, stderr)
 		if _, after := os.Stat(l.FirstCommands); before != nil && after == nil {
 			tr.started = true // a first install: the list starts after it
 		}

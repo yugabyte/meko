@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, w
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
-import { BranchGoneError, addWorktree, checkBranchName, listBaseBranches, restoreWorktree } from '../../src/server/git.js';
+import { BranchGoneError, addWorktree, baseRemote, checkBranchName, listBaseBranches, readMergeBase, restoreWorktree, reuseWorktree, setMergeBase } from '../../src/server/git.js';
 import { NotChangedError, SUGGEST_MIN_AHEAD, TEXT_EXPAND_MAX, UnknownCommitError, changedImage, changedText, changes, diffStat, suggestBase } from '../../src/server/changes.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -174,6 +174,101 @@ describe('new sessions start from an up-to-date base (real git)', () => {
   });
 });
 
+describe("a fork's new sessions start from upstream's base when it's newer (real git)", () => {
+  let home: string;
+  let repo: string; // the user's clone of their fork: origin = the fork, upstream = the main repo
+  let maint: string; // a maintainer's clone of upstream
+
+  beforeEach(() => {
+    home = tempDir('akl-fork-sync-');
+    const seed = gitRepo(join(home, 'seed'));
+    git(home, 'clone', '-q', '--bare', seed, 'upstream.git');
+    git(home, 'clone', '-q', '--bare', 'upstream.git', 'origin.git');
+    git(home, 'clone', '-q', 'origin.git', 'repo');
+    git(home, 'clone', '-q', 'upstream.git', 'maint');
+    repo = join(home, 'repo');
+    maint = join(home, 'maint');
+    identity(repo);
+    identity(maint);
+    git(repo, 'remote', 'add', 'upstream', join(home, 'upstream.git'));
+  });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  /** Lands a commit on upstream's main (the fork's main doesn't get it); returns its sha. */
+  function landUpstream(file = 'upstream.txt'): string {
+    writeFileSync(join(maint, file), 'from upstream\n');
+    git(maint, 'add', '.');
+    git(maint, 'commit', '-q', '-m', 'upstream change');
+    git(maint, 'push', '-q', 'origin', 'main');
+    return git(maint, 'rev-parse', 'HEAD');
+  }
+
+  const wt = () => join(home, 'wt');
+
+  it("fetches upstream's main, fast-forwards the local main to it and branches from it", async () => {
+    const up = landUpstream();
+    expect(await addWorktree(repo, wt(), 'ak/x', 'main')).toEqual({ kind: 'updated', remote: 'upstream' });
+    expect(git(repo, 'rev-parse', 'refs/remotes/upstream/main')).toBe(up); // fetched by the start
+    expect(git(repo, 'rev-parse', 'main')).toBe(up);
+    expect(git(wt(), 'rev-parse', 'HEAD')).toBe(up);
+    expect(await addWorktree(repo, join(home, 'wt2'), 'ak/y', 'main')).toEqual({ kind: 'current', remote: 'upstream' });
+  });
+
+  it("starts from upstream's main when the local main can't be moved, as from origin's", async () => {
+    git(repo, 'checkout', '-q', '-b', 'side');
+    git(repo, 'branch', '-q', '-D', 'main');
+    const up = landUpstream();
+    const r = await addWorktree(repo, wt(), 'ak/x', 'main');
+    expect(r).toMatchObject({ kind: 'skipped', remote: 'upstream' });
+    expect(git(wt(), 'rev-parse', 'HEAD')).toBe(up);
+  });
+
+  it('reuses an idle worktree from upstream\'s main too', async () => {
+    git(repo, 'worktree', 'add', '-q', '--detach', wt());
+    const up = landUpstream();
+    expect(await reuseWorktree(repo, wt(), 'ak/x', 'main')).toEqual({ kind: 'updated', remote: 'upstream' });
+    expect(git(wt(), 'rev-parse', 'HEAD')).toBe(up);
+  });
+
+  it("keeps origin when the fork's main has commits upstream lacks, or the two agree", async () => {
+    expect(await baseRemote(repo, 'main')).toBe('origin'); // the same commit
+    landUpstream();
+    writeFileSync(join(repo, 'fork.txt'), 'fork only\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'fork only');
+    git(repo, 'push', '-q', 'origin', 'main');
+    const fork = git(repo, 'rev-parse', 'HEAD');
+    expect(await addWorktree(repo, wt(), 'ak/x', 'main')).toEqual({ kind: 'current' });
+    expect(git(wt(), 'rev-parse', 'HEAD')).toBe(fork);
+  });
+
+  it("keeps origin when upstream has no such branch", async () => {
+    git(repo, 'checkout', '-q', '-b', 'fork-base');
+    git(repo, 'push', '-q', 'origin', 'fork-base');
+    git(repo, 'checkout', '-q', 'main');
+    expect(await addWorktree(repo, wt(), 'ak/x', 'fork-base')).toEqual({ kind: 'current' });
+  });
+
+  it("keeps a branch's gh-merge-base, leaving one the user set when asked to", async () => {
+    git(repo, 'branch', 'ak/x');
+    expect(await readMergeBase(repo, 'ak/x')).toBeNull();
+    await setMergeBase(repo, 'ak/x', 'main');
+    expect(await readMergeBase(repo, 'ak/x')).toBe('main');
+    await setMergeBase(repo, 'ak/x', 'rel', { keep: true });
+    expect(await readMergeBase(repo, 'ak/x')).toBe('main');
+    await setMergeBase(repo, 'ak/x', 'rel');
+    expect(await readMergeBase(repo, 'ak/x')).toBe('rel');
+    // A base change replaces it only while it still holds the old base, so the user's value stays.
+    await setMergeBase(repo, 'ak/x', 'dev', { was: 'rel' });
+    expect(await readMergeBase(repo, 'ak/x')).toBe('dev');
+    git(repo, 'config', 'branch.ak/x.gh-merge-base', 'mine');
+    await setMergeBase(repo, 'ak/x', 'main', { was: 'dev' });
+    expect(await readMergeBase(repo, 'ak/x')).toBe('mine');
+    git(repo, 'branch', '-D', 'ak/x');
+    expect(await readMergeBase(repo, 'ak/x')).toBeNull(); // git drops it with the branch
+  });
+});
+
 describe('changes vs. the base (real git)', () => {
   let home: string;
   let repo: string;
@@ -267,9 +362,11 @@ describe('changes vs. the base (real git)', () => {
 
   it('serves both sides of a changed image, and only images inside the repo', async () => {
     const png = (n: number) => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, n]);
+    const svg = (fill: string) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><rect fill="${fill}"/></svg>\n`);
     mkdirSync(join(repo, 'img'));
     writeFileSync(join(repo, 'img', 'logo.png'), png(1));
     writeFileSync(join(repo, 'img', 'gone.png'), png(2));
+    writeFileSync(join(repo, 'img', 'icon.svg'), svg('red'));
     git(repo, 'add', '.');
     git(repo, 'commit', '-q', '-m', 'images');
     rmSync(wt, { recursive: true, force: true });
@@ -279,6 +376,7 @@ describe('changes vs. the base (real git)', () => {
     writeFileSync(join(wt, 'img', 'logo.png'), png(9)); // uncommitted edit
     unlinkSync(join(wt, 'img', 'gone.png'));
     writeFileSync(join(wt, 'new.png'), png(5)); // untracked
+    writeFileSync(join(wt, 'img', 'icon.svg'), svg('blue')); // text, served as an image
 
     expect(await changedImage(wt, 'main', 'img/logo.png', 'old')).toEqual({ type: 'image/png', data: png(1) });
     expect(await changedImage(wt, 'main', 'img/logo.png', 'new')).toEqual({ type: 'image/png', data: png(9) });
@@ -286,6 +384,8 @@ describe('changes vs. the base (real git)', () => {
     expect((await changedImage(wt, 'main', 'new.png', 'new'))?.data).toEqual(png(5));
     expect(await changedImage(wt, 'main', 'img/gone.png', 'new')).toBeNull();
     expect((await changedImage(wt, 'main', 'img/gone.png', 'old'))?.data).toEqual(png(2));
+    expect(await changedImage(wt, 'main', 'img/icon.svg', 'old')).toEqual({ type: 'image/svg+xml', data: svg('red') });
+    expect(await changedImage(wt, 'main', 'img/icon.svg', 'new')).toEqual({ type: 'image/svg+xml', data: svg('blue') });
     const c = (await changes(wt, 'main'))!;
     expect(c.files.find((f) => f.path === 'img/logo.png')).toMatchObject({ binary: true, patch: null });
 
@@ -300,6 +400,7 @@ describe('changes vs. the base (real git)', () => {
     expect((await changedImage(wt, 'main', 'new.png', 'new', sha))?.data).toEqual(png(5));
     expect(await changedImage(wt, 'main', 'img/gone.png', 'new', sha)).toBeNull();
     expect((await changedImage(wt, 'main', 'img/gone.png', 'old', sha))?.data).toEqual(png(2));
+    expect((await changedImage(wt, 'main', 'img/icon.svg', 'new', sha))?.data).toEqual(svg('blue'));
     await expect(changedImage(wt, 'main', 'img/logo.png', 'old', git(wt, 'rev-parse', 'main'))).rejects.toBeInstanceOf(UnknownCommitError);
 
     // Never a non-image, a path out of the repo, or a symlink that leads out of it.
@@ -308,6 +409,42 @@ describe('changes vs. the base (real git)', () => {
     for (const [path, side] of [['README.md', 'new'], ['../secret.png', 'new'], ['img/../../secret.png', 'old'], [join(home, 'secret.png'), 'new'], ['link.png', 'new']] as const) {
       await expect(changedImage(wt, 'main', path, side), `${path} (${side})`).rejects.toThrow(/not a previewable image/);
     }
+  });
+
+  it('lists SVGs as text, and untracked images as binary without reading them', async () => {
+    const svg = (fill: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="${fill}"/></svg>\n`;
+    writeFileSync(join(wt, 'logo.svg'), svg('red'));
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-q', '-m', 'logo');
+    writeFileSync(join(wt, 'logo.svg'), svg('blue'));
+    writeFileSync(join(wt, 'new.svg'), svg('green'));
+    // Past the 1 MB a text file is read up to: an image all the same.
+    writeFileSync(join(wt, 'big.png'), Buffer.alloc(2 * 1024 * 1024, 7));
+    // No NUL in it, but named as an image: binary, not text.
+    writeFileSync(join(wt, 'plain.jpg'), 'not really a jpeg');
+
+    const c = (await changes(wt, 'main'))!;
+    const by = Object.fromEntries(c.files.map((f) => [f.path, f]));
+    // An SVG is text: its diff and line counts, and a preview beside them.
+    expect(by['logo.svg']).toMatchObject({ kind: 'added', binary: false, added: 1, uncommitted: true });
+    expect(by['logo.svg'].patch).toContain('+<svg');
+    expect(by['new.svg']).toMatchObject({ kind: 'untracked', binary: false, added: 1, patch: `@@ -0,0 +1,1 @@\n+${svg('green').trimEnd()}` });
+    expect(by['big.png']).toMatchObject({ kind: 'untracked', binary: true, patch: null, added: 0 });
+    expect(by['plain.jpg']).toMatchObject({ kind: 'untracked', binary: true, patch: null, added: 0 });
+    expect(c.omittedPatches).toBe(0);
+  });
+
+  it('keeps the untracked read budget for text: images past it are still binary, and text under it still gets its patch', async () => {
+    // 36 MB of untracked images, each under the 1 MB a file is read up to but more than the 32 MB
+    // read budget in all, listed before the text file.
+    const n = 40;
+    for (let i = 0; i < n; i++) writeFileSync(join(wt, `a${String(i).padStart(2, '0')}.png`), Buffer.alloc(900 * 1024));
+    writeFileSync(join(wt, 'z.txt'), 'hello\n');
+    const c = (await changes(wt, 'main'))!;
+    const by = Object.fromEntries(c.files.map((f) => [f.path, f]));
+    for (let i = 0; i < n; i++) expect(by[`a${String(i).padStart(2, '0')}.png`]).toMatchObject({ binary: true, patch: null });
+    expect(by['z.txt']).toMatchObject({ added: 1, patch: '@@ -0,0 +1,1 @@\n+hello' });
+    expect(c.omittedPatches).toBe(0);
   });
 
   it("serves a changed file's new side as text, with the patch changes() gives it, and only changed text files in the repo", async () => {

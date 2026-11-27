@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Meko's menu bar app. Written by `meko menubar start`; changes are overwritten. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{{.Label}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{xml .Program}}</string>
+    <string>--meko</string>
+    <string>{{xml .Meko}}</string>
+    <string>--data-dir</string>
+    <string>{{xml .DataDir}}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Started again after a crash, but not after Quit (a clean exit): it stays quit until the next
+       login or meko menubar start. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>{{xml .Log}}</string>
+</dict>
+</plist>

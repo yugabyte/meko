@@ -119,8 +119,9 @@ func Register(g *echo.Group, o Options) {
 
 	// The routes that take a datapack in the path and that Meko Cloud has too go through byID: one
 	// this Meko doesn't have goes to Meko Cloud while it's linked. Meko's own (usage, export, the maps,
-	// answer, memory extraction) answer for this Meko's alone; search and memories call Meko Cloud's
-	// tools (callTool), and Context Gaps keeps Meko Cloud's datapacks' questions here (questions.go).
+	// memory extraction) answer for this Meko's alone; search and memories call Meko Cloud's tools
+	// (callTool), answer writes Meko Cloud's datapacks' answers here from the passages it's sent, and
+	// Context Gaps keeps Meko Cloud's datapacks' questions here (questions.go).
 	g.GET("/datapacks", a.listDatapacks)
 	g.POST("/datapacks", a.createDatapack)
 	g.GET("/datapacks/:id", a.byID(a.describeDatapack))

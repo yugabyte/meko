@@ -60,6 +60,16 @@ describe('formatting comments for Claude', () => {
       'Line 9:\n```\nconst b = 1;\n```\nRename b.',
     ].join('\n\n'));
   });
+
+  it('says what a suggested change means, for the task or for a PR review', () => {
+    const c = comment({ line: 3, endLine: 4, excerpt: 'let n = 1;\nn++;', body: 'Shorter:\n```suggestion\nconst n = 2;\n```' });
+    expect(formatComments([c])).toBe([
+      '## a.ts',
+      'Lines 3–4:\n```\nlet n = 1;\nn++;\n```\nShorter:\n```suggestion\nconst n = 2;\n```',
+    ].join('\n\n') + '\nThe suggestion block above is the exact text the user wants in place of lines 3–4. Apply it as written unless it\'s wrong, and say so if it is.');
+    expect(formatComments([c], true)).toContain('Keep the suggestion block above as it is in this review comment\'s body, on "start_line" 3 and "line" 4 (side RIGHT)');
+    expect(formatComments([{ ...c, line: 4 }], true)).toContain('on "line" 4 (side RIGHT)');
+  });
 });
 
 describe('checking new comments', () => {
@@ -96,5 +106,7 @@ describe('checking new comments', () => {
     expect(() => checkNewComment({ ...ok, line: 0 })).toThrow(/line range/);
     expect(() => checkNewComment({ ...ok, path: '' })).toThrow(/path/);
     expect(() => checkNewComment(null)).toThrow(/path/);
+    expect(() => checkNewComment({ ...ok, side: 'old', body: '```suggestion\nx\n```' })).toThrow(/not removed ones/);
+    expect(checkNewComment({ ...ok, body: '```suggestion\n```' }).body).toBe('```suggestion\n```');
   });
 });

@@ -24,6 +24,11 @@ tar -xzf "$tarball" -C "$tmp"
 v=$("$meko" version --json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
 [ "$v" = "$version" ] || { echo "the tarball's meko says it's $v, not $version" >&2; exit 1; }
 "$meko" version
+# macOS: the menu bar app, signed (ad hoc) and whole.
+if [ "$(uname -s)" = Darwin ]; then
+  codesign --verify --strict "$tmp/meko-$version/bin/Meko.app" ||
+    { echo "the tarball's Meko.app is missing or its signature is broken" >&2; exit 1; }
+fi
 
 # A private HOME and file secrets: nothing of the runner's own is touched. No usage stats: a release
 # build would send them to YugabyteDB. Meko gets its own port, never its default 7777, which an

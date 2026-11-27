@@ -139,6 +139,9 @@ jobs:
 
       - run: make build context_engine
       - run: ./bin/meko version
+      # The menu bar app (src/meko/menubar) is macOS's alone.
+      - if: runner.os == 'macOS'
+        run: make menubar && codesign --verify --strict bin/Meko.app
 
       - name: Lint
         uses: golangci/golangci-lint-action@v9

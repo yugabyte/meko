@@ -21,7 +21,7 @@ import { HttpError } from '../projects.js';
 import type { FixAfter } from '../prompts.js';
 import { parseSettings, projectRow, sessionRepo, sessionReview, sessionRow, type SessionRow } from '../store.js';
 import { TOOLS_SERVER } from '../tooldefs.js';
-import { baseRefIn, readChange, writeIssue } from './context.js';
+import { readChange, writeIssue } from './context.js';
 import { ASK_AGAIN, SCORE_BATCH, SCORER_TIER, countsOf, findingCredits, judgeRound, mergeNotes, mergeSweep, moreSweeps } from './merge.js';
 import { basePrompt, passPrompt, scoreBase, scorePrompt, stepList, sweepContext } from './prompt.js';
 import { checkOutcomes, checkReport, checkScore } from './schemas.js';
@@ -580,7 +580,7 @@ export class CodeReviews {
     return readChange({
       folder: wt,
       repo: sessionRepo(this.db, task) ?? wt,
-      base: await baseRefIn(wt, task.base_branch),
+      base: task.base_branch,
       dir,
       branch: task.branch,
       title: task.name,
@@ -745,6 +745,16 @@ export class CodeReviews {
     const task = row.parent_id ? sessionRow(this.db, row.parent_id) : undefined;
     const r = task ? this.latest(task.id) : undefined;
     return task && r ? this.launchFor(r, task) : null;
+  }
+
+  /**
+   * The run folder a code-review session reads (its `--add-dir`): its own review's, else, before the
+   * review names it, its task's latest one's (`launchForSession`). Null for any other session.
+   */
+  runDirOf(row: SessionRow): string | null {
+    if (row.kind !== 'code-review') return null;
+    const r = this.bySession(row.id);
+    return r ? join(this.core.paths.run, 'reviews', r.id) : (this.launchForSession(row)?.runDir ?? null);
   }
 
   /** The subagents a review session gets, one per tier, on the harness's models. */

@@ -368,7 +368,9 @@ describe('the Kode tour (a bundled workshop Kode runs itself; real session host 
     await act('repo', 'next');
     const out = await act('review-cold', 'run');
     const wt = env.core.sessions.row(out.sessionId!).worktree_path;
-    await waitFor(() => existsSync(wt), (x) => x, 10000, 'the task\'s worktree');
+    // Its launch, not the folder: git makes the folder before it checks the files out, and a
+    // README.md written in between is checked out over, leaving the worktree clean.
+    await waitFor(() => firstPrompt(out.sessionId!), (t) => !!t, 10000, 'the task\'s launch');
     writeFileSync(join(wt, 'README.md'), 'a fix in progress\n');
     // Run the review made the gotchas datapack again: MEKO.md names the new one.
     const gotchas = listed(old.repoPath, 'main', '/gotchas')!;
@@ -415,7 +417,9 @@ describe('the Kode tour (a bundled workshop Kode runs itself; real session host 
     await act('repo', 'next');
     const out2 = await act('review-cold', 'run');
     const wt2 = env.core.sessions.row(out2.sessionId!).worktree_path;
-    await waitFor(() => existsSync(wt2), (x) => x, 10000, 'the task\'s worktree');
+    // Its launch, not the folder: git makes the folder before it checks the files out, and a
+    // README.md written in between is checked out over, leaving the worktree clean.
+    await waitFor(() => firstPrompt(out2.sessionId!), (t) => !!t, 10000, 'the task\'s launch');
     writeFileSync(join(wt2, 'README.md'), 'a fix in progress\n');
     const regotchas = listed(p.repoPath, 'main', '/gotchas')!;
     expect(regotchas).not.toBe(tourGotchas);

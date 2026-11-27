@@ -34,9 +34,11 @@ func fakeReleaseBinary(version string) string {
 }
 
 // releaseInstall makes an app folder with old installed and current, has serve take it for its own,
-// and serves a GitHub API offering next.
+// and serves a GitHub API offering next. Call home goes to a test server: the test's own, set
+// before, or a sink (callHomeSink).
 func releaseInstall(t *testing.T, old, next string) update.App {
 	t.Helper()
+	callHomeSink(t)
 	app := update.App{Root: filepath.Join(t.TempDir(), "app")}
 	bin := filepath.Join(app.Dir(old), "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -101,6 +103,18 @@ func serveMekoRelease(t *testing.T, next string, tgz []byte) {
 	t.Cleanup(func() { newReleaseClient = oldClient })
 }
 
+// releaseServeConfig is the config a test passes to Serve as a release install (releaseInstall):
+// its port, secrets in files, no scheduled update checks, and call home to releaseInstall's test
+// server, since Serve takes the URL from this config, not from MEKO_CALL_HOME_URL.
+func releaseServeConfig(port string) config.Config {
+	cfg := config.Default()
+	cfg.Server.Port, _ = strconv.Atoi(port)
+	cfg.Secrets.Store = "file"
+	cfg.Update.Channel = update.ChannelOff
+	cfg.CallHome.URL = os.Getenv("MEKO_CALL_HOME_URL")
+	return cfg
+}
+
 // serveAndUpdate runs serve as a release install, installs next from the web listener's route and
 // returns what serve returned.
 func serveAndUpdate(t *testing.T, old, next string) (update.App, paths.Layout, error) {
@@ -108,10 +122,7 @@ func serveAndUpdate(t *testing.T, old, next string) (update.App, paths.Layout, e
 	dir, port := setup(t)
 	app := releaseInstall(t, old, next)
 	l := paths.New(dir)
-	cfg := config.Default()
-	cfg.Server.Port, _ = strconv.Atoi(port)
-	cfg.Secrets.Store = "file"
-	cfg.Update.Channel = update.ChannelOff // the page installs even with scheduled checks off
+	cfg := releaseServeConfig(port) // scheduled checks off: the page installs even so
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, ServeOptions{Layout: l, Config: cfg}) }()
@@ -187,10 +198,7 @@ func TestWebUpdateUnderTheServiceExits(t *testing.T) {
 // serveUntilUp runs serve until its web listener answers, then stops it.
 func serveUntilUp(t *testing.T, dir, port string) {
 	t.Helper()
-	cfg := config.Default()
-	cfg.Server.Port, _ = strconv.Atoi(port)
-	cfg.Secrets.Store = "file"
-	cfg.Update.Channel = update.ChannelOff
+	cfg := releaseServeConfig(port)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, ServeOptions{Layout: paths.New(dir), Config: cfg}) }()
@@ -290,10 +298,7 @@ func TestServeMovesAgentsToOnePortPastProbation(t *testing.T) {
 	update.HealthyAfter = 2 * time.Second
 	t.Cleanup(func() { update.HealthyAfter = old })
 	kiroAt(t, oldAgentsURL, tok)
-	cfg := config.Default()
-	cfg.Server.Port, _ = strconv.Atoi(port)
-	cfg.Secrets.Store = "file"
-	cfg.Update.Channel = update.ChannelOff
+	cfg := releaseServeConfig(port)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, ServeOptions{Layout: paths.New(dir), Config: cfg}) }()

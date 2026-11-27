@@ -144,6 +144,12 @@ safe.
   ([web.md](web.md#settings)). Neither access has a login. `--no-ui` turns the web UI off there
   too (`[web] enabled = false`; `meko ui start` turns it on). The summary's `Web UI` link row
   gives the URL and the access.
+- On macOS, with the service, once the server is up, it starts the menu bar app at each login
+  (`meko menubar start`'s job, [menubar.md](menubar.md)), with a `Menu bar` row, unless the user
+  turned it off: `--no-menubar`, or an earlier `meko menubar stop`, each of which writes
+  `menubar-off` in the data folder (`meko menubar start` removes it). A failure there is a `!`
+  row, not a failed install; a Meko with no `Meko.app` (a build from source without
+  `make menubar`) skips it.
 - It installs Meko alone. On a first install from the installer (`MEKO_INSTALL_FIRST=1`) at a
   terminal, it ends, after the links, with "Choose your agentic experience": a picker of the
   known extensions not installed yet that have a `Summary` (`extensions.Known`, Kode first), each
@@ -163,7 +169,8 @@ safe.
 `meko uninstall` first removes every installed extension, asking nothing, since with Meko gone
 nothing would run them: each one as `meko extension delete <name>` does (its own uninstall, which
 stops it and removes its services, then the releases Meko installed and its command), keeping its
-data with Meko's. If one fails, nothing of Meko's is removed. Then it removes the service,
+data with Meko's. If one fails, nothing of Meko's is removed. Then it removes the service, the menu
+bar app's LaunchAgent and its launcher (macOS, when `meko menubar start` made them),
 `~/.local/bin/meko`, `~/.local/bin/meko-cli`, `~/.local/bin/mekosh` (when they're links into the
 app folder), the app folder and the PATH line `meko install` added to a shell's profile
 (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile`), and keeps the data;
@@ -238,12 +245,13 @@ data of Meko's, sends nothing. Each waits at most 3 s and prints nothing.
 ## Release builds
 
 `src/meko/scripts/package-release.sh <version> <arch> <node-dir> <out-dir>`, run on the platform
-the tarball is for after `make build VERSION=<version>`, `make context_engine`, `make web_ui` and
-`(cd context_engine && npm prune --omit=dev)`:
+the tarball is for after `make build VERSION=<version>`, on macOS `make menubar VERSION=<version>`,
+`make context_engine`, `make web_ui` and `(cd context_engine && npm prune --omit=dev)`:
 
 ```
 meko-<version>/
   bin/meko                     the CLI and server (cgo: SQLite and sqlite-vec compiled in)
+  bin/Meko.app                 macOS only: the menu bar app meko menubar start runs (menubar.md)
   node/bin/node, node/LICENSE  Meko's own Node (22.18.0, checked against nodejs.org's SHASUMS256)
   context_engine/package.json, dist/, node_modules/, stubs/
   web_ui/dist/                 the built web UI, served at / (web-ui.md)

@@ -1,6 +1,6 @@
 // Unified diff parsing for the Changes panel.
 
-import type { ChangeKind } from '../shared/types';
+import { isTextImage, previewImageType, type ChangeKind } from '../shared/types';
 
 export interface DiffLine {
   kind: 'hunk' | 'add' | 'del' | 'ctx' | 'meta' | 'note';
@@ -246,6 +246,32 @@ export function reparse(prev: ReadonlyMap<string, DiffLine[]>, files: { patch: s
   return next;
 }
 
+/**
+ * Whether the panel shows a file's image preview: a binary file of an image type, in place of its
+ * diff, or an SVG (text), above it. A raster image git diffs as text (a Git LFS pointer, a symlink,
+ * a text file misnamed) shows only its diff: its sides aren't the picture.
+ */
+export function showsImage(f: { path: string; binary: boolean }): boolean {
+  return f.binary ? previewImageType(f.path) !== null : isTextImage(f.path);
+}
+
+/**
+ * When a file's image previews last changed, which their URLs carry so they reload: 0 for a file
+ * with no preview (`showsImage`; its section then stays the same across refetches); `fetchedAt`
+ * for a binary image, whose bytes the panel can't see; and for an SVG, a hash of its patch (and
+ * whether it's uncommitted), so its section, rows and all, draws again only when it changes. An
+ * SVG whose patch was left out, or cut short (an edit past the cut wouldn't change the hash),
+ * takes `fetchedAt`.
+ */
+export function imageVersion(f: { path: string; binary: boolean; patch: string | null; truncated: boolean; uncommitted: boolean }, fetchedAt: number): number {
+  if (!showsImage(f)) return 0;
+  if (f.binary || f.patch === null || f.truncated) return fetchedAt;
+  // FNV-1a, 32 bits.
+  let h = f.uncommitted ? 0x811c9dc5 ^ 1 : 0x811c9dc5;
+  for (let i = 0; i < f.patch.length; i++) h = Math.imul(h ^ f.patch.charCodeAt(i), 0x01000193);
+  return h >>> 0;
+}
+
 /** The line's number on a comment side: `new` for added and unchanged lines, `old` for removed ones. */
 export function sideLine(l: DiffLine, side: 'old' | 'new'): number | null {
   if (side === 'new') return l.kind === 'add' || l.kind === 'ctx' ? l.new : null;
@@ -293,6 +319,20 @@ export function pickComment(lines: DiffLine[], i: number, anchor: number | null)
     r = pickRange(lines, side, n, n) as NonNullable<typeof r>;
   }
   return { side, line: r.from, endLine: r.to, excerpt: r.rows.map((x) => x.text).join('\n'), anchor: from };
+}
+
+/**
+ * What Apply sends for a comment placed on `row` (its last line): where its lines are in the diff
+ * shown now, and their text. Null when the diff doesn't show every one of them in one run (a hunk
+ * edge between them), or the comment isn't on new-side lines.
+ */
+export function applyRange(lines: DiffLine[], row: DiffLine, c: { side: 'old' | 'new'; line: number; endLine: number }): { line: number; endLine: number; current: string[] } | null {
+  const end = c.side === 'new' ? sideLine(row, 'new') : null;
+  if (end === null) return null;
+  const start = end - (c.endLine - c.line);
+  const r = start >= 1 ? pickRange(lines, 'new', start, end) : null;
+  if (!r || r.from !== start || r.to !== end || r.rows.length !== end - start + 1) return null;
+  return { line: start, endLine: end, current: r.rows.map((l) => l.text) };
 }
 
 export interface Anchorable {

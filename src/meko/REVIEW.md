@@ -93,7 +93,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       (`MEKO_MODELS_OFFLINE`), and
       `scripts/smoke-release.sh` passes on each platform.
 - [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `me_kode` (or its old
-      names, `me_koder`, `agentk` and `agent-k-local`).
+      names, `me_koder`, `agentk` and `agent-k-local`), and never send to call home's real
+      service (`callhome.DefaultURL`): a package whose tests can build a sender runs
+      `callhometest.Run` in its `TestMain`.
 - [ ] No internal hostnames, mount paths, tokens or personal data in the diff, the PR title or its
       description (the repo root's AGENTS.md): no real person's name, email, handle or IP
       address, no customer names, nothing a user wrote or stored (memories, turns, knowledge

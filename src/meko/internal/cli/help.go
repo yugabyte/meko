@@ -44,7 +44,13 @@ type example struct{ cmd, note string }
 const groupExtension = "extension"
 
 // isGroup says whether name is a command of subcommands (meko extension, meko agent).
-func isGroup(name string) bool { return name == groupExtension || name == groupAgent }
+func isGroup(name string) bool {
+	return name == groupExtension || name == groupAgent || name == groupMenuBar
+}
+
+// groupMenuBar is the command whose subcommands start and stop the menu bar app (macOS): meko
+// menubar start|stop.
+const groupMenuBar = "menubar"
 
 var mekoGroups = []string{"Get started", "Run", "Connect", "Extensions", "Remove"}
 
@@ -54,6 +60,7 @@ var mekoCommands = []command{
 			{"meko install", "set Meko up with a login service (launchd or systemd), and start it"},
 			{"meko install --access remote", "let browsers on other computers reach the web UI, over HTTPS, with no login"},
 			{"meko install --no-ui", "set Meko up with the web UI off (meko ui start turns it on)"},
+			{"meko install --no-menubar", "macOS: set Meko up without the menu bar app (meko menubar start turns it on)"},
 			{"meko install --no-service", "set it up without a service; start it with meko start"},
 		}},
 	{name: "start", group: "Get started", summary: "Start Meko and its extensions",
@@ -79,6 +86,19 @@ var mekoCommands = []command{
 	{name: "ui stop", group: "Run", summary: "Turn the web UI off, and keep it off",
 		usage: "meko ui stop", examples: []example{
 			{"meko ui stop", "close the web UI's port, Kode's page with it, until meko ui start"},
+		}},
+	{name: groupMenuBar, subcommands: true, summary: "Show Meko in the macOS menu bar: datapacks, search and chat",
+		usage: "meko menubar start|stop", examples: []example{
+			{"meko menubar start", "put the meko m in the menu bar, now and at each login"},
+			{"meko menubar stop", "take it out, and don't start it at login"},
+		}},
+	{name: "menubar start", group: "Run", summary: "Start the menu bar app (macOS), now and at each login",
+		usage: "meko menubar start", examples: []example{
+			{"meko menubar start", "the meko m in the menu bar: your datapacks, to copy a name, search or chat"},
+		}},
+	{name: "menubar stop", group: "Run", summary: "Quit the menu bar app, and don't start it at login",
+		usage: "meko menubar stop", examples: []example{
+			{"meko menubar stop", "quit it until meko menubar start"},
 		}},
 	{name: "stop", group: "Run", summary: "Stop Meko and its extensions",
 		usage: "meko stop [flags]", examples: []example{

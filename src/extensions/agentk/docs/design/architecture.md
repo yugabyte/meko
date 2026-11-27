@@ -92,7 +92,9 @@ either (a path counts only whole, so a short local spelling such as `/data` does
 `src/database.ts`), and a session's transcript is looked up under both (a session started before
 keeps its transcript: a resume from the local spelling finds it). Started by the local spelling,
 a worktree isn't tied back to its repo for folder trust (its `.git` file names the stored
-spelling), so Kode also trusts that exact folder in `~/.claude.json` before launching.
+spelling), so Kode also trusts that exact folder in `~/.claude.json` before launching, and the
+`--add-dir` folders in the spelling Claude is given them in (newer versions ask about each one;
+whether that key stops their dialog is unmeasured).
 The project's main checkout keeps its path, and paths on other hosts stay under `/net`.
 
 **Sizing.** A pane has one size: the active viewer's. A viewer is active when it has just

@@ -251,6 +251,7 @@ jobs:
         run: |
           set -eu
           make build VERSION="$VERSION"
+          make menubar VERSION="$VERSION"
           make context_engine || { rm -rf context_engine/node_modules; make context_engine; }
           make web_ui || { rm -rf web_ui/node_modules; make web_ui; }
           (cd context_engine && npm prune --omit=dev)
