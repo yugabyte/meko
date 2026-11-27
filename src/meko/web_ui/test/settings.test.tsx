@@ -90,16 +90,33 @@ test("a failed test call leaves memory extraction off and says why", async () =>
   expect(document.body.textContent).toContain("is claude installed and signed in?");
 });
 
-test("the Access card says only local or remote", async () => {
+test("the Access card says local or remote, and warns when remote access has no sign-in", async () => {
   serve({});
   await render({ access: "remote", local_access: false, signed_in: true });
   const access = () => [...document.querySelectorAll("h3")].find((h) => h.textContent === "Access")?.parentElement?.textContent;
-  expect(access()).toBe("AccessRemote");
-  // The web UI has no login, so Settings has no account card.
+  expect(access()).toContain("Remote");
+  expect(access()).toContain('[web] signin = "cloud"');
+  expect(access()).not.toContain("Sign out");
+  // There's no account: Settings has no account card.
   expect(document.body.textContent).not.toContain("Account");
   act(() => root.unmount());
   await render(local);
   expect(access()).toBe("AccessLocal");
+});
+
+test("with Meko Cloud sign-in, another computer's browser can sign out", async () => {
+  serve({ "POST /api/v1/auth/signout": () => ({ data: { signed_out: true } }) });
+  const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+  await render({ access: "remote", signin: "cloud", local_access: false, signed_in: true });
+  const access = () => [...document.querySelectorAll("h3")].find((h) => h.textContent === "Access")?.parentElement;
+  expect(access()?.textContent).toContain("Remote, with Meko Cloud sign-in");
+  const out = [...(access()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Sign out");
+  await act(async () => out?.click());
+  expect(assign).toHaveBeenCalledWith("/");
+  act(() => root.unmount());
+  // This computer's browser has no session to end.
+  await render({ access: "remote", signin: "cloud", local_access: true, signed_in: true });
+  expect(access()?.textContent).not.toContain("Sign out");
 });
 
 test("Keep call contents turns on with keep alone, and clearing asks first", async () => {

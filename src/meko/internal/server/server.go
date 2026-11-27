@@ -1,10 +1,10 @@
 // Package server is Meko's HTTP server, on its one port: agents and the CLI call /mcp (Options.MCP)
 // and /api/v1 (Options.REST) with a Bearer token, and browsers (Options.Web) get the web UI at /
-// (Options.UI), the same routes and the extensions' UIs at /ext/<name>/, with local or remote access
-// and no login. Which credential a request has depends on the request, never on how it came in
-// (authorize); the Host and Origin checks depend on the connection (guard). With remote access the
-// port takes TLS from anywhere and plain HTTP from this computer (Sniff). Replies use
-// internal/envelope.
+// (Options.UI), the same routes and the extensions' UIs at /ext/<name>/, with local access (no
+// login) or remote access (signing in through Meko Cloud when [web] signin = "cloud"). Which
+// credential a request has depends on the request, never on how it came in (authorize); the Host
+// and Origin checks depend on the connection (guard). With remote access the port takes TLS from
+// anywhere and plain HTTP from this computer (Sniff). Replies use internal/envelope.
 package server
 
 import (
@@ -336,7 +336,8 @@ func (s *Server) reloadWeb(c echo.Context) error {
 
 // authorize is the credential check, keyed on the matched route, never the raw URL, and on what
 // the request carries, never on how it came in:
-//   - /healthz, the web UI's files, /ext/<name> (a redirect) and auth/status need nothing, and the
+//   - /healthz, the web UI's files, /ext/<name> (a redirect), auth/status and the sign-in's start
+//     and finish (signin.go, which check the address themselves) need nothing, and the
 //     knowledge-file links' ticket is their credential;
 //   - an extension's pages (/ext/<name>/...) take a browser (local or remote) and nothing else: a
 //     token there is the extension's business, never Meko's;
@@ -350,7 +351,7 @@ func (s *Server) authorize(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		r := c.Request()
 		switch c.Path() {
-		case "/healthz", authStatusRoute, uiRoute, extRootRoute:
+		case "/healthz", authStatusRoute, uiRoute, extRootRoute, signInStartRoute, signInFinishRoute:
 			return next(c)
 		case uploadRoute, downloadRoute:
 			c.Set(credentialKey, CredentialTicket)

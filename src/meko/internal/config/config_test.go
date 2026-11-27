@@ -71,6 +71,8 @@ func TestLoadErrors(t *testing.T) {
 		{name: "unknown auth mode", file: "[server]\nauth = \"nnone\"\n", want: []string{`server.auth "nnone"`}},
 		{name: "unknown auth mode in env", env: map[string]string{"MEKO_AUTH": "off"}, want: []string{`"off"`}},
 		{name: "unknown web access", file: "[web]\naccess = \"public\"\n", want: []string{`web.access "public"`}},
+		{name: "unknown sign-in", file: "[web]\nsignin = \"google\"\n", want: []string{`web.signin "google"`}},
+		{name: "unknown sign-in in env", env: map[string]string{"MEKO_WEB_SIGNIN": "yes"}, want: []string{`"yes"`}},
 		// Meko has one port: the web listener's old setting is refused, saying where it went.
 		{name: "web port in the file", file: "[web]\nport = 8443\n",
 			want: []string{"config.toml", "[web] port is gone", "[server] port"}},
@@ -295,7 +297,7 @@ func TestCallHomeSettings(t *testing.T) {
 func TestWebSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	c, err := Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.Web != (Web{Access: AccessLocal, Enabled: true}) || c.Server.Port != 7777 {
+	if err != nil || c.Web != (Web{Access: AccessLocal, SignIn: SignInNone, Enabled: true}) || c.Server.Port != 7777 {
 		t.Fatalf("defaults: %+v %d %v", c.Web, c.Server.Port, err)
 	}
 	file := "[web]\naccess = \"remote\"\nname = \"dev.example.com\"\n"
@@ -303,13 +305,38 @@ func TestWebSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err = Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.Web != (Web{Access: AccessRemote, Name: "dev.example.com", Enabled: true}) {
+	if err != nil || c.Web != (Web{Access: AccessRemote, Name: "dev.example.com", SignIn: SignInNone, Enabled: true}) {
 		t.Fatalf("from the file: %+v %v", c.Web, err)
 	}
 	env := map[string]string{"MEKO_WEB_ACCESS": "local"}
 	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
 	if err != nil || c.Web.Access != AccessLocal {
 		t.Fatalf("env over the file: %+v %v", c.Web, err)
+	}
+}
+
+// [web] signin is config.toml's or MEKO_WEB_SIGNIN's, never web.toml's: nothing a browser can
+// change (meko ui, the handoff) turns it off.
+func TestSignInSetting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(filepath.Join(dir, "web.toml"), []byte("[web]\nsignin = \"cloud\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Web.SignIn != SignInNone {
+		t.Fatalf("web.toml's signin should be ignored: %q, %v", c.Web.SignIn, err)
+	}
+	if err = os.WriteFile(path, []byte("[web]\naccess = \"remote\"\nsignin = \"cloud\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Web.SignIn != SignInCloud {
+		t.Fatalf("from config.toml: %q, %v", c.Web.SignIn, err)
+	}
+	c, err = Load(path, func(k string) string { return map[string]string{"MEKO_WEB_SIGNIN": "none"}[k] }, Overrides{})
+	if err != nil || c.Web.SignIn != SignInNone {
+		t.Fatalf("env over the file: %q, %v", c.Web.SignIn, err)
 	}
 }
 

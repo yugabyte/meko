@@ -221,6 +221,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err != nil {
 		return err
 	}
+	if err = signInNeedsLink(cfg, cloudSt); err != nil {
+		return err
+	}
 
 	// The store API the context engine calls, on its unix socket with a per-start token of its own.
 	internalToken, err := auth.NewToken()
@@ -373,6 +376,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	cloud = &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
 		List: cloudlink.ListDatapacks,
 		Changed: func(ctx context.Context) {
+			// The link says who the owner is: a new one ends every browser's session.
+			if err := st.DeleteAllSessions(context.WithoutCancel(ctx)); err != nil {
+				log.Error("ending the browsers' sessions after a Meko Cloud link change", "error", err)
+			}
 			go cloud.CloudTools(context.WithoutCancel(ctx))
 			web.notify(ctx, "cloud")
 		},
@@ -397,6 +404,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			UsageStats: usage.State, Storage: svc.Storage, MCP: mcpHandler, REST: registerREST, Upload: upload,
 			Download: download, UI: ui, Cloud: cloud, Agents: agentsMgr, WebStatus: web.Status, ReloadWeb: web.Reload,
 			Web: &server.Web{Access: wcfg.Web.Access, Off: !wcfg.Web.Enabled, Extensions: web.Proxies,
+				SignIn: cfg.Web.SignIn == config.SignInCloud, Address: webURL(wcfg.Web, cfg.Server.Port), Sessions: st,
 				Installed: web.Installed, Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates,
 				CheckExtensions: web.CheckExtensions, SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
 	}
@@ -712,6 +720,26 @@ var keychainRetry = 10 * time.Second
 // ensureClientToken gets the client token from where this install keeps it. A Keychain that
 // refuses is waited for, not given up on: under launchd, exiting would only start the server again
 // and again.
+// errSignInUnlinked stops serve when [web] signin = "cloud" while Meko Cloud isn't linked: no one
+// could sign in from another computer.
+var errSignInUnlinked = errors.New(`[web] signin = "cloud" needs Meko linked to Meko Cloud. ` +
+	`Link it with meko cloud-link, or set signin = "none" in config.toml`)
+
+// signInNeedsLink refuses Meko Cloud sign-in while there's no link to sign in through.
+func signInNeedsLink(cfg config.Config, cloudSt cloudlink.Store) error {
+	if cfg.Web.SignIn != config.SignInCloud {
+		return nil
+	}
+	cur, err := cloudSt.Load()
+	if err != nil {
+		return err
+	}
+	if !cur.Linked {
+		return errSignInUnlinked
+	}
+	return nil
+}
+
 func ensureClientToken(ctx context.Context, l paths.Layout, cfg config.Config, log *slog.Logger) (string, error) {
 	ct, err := clientTokens(l, cfg)
 	if err != nil {

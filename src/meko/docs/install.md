@@ -141,7 +141,8 @@ safe.
 - It writes how browsers reach Meko (its access) to `web.toml` when neither it nor `config.toml` sets one:
   `--access local|remote`, or by Kode's old rule (remote over SSH or on Linux with no display,
   else local), unless Kode is on this computer, whose access the handoff takes over instead
-  ([web.md](web.md#settings)). Neither access has a login. `--no-ui` turns the web UI off there
+  ([web.md](web.md#settings)). Local access has no login; remote access has one only with
+  `[web] signin = "cloud"` in `config.toml` ([web.md](web.md#signing-in-to-remote-access)). `--no-ui` turns the web UI off there
   too (`[web] enabled = false`; `meko ui start` turns it on). The summary's `Web UI` link row
   gives the URL and the access.
 - On macOS, with the service, once the server is up, it starts the menu bar app at each login

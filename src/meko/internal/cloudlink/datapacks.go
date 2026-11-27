@@ -54,6 +54,10 @@ type CallError struct {
 	Status int
 	Code   string
 	msg    string
+	// cloudStatus is the HTTP status Meko Cloud answered with, when it answered at all: a reply
+	// that isn't its API's (no {data, error} envelope) keeps Status 0 but tells a route Meko Cloud
+	// doesn't have (a 404) from its other failures.
+	cloudStatus int
 }
 
 func (e *CallError) Error() string { return e.msg }
