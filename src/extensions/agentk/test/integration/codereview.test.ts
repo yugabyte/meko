@@ -303,13 +303,14 @@ describe('code review before the PR (real session host + git, fake claude runnin
     /** The PR prompt went at the end of the user's turn, with the review's line, and nothing is left queued. */
     async function sentAfterTurn(id: string, claudeSessionId: string) {
       await waitFor(() => env.core.sessions.get(id), (x) => x.stage === 'pr', 15000, "the PR prompt at the turn's end");
+      // The stage moves before the prompt is typed; the step that typed it marks the review sent and clears the queue.
+      expect(await stepsDone(id)).toBe('done');
       expect(await prPrompt(claudeSessionId)).toContain('me_kode_review:LGTM;Sirius1.0');
       const sent = prompts(claudeSessionId);
       expect(sent.at(-2)).toBe('Tidy up the tests.');
       expect(sent.filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
       expect(finished(id)).not.toBeNull();
       expect(env.core.sessions.row(id).queued_gate).toBeNull();
-      expect(await stepsDone(id)).toBe('done');
     }
 
     it('queues Open PR, and its PR prompt goes when the turn ends', async () => {
