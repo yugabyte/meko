@@ -28,7 +28,7 @@ describe('meko kode review: the command line', () => {
     expect(parseReviewArgs(['--pr', '41'])).toMatchObject({ pr: '41' });
     expect(parseReviewArgs(['--description=Adds a login page.'])).toMatchObject({ description: 'Adds a login page.' });
     expect(parseReviewArgs(['--prior', 'rounds.json'])).toMatchObject({ prior: 'rounds.json' });
-    expect(parseReviewArgs(['--keep', 'runs/1'])).toMatchObject({ keep: 'runs/1' });
+    expect(parseReviewArgs(['--out-dir', 'runs/1'])).toMatchObject({ outDir: 'runs/1' });
     expect(parseReviewArgs(['--issue', '12', '--issue=#13', '--issue', 'acme/other#14', '--issue', 'https://github.com/acme/other/issues/15']))
       .toMatchObject({ issues: ['12', '#13', 'acme/other#14', 'https://github.com/acme/other/issues/15'] });
     expect(parseReviewArgs(['--model', 'sonnet', '--model=small=claude-haiku-4-5', '--model', 'mid=opus[1m]']))
@@ -80,6 +80,9 @@ describe('meko kode review: the command line', () => {
     expect(refused(one({ comment: ' ' }))).toBe('--prior: round 1, finding 2: comment is text. See: meko kode review --help');
     expect(refused(one({ outcome: { status: 'wontfix' } }))).toBe('--prior: round 1, finding 2: outcome.status is fixed or declined. See: meko kode review --help');
     expect(refused(one({ dismissed: 'yes' }))).toBe('--prior: round 1, finding 2: dismissed is true or false. See: meko kode review --help');
+    // A round with a number is named by it, as the prompt names it, not by its place.
+    expect(refused(JSON.stringify([{ findings: [] }, { round: 5, findings: [{ ...finding, line: -1 }] }])))
+      .toBe('--prior: round 5, finding 1: line is a whole number. See: meko kode review --help');
   });
 
   it('says what is wrong with a command line it refuses', () => {
@@ -103,6 +106,7 @@ describe('meko kode review: the command line', () => {
     }
     expect(refused(['--model', 'huge=opus'])).toBe('--model takes a model, or <tier>=<model> with a tier of large, mid, small.');
     expect(refused(['--model', 'small=op us'])).toBe("--model: op us isn't a model name: use letters, digits and . _ : / @ [ ] - only.");
+    expect(refused(['--model', 'opus', '--model', 'large=sonnet'])).toBe("--model names the large tier's model twice: give each tier once.");
     expect(refused(['src/'])).toContain('reviews the folder it runs in');
   });
 

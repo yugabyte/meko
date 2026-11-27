@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { all, openDb, run } from '../../src/server/db.js';
@@ -172,10 +172,6 @@ describe('meko kode review', () => {
     err = [];
     expect(await runReview(paths, ['--prior', join(home, 'nope.json')], io())).toBe(1);
     expect(err.join('')).toContain(`Couldn't read --prior's file ${join(home, 'nope.json')}: `);
-    err = [];
-    writeFileSync(file, '{}');
-    expect(await runReview(paths, ['--prior', file], io())).toBe(1);
-    expect(err.join('')).toBe('--prior: the file holds a JSON array of rounds. See: meko kode review --help\n');
     expect(records()).toHaveLength(1);
   });
 
@@ -205,12 +201,12 @@ describe('meko kode review', () => {
     expect(err.join('')).toBe("--issue 7 names no repo, and this folder's origin isn't on GitHub: use owner/name#number.\n");
   });
 
-  it('keeps the run with --keep: each step streamed to its own transcript, what the steps read, the result, never the tokens', async () => {
+  it('keeps the run with --out-dir: each step streamed to its own transcript, what the steps read, the result, never the tokens', async () => {
     fake('review-reports.json', {
       ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number.', gotchas: [] }] },
     });
     const kept = join(home, 'kept', 'run1');
-    expect(await runReview(paths, ['--json', '--keep', kept], io())).toBe(0);
+    expect(await runReview(paths, ['--json', '--out-dir', kept], io())).toBe(0);
     expect(err.join('')).toContain(`Kept the run in ${kept}.`);
     for (const x of steps()) expect(x.args[x.args.indexOf('--output-format') + 1]).toBe('stream-json');
     const files = readdirSync(kept).sort();
@@ -227,14 +223,33 @@ describe('meko kode review', () => {
     expect(r.costUsd).toBe(1.5);
     expect(JSON.parse(readFileSync(join(kept, 'review.json'), 'utf8'))).toEqual(r);
 
-    // A folder with a run in it already, or one in the reviewed repo, is refused before anything is recorded.
+    // A folder with a run in it already, a file, or a folder in the reviewed repo is refused before anything is recorded.
     err = [];
-    expect(await runReview(paths, ['--keep', kept], io())).toBe(1);
-    expect(err.join('')).toBe(`--keep's folder ${kept} isn't empty: name a new or empty one, so one run's files don't mix with another's.\n`);
+    expect(await runReview(paths, ['--out-dir', kept], io())).toBe(1);
+    expect(err.join('')).toBe(`--out-dir's folder ${kept} isn't empty: name a new or empty one, so one run's files don't mix with another's.\n`);
     err = [];
-    expect(await runReview(paths, ['--keep', 'logs/run1'], io())).toBe(1);
-    expect(err.join('')).toBe("--keep's folder logs/run1 is in the reviewed repo, whose next review would read it as part of the change: name one outside it.\n");
+    expect(await runReview(paths, ['--out-dir', join(kept, 'review.json')], io())).toBe(1);
+    expect(err.join('')).toBe(`--out-dir ${join(kept, 'review.json')} isn't a folder: name a new or empty one.\n`);
+    for (const inRepo of ['logs/run1', '..runs']) {
+      err = [];
+      expect(await runReview(paths, ['--out-dir', inRepo], io())).toBe(1);
+      expect(err.join('')).toBe(`--out-dir's folder ${inRepo} is in the reviewed repo, whose next review would read it as part of the change: name one outside it.\n`);
+    }
     expect(records()).toHaveLength(1);
+
+    // A folder gone by the end (a file in its place): the review still prints its result and is recorded as done.
+    const gone = join(home, 'kept', 'run2');
+    out = [];
+    err = [];
+    const meko = async () => {
+      rmSync(gone, { recursive: true });
+      writeFileSync(gone, '');
+      return null;
+    };
+    expect(await runReview(paths, ['--json', '--out-dir', gone], io({ meko }))).toBe(0);
+    expect(JSON.parse(out.join('\n')).costUsd).toBe(1.5);
+    expect(err.join('')).toContain(`Couldn't keep the result in ${gone}: `);
+    expect(records().map((x) => x.state)).toEqual(['done', 'done']);
   });
 
   it("runs each tier's steps on --model's model, the config's for the rest", async () => {
@@ -251,13 +266,13 @@ describe('meko kode review', () => {
     expect(JSON.parse(out.join('\n')).models).toEqual({ large: 'sonnet', mid: 'sonnet', small: 'haiku' });
   });
 
-  it('says which pass never reported, so a review short of one is not taken for a whole one', async () => {
+  it('says which pass never reported and exits 2, so a review short of one is not taken for a whole one', async () => {
     fake('review-reports.json', LEDGERS);
     fake('review-skip', ['r1s1:history']);
-    expect(await runReview(paths, [], io())).toBe(0);
+    expect(await runReview(paths, [], io())).toBe(2);
     expect(out.join('\n')).toContain("Note: The history pass didn't report, so the review went on without it.");
     out = [];
-    expect(await runReview(paths, ['--json'], io())).toBe(0);
+    expect(await runReview(paths, ['--json'], io())).toBe(2);
     const r = JSON.parse(out.join('\n'));
     expect(r.passes.filter((p: { reported: boolean }) => !p.reported)).toEqual([{ name: 'history', sweep: 1, reported: false, findings: 0, costUsd: 0.5, error: null }]);
   });

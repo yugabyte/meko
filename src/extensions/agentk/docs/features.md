@@ -130,7 +130,7 @@ Everything Kode does, by area. The [README](../README.md) has the short version,
   (`--pr <number>` or `--description <text>` gives it the author's account to check the change
   against, `--issue` the issues it is for, `--json` for scripts and agents). It only reports: you, or the agent that ran it, fix
   what it found, and `--prior <file>` tells the next run what earlier runs found and what came of
-  each, so it checks them rather than raising them again, and `--keep <dir>` keeps the run: each step's
+  each, so it checks them rather than raising them again, and `--out-dir <dir>` keeps the run: each step's
   whole transcript and what it read. Its runs count in Usage's **Code Reviews**.
   The Code gate says what its press does: **Review Changes** when it starts the code review first,
   **Open PR** when it doesn't (the review is off, or one already ran). The stage bar's **Code Review**
