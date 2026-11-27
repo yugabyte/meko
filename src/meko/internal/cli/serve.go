@@ -373,6 +373,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	cloud = &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
 		List: cloudlink.ListDatapacks,
 		Changed: func(ctx context.Context) {
+			// The link says who the owner is: a new one ends every browser's session.
+			if err := st.DeleteAllSessions(context.WithoutCancel(ctx)); err != nil {
+				log.Error("ending the browsers' sessions after a Meko Cloud link change", "error", err)
+			}
 			go cloud.CloudTools(context.WithoutCancel(ctx))
 			web.notify(ctx, "cloud")
 		},
@@ -397,6 +401,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			UsageStats: usage.State, Storage: svc.Storage, MCP: mcpHandler, REST: registerREST, Upload: upload,
 			Download: download, UI: ui, Cloud: cloud, Agents: agentsMgr, WebStatus: web.Status, ReloadWeb: web.Reload,
 			Web: &server.Web{Access: wcfg.Web.Access, Off: !wcfg.Web.Enabled, Extensions: web.Proxies,
+				SignIn: cfg.Web.SignIn == config.SignInCloud, Address: webURL(wcfg.Web, cfg.Server.Port), Sessions: st,
 				Installed: web.Installed, Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates,
 				CheckExtensions: web.CheckExtensions, SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
 	}

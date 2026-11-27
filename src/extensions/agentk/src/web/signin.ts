@@ -1,9 +1,10 @@
 /**
  * Who gets in is Meko's call: it serves Kode under BASE. A Meko from before it dropped its login
- * signs people in, with remote access; a newer one has no login, and always says signed in. These
+ * signs people in, with remote access; a newer one has none, and says signed in, unless remote
+ * access has other devices sign in through Meko Cloud ([web] signin = "cloud"). These
  * call Meko's own routes, root-absolute rather than under BASE. Under `npm run dev` there's no Meko,
- * so they fail: then a refused request is shown as an error and retried as before. Signing out, on
- * a Meko with a login, is on its account page, not in Kode.
+ * so they fail: then a refused request is shown as an error and retried as before. Signing out is
+ * Meko's (its account page then, Settings' Access card now), not in Kode.
  */
 
 /** What Meko says about this browser (`GET /api/v1/auth/status`). */

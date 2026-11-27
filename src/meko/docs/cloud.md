@@ -62,6 +62,8 @@ every extension the same way (`internal/cloudlink`).
   `install` show the link in their link rows (`Cloud`, the linked web app's URL, or `not
   linked`), and `meko status --verbose` with its key hint (`Meko Cloud:     linked to …`, or `not
   linked`).
+- A saved change (`PUT` or `DELETE`, through the server or not) ends every browser session that
+  signing in to remote access made ([below](#signing-in-to-remote-access-through-meko-cloud)).
 - A saved change (`PUT` or `DELETE`) moves back the agents a Meko from before connected to Meko
   Cloud ([below](#agents-stay-on-this-meko)), and its reply adds `agents: {moved: [{name, title}],
   left: [{name, title, url}], failed: [{name, title, error}]}`. `meko cloud-link` prints a line when
@@ -111,6 +113,96 @@ error, reply or log holds the code, token, verifier or key.
   through the running server's `PUT` (or by itself), as with a typed key. A browser on another
   computer (over SSH) can't reach that callback: the address it ended on, pasted at the prompt, does
   the same. With the web UI off, signing in still works.
+
+## Signing in to remote access through Meko Cloud
+
+With `[web] access = "remote"` and `[web] signin = "cloud"` ([web.md](web.md#signing-in-to-remote-access)),
+a browser on another computer signs in to this Meko with the Meko Cloud account it's linked to.
+Meko learns one thing, whether the person who signed in owns that account, and then sets a session
+cookie of its own. No Meko Cloud password or token reaches it: it uses the link's key it already
+has. This is apart from [signing in](#signing-in) to link Meko, which it doesn't change.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant L as Meko local
+    participant W as Meko Cloud web app
+    participant A as Meko Cloud API
+    B->>L: open https://host:7777/ (remote, no session)
+    L-->>B: /signin page: "Sign in with Meko Cloud"
+    B->>L: POST /api/v1/auth/signin/start {next}
+    L->>L: make state + code_verifier + browser nonce (kept 10 min, in memory)
+    L-->>B: URL of W/meko-signin?return_to=https://host:7777/signin/callback&state&code_challenge, Set-Cookie __Host-meko_signin (nonce)
+    B->>W: open /meko-signin (signs in to Meko Cloud first if needed)
+    W-->>B: "Sign in to Meko on host:7777?" Allow
+    W-->>B: redirect to return_to?code&state (a single-use code, Meko Cloud's own)
+    B->>L: /signin/callback page, then POST /api/v1/auth/signin/finish {code, state} (with the nonce cookie)
+    L->>A: POST /api/v1/auth/meko-signin/exchange {code, code_verifier, return_to} (Bearer link key)
+    A->>A: use the code up (always); check return_to, S256(verifier) = challenge, account = key's owner
+    A-->>L: {same_account, email}
+    L->>L: same_account: new session (cookie's SHA-256 in auth_sessions, 7 days)
+    L-->>B: Set-Cookie __Host-meko_session (HttpOnly, Secure, SameSite=Lax); go to next
+```
+
+Step by step, with who does what:
+
+| # | Who | What happens |
+|---|---|---|
+| 1 | The person | Opens Meko's address from another computer. |
+| 2 | Browser → Meko | Meko finds no session: the web UI shows **Sign in with Meko Cloud**. |
+| 3 | The person | Clicks it. |
+| 4 | Browser → Meko | `start`: Meko alone makes a secret (the PKCE verifier) and keeps it in memory, and answers a link to Meko Cloud's `/meko-signin` page carrying only its fingerprint (the S256 challenge), a `state` and its own callback address. It also sets a 10-minute cookie, `__Host-meko_signin`, holding a nonce only this browser has. Meko Cloud isn't contacted. |
+| 5 | Browser → Meko Cloud | Follows the link, signing in to Meko Cloud first if it isn't. |
+| 6 | Meko Cloud → browser | Asks "Sign in to Meko on `<host>:<port>`?" |
+| 7 | The person | Clicks **Allow**. |
+| 8 | Meko Cloud → browser | Meko Cloud sends the browser back to the callback address with a one-time code for the account. |
+| 9 | Browser → Meko | Back at `/signin/callback?code&state`, the page sends both to `finish`, and the browser sends the nonce cookie with them. Meko takes them only with the nonce of the browser that started. |
+| 10 | Meko → Meko Cloud, directly | `exchange` with the code, the secret and the link's key. Meko Cloud uses the code up whatever happens, checks the secret against the fingerprint and the callback address, and answers whether the account that signed in owns the key. |
+| 11 | Meko → browser | Yes: a 7-day session cookie, and on to the page asked for. No: "Signed in as someone else". |
+
+The browser only ever holds the code and the fingerprint, never the secret. The code and state
+travel in the callback's address, where anyone who copies it could see them (a shared screen, a
+browser extension), so `finish` also needs the nonce cookie the starting browser holds: copied to
+another browser, the address signs no one in. Each sign-in is used up by its first `finish`,
+whatever it comes to.
+
+What Meko does and relies on (`internal/cloudlink`'s `browser_signin.go`, `internal/server`'s
+`signin.go`):
+
+- **The callback address is Meko's own**, `https://<[web] name or the FQDN>:<port>/signin/callback`,
+  and `start` refuses a request addressed to any other Host (400 `WRONG_ADDRESS`). A Host is
+  whatever the client writes: taken from the request, it would let someone have a code sent to a
+  site of theirs, by getting the owner to click Allow on a link they made, and finish the sign-in
+  here. A link edited to another address after `start` fails at `exchange`, which compares the
+  address Meko kept with the one the code was issued for.
+- **Meko Cloud sends the browser back to a web UI page**, as the link's sign-in does: its redirect
+  is another site's, which the browsers' checks refuse on an API route. The page POSTs `finish`
+  from Meko's own origin.
+- **The sign-ins waiting are kept in memory**, by `state`, with the SHA-256 of the starting
+  browser's nonce, for 10 minutes, at most 32 (a new one drops the oldest: `start` needs no
+  credential). A restart forgets them; the person signs in again. Each is used up by its first
+  `finish`, and `start` and `finish` check the address before they use anything up.
+- **Meko Cloud's contract**: its web app's `GET /meko-signin?return_to&state&code_challenge` sends
+  the browser to `return_to?code&state` on Allow, `return_to?error=access_denied&state` on
+  Cancel. `POST /api/v1/auth/meko-signin/exchange {code, code_verifier, return_to}` with the link's
+  key answers `{same_account, email}` (the email only when it's the same account), or 400
+  `INVALID_SIGNIN_CODE` for a code that's unknown, expired or used, a wrong verifier or another
+  `return_to`. How Meko Cloud issues the code is its own. A Meko Cloud from before these routes
+  has no `/meko-signin` page either, so the browser lands on its not-found page and never comes
+  back; `start` doesn't ask Meko Cloud first. Only an `exchange` that meets a 404 that isn't Meko
+  Cloud's `NOT_FOUND` says `CLOUD_SIGNIN_UNSUPPORTED` (409), as Cloud Sync says
+  `CLOUD_SYNC_UNSUPPORTED`.
+- **The session** is a random 32-byte cookie, `__Host-meko_session` (HttpOnly, Secure,
+  SameSite=Lax, 7 days); `auth_sessions` keeps its SHA-256, its expiry, the User-Agent and the
+  peer's address. Signing out deletes it. **Any change to the link** ends every session, through
+  the server (the `Changed` hook) or `meko cloud-link` with no server running: the link says who
+  the owner is. It also voids the sign-ins started under the link before: the waiting ones are
+  dropped, and `finish` keeps a session only if the link it asked about is still the one saved
+  once the session is stored (`BrowserSignInCurrent`), so a change that lands while Meko Cloud
+  is being asked can't leave the old owner signed in.
+- **Unlinked, nobody signs in from another computer**: `start` says `CLOUD_NOT_LINKED` (409).
+  `serve` still starts and serves agents and this computer, whatever the link: a setting about
+  browsers on other computers never stops the server.
 
 ## /mcp while linked
 

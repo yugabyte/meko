@@ -15,8 +15,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       Migrations are append-only (`internal/store/migrations/`), like Kode's.
 - [ ] Meko has one port, `[server] port` ([docs/web.md](docs/web.md)): nothing listens on
       another, and `[web] port` stays refused. Every route but `/healthz`, the UI's files,
-      `/api/v1/auth/status`, `/ext/<name>` (the slash redirect) and the knowledge-file links needs a
-      credential, checked on the matched route (`c.Path()`), never the raw URL. The links
+      `/api/v1/auth/status`, `/ext/<name>` (the slash redirect), the knowledge-file links and, with
+      Meko Cloud sign-in, `/api/v1/auth/signin/start` and `/finish` (which go on only over TLS at
+      Meko's own address, and check that before they use anything up) needs a credential, checked on the matched route (`c.Path()`), never the raw URL. The links
       (`/api/v1/knowledge-uploads/:ticket`, `/api/v1/knowledge-downloads/:ticket`) take a one-time
       ticket instead: 256 random bits, 5 minutes, an upload's bound to its datapack, key, size and
       SHA-256 ([docs/knowledge.md](docs/knowledge.md)). Otherwise it's the admin token on
@@ -35,10 +36,16 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       and is refused with an `Origin` that isn't its own.
       `knowledgebase_upload_file` reads a path as the server's user, so it refuses a call that came
       in with no token.
-- [ ] Browsers ([docs/web.md](docs/web.md)) have no login. One gets in, without a token, by local
-      access (`LocalAccess`, over plain HTTP from this computer) or, over TLS with remote access, by
-      the site check (`SameSite`: no other site's page sent it); its Origin over TLS must be
-      `https://<Host>`. While the web UI is off (`meko ui stop`) no browser gets in, `/` and
+- [ ] Browsers ([docs/web.md](docs/web.md)) get in, without a token, by local access
+      (`LocalAccess`, over plain HTTP from this computer, no login) or, over TLS with remote access,
+      by the site check (`SameSite`: no other site's page sent it); its Origin over TLS must be
+      `https://<Host>`. With `[web] signin = "cloud"` a remote browser also needs a valid
+      `__Host-meko_session` (only its SHA-256 stored, 7 days), missing one is a 401
+      `SIGNIN_REQUIRED` (a 303 to `/signin` for an extension's page), the sign-in starts and returns
+      only at Meko's configured address (never the request's Host), Meko keeps no Meko Cloud
+      credential of the person's, and any change to the Meko Cloud link ends every session
+      ([docs/cloud.md](docs/cloud.md#signing-in-to-remote-access-through-meko-cloud)). `[web] signin`
+      is read from `config.toml` only, never `web.toml`. While the web UI is off (`meko ui stop`) no browser gets in, `/` and
       `/ext/<name>/` answer 404, agents keep the port, and the WebSockets the proxy upgraded close
       (`CloseAll`); with remote access the port is taken again on 127.0.0.1 only. Nothing about
       remote access (its certificate) can stop `serve`: it stays on 127.0.0.1 and says why. A settings change

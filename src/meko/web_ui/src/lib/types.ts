@@ -516,12 +516,15 @@ export interface UsageStats {
   url?: string;
 }
 
-// GET /auth/status, which needs no credential. There's no login: Meko still sends setup_required,
-// reset, username and totp_enabled, always empty, for older pages.
+// GET /auth/status, which needs no credential. Meko still sends setup_required, reset, username and
+// totp_enabled, always empty, from the login it once had.
 export interface AuthStatus {
   // How [web] access in config.toml opens the web listener: "local" (this computer only) or
-  // "remote" (every address, over HTTPS). Neither has a login.
+  // "remote" (every address, over HTTPS).
   access: "local" | "remote";
+  // "cloud" when remote access has a browser on another computer sign in through Meko Cloud first
+  // ([web] signin); "none", or missing from an older Meko, when it doesn't.
+  signin?: "none" | "cloud";
   // This request came in as a local one.
   local_access: boolean;
   // Whether Meko lets this request in.

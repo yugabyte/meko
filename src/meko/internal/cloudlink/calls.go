@@ -109,7 +109,8 @@ func (s *Service) API(ctx context.Context, method, path string, body any) (json.
 		return nil, &CallError{Code: CodeCallFailed,
 			msg: "Meko Cloud: " + strings.TrimSuffix(shorten(env.Error.Message), ".") + "."}
 	case res.StatusCode/100 != 2 || jsonErr != nil:
-		return nil, &CallError{Code: CodeCallFailed, msg: "Meko Cloud answered " + res.Status + ", not like Meko's API."}
+		return nil, &CallError{Code: CodeCallFailed, cloudStatus: res.StatusCode,
+			msg: "Meko Cloud answered " + res.Status + ", not like Meko's API."}
 	}
 	return env.Data, nil
 }

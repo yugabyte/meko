@@ -75,8 +75,9 @@ the Kode tour. Updates install by themselves.
 To share projects with your team, link Meko to Meko Cloud: Settings › Meko Cloud in Meko's web UI,
 or `meko cloud-link`.
 
-Kode has no login. With Meko's remote access (the default over SSH), anyone who can reach port
-7777 can open it and its terminals.
+Kode has no login of its own. With Meko's remote access (the default over SSH), anyone who can
+reach port 7777 can open it and its terminals, unless Meko asks other computers to sign in with
+Meko Cloud first (`[web] signin = "cloud"` in Meko's `config.toml`).
 
 [Install details](docs/install.md): who can open it, updates, where data lives, and Mac notes.
 

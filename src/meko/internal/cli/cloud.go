@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/envelope"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/secrets"
+	"github.com/yugabyte/meko/src/meko/internal/store"
 )
 
 // cloudFlags are meko cloud-link's.
@@ -156,17 +158,40 @@ func applyCloud(ctx context.Context, l paths.Layout, store cloudlink.Store, off 
 	if err != nil {
 		return cloudlink.Status{}, err
 	}
+	// A change ends every browser's session, as the server does when it makes one: the link says
+	// who the owner is.
+	var signOutErr error
 	svc := &cloudlink.Service{Store: store, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
-		Moved: cloudMover(l, localTarget(a))}
+		Moved:   cloudMover(l, localTarget(a)),
+		Changed: func(ctx context.Context) { signOutErr = endSessions(ctx, l) }}
+	var st cloudlink.Status
 	if off {
-		return svc.Unlink(ctx)
+		st, err = svc.Unlink(ctx)
+	} else {
+		st, err = svc.Link(ctx, u)
 	}
-	st, err := svc.Link(ctx, u)
 	var refused *cloudlink.Error
-	if errors.As(err, &refused) {
+	switch {
+	case errors.As(err, &refused):
 		return st, errors.New(strings.TrimSuffix(refused.Error(), "."))
+	case err == nil && signOutErr != nil:
+		return st, fmt.Errorf("the link changed, but signing out the browsers didn't: %w", signOutErr)
 	}
 	return st, err
+}
+
+// endSessions ends every browser's session in the data folder's database, while no server runs.
+// A data folder whose server never started has none.
+func endSessions(ctx context.Context, l paths.Layout) error {
+	if _, err := os.Stat(l.DB); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	st, err := store.Open(l.DB)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	return st.DeleteAllSessions(ctx)
 }
 
 // withoutPeriod is a message from cloudlink as the CLI's last line, which ends without a period.

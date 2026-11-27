@@ -43,8 +43,14 @@ type Config struct {
 type Web struct {
 	// Access is "local" (the default: 127.0.0.1 over HTTP, for requests from this computer) or
 	// "remote" (every address: HTTPS for browsers, and plain HTTP for agents and the CLI on this
-	// computer). Neither has a login. Also MEKO_WEB_ACCESS.
+	// computer). Local access has no login; remote access has one only with SignIn. Also
+	// MEKO_WEB_ACCESS.
 	Access string `toml:"access"`
+	// SignIn is "none" (the default: remote access lets in any browser that reaches the port) or
+	// "cloud" (with remote access, a browser on another computer signs in through the linked Meko
+	// Cloud first; docs/web.md). Set only in config.toml, never web.toml, so nothing a browser can
+	// change turns it off. While Meko Cloud isn't linked, no one signs in. Also MEKO_WEB_SIGNIN.
+	SignIn string `toml:"signin"`
 	// Name is the host name links to the web UI use; empty is this host's FQDN (remote) or
 	// 127.0.0.1 (local).
 	Name string `toml:"name"`
@@ -72,6 +78,12 @@ type webFile struct {
 const (
 	AccessLocal  = "local"
 	AccessRemote = "remote"
+)
+
+// Sign-in modes for remote access ([web] signin).
+const (
+	SignInNone  = "none"
+	SignInCloud = "cloud"
 )
 
 // TLS is the [tls] table: the certificate browsers get with remote access. Empty uses a
@@ -200,7 +212,7 @@ type Log struct {
 // Default is the configuration with nothing set.
 func Default() Config {
 	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"},
-		Web: Web{Access: AccessLocal, Enabled: true},
+		Web: Web{Access: AccessLocal, SignIn: SignInNone, Enabled: true},
 		Update: Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/meko",
 			RequireSignature: true},
 		CallHome: CallHome{Enabled: true}, Storage: Storage{MaxContentMB: DefaultMaxContentMB}}
@@ -255,6 +267,9 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	}
 	if v := env("MEKO_WEB_ACCESS"); v != "" {
 		c.Web.Access = v
+	}
+	if v := env("MEKO_WEB_SIGNIN"); v != "" {
+		c.Web.SignIn = v
 	}
 	if v := env("MEKO_AUTH"); v != "" {
 		c.Server.Auth = v
@@ -466,6 +481,10 @@ func (c Config) validate() error {
 	// An unknown access is refused, so a typo never opens the port to the network.
 	if c.Web.Access != AccessLocal && c.Web.Access != AccessRemote {
 		return fmt.Errorf("web.access %q isn't one of %q, %q", c.Web.Access, AccessLocal, AccessRemote)
+	}
+	// An unknown sign-in is refused, so a typo never leaves remote access without one.
+	if c.Web.SignIn != SignInNone && c.Web.SignIn != SignInCloud {
+		return fmt.Errorf("web.signin %q isn't one of %q, %q", c.Web.SignIn, SignInNone, SignInCloud)
 	}
 	if (c.TLS.Cert == "") != (c.TLS.Key == "") {
 		return errors.New("tls.cert and tls.key go together: set both, or neither for a self-signed pair")

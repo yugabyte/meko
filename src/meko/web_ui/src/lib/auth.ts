@@ -1,8 +1,12 @@
-// The addresses of pages Meko had before: the sign-in screens and account page, from before it
-// dropped its login, and a datapack's Connect tab, from before the Agents page. Bookmarks and older
-// extensions' pages still link to them, so each leads into the app.
+// The sign-in page's addresses, and those of pages Meko had before: the setup screen and account
+// page, from its old login, and a datapack's Connect tab, from before the Agents page. Bookmarks and
+// older extensions' pages still link to them, so each leads into the app.
 
+// The sign-in page (/signin?next=<page>): with Meko Cloud sign-in, a browser that isn't signed in
+// signs in there; one that is goes on to next.
 export const SIGNIN_PATH = "/signin";
+// Where Meko Cloud sends a signing-in browser back to, with code and state (or error).
+export const SIGNIN_CALLBACK_PATH = "/signin/callback";
 export const SETUP_PATH = "/setup";
 export const ACCOUNT_PATH = "/account";
 
@@ -23,12 +27,19 @@ export function safeNext(next: string | null): string {
 // A datapack's old Connect tab: /datapacks/<id>/connect.
 const CONNECT_TAB = /^\/datapacks\/[^/]+\/connect\/?$/;
 
-// The address an old one goes to (/signin?next=<path> to next, /setup to the start, /account to
-// Settings, a datapack's Connect tab to Agents), or null for any other.
+// The address one goes to once signed in (/signin?next=<path> to next, /setup to the start, /account
+// to Settings, a datapack's Connect tab to Agents), or null for any other.
 export function oldAddressTarget(path: string, search: string): string | null {
   if (path === SIGNIN_PATH) return safeNext(new URLSearchParams(search).get("next"));
   if (path === SETUP_PATH) return "/";
   if (path === ACCOUNT_PATH) return "/settings";
   if (CONNECT_TAB.test(path)) return "/agents";
   return null;
+}
+
+// The page to come back to after signing in, from the address the browser is on: /signin's next,
+// else that address itself.
+export function signInNext(path: string, search: string, hash: string): string {
+  if (path === SIGNIN_PATH) return safeNext(new URLSearchParams(search).get("next"));
+  return safeNext(path + search + hash);
 }

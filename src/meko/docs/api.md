@@ -16,9 +16,11 @@ it came in (`authorize` in `internal/server/server.go`):
   (with `auth = "none"`, it's let in as nothing, below), and never a browser's way in. Tokens are
   taken only from this computer (a loopback peer), over plain HTTP or, with remote access, TLS;
   from anywhere else, a 401.
-- **A browser** (no token; no login, [web.md](web.md)): `local`, a request from this computer over
-  plain HTTP (`LocalAccess`), or `remote`, over TLS with remote access, any request another site's
-  page didn't send (`SameSite`). While the web UI is off (`meko ui stop`) no browser gets in.
+- **A browser** (no token, [web.md](web.md)): `local`, a request from this computer over plain
+  HTTP (`LocalAccess`), with no login, or `remote`, over TLS with remote access, any request
+  another site's page didn't send (`SameSite`); with `[web] signin = "cloud"` it also needs a valid
+  `__Host-meko_session` cookie, from signing in through Meko Cloud, and without one gets 401
+  `SIGNIN_REQUIRED`. While the web UI is off (`meko ui stop`) no browser gets in.
 - **Nothing**, with `[server] auth = "none"`, from this computer, and never a browser's request
   (one with `Sec-Fetch-Site` or a proxy's headers): a browser gets in only by the browsers' rules,
   and not at all while the web UI is off.
@@ -32,7 +34,8 @@ it came in (`authorize` in `internal/server/server.go`):
 | `POST /api/v1/agents/<name>/connect`, `/disconnect` | yes | 403 | yes | 401, or 403 with `auth = "none"` |
 | The owner's routes: `/api/v1/extensions…`, `/api/v1/update…` ([web.md](web.md)), `/api/v1/settings/meko-cloud…` ([cloud.md](cloud.md)) | yes | 403 | yes | 401, or 403 with `auth = "none"` |
 | `/ext/<name>/*` (an extension's web UI) | a browser's rules, whatever token it carries | | yes | 401; 404 while the web UI is off |
-| `GET /api/v1/auth/status`, the web UI's files (`/` and every GET no other route takes) | yes | yes | yes | yes; the files are a 404 while the web UI is off |
+| `GET /api/v1/auth/status`, the web UI's files (`/` and every GET no other route takes), and with Meko Cloud sign-in `POST /api/v1/auth/signin/start` and `/finish` (over TLS, at Meko's own address) | yes | yes | yes | yes; the files are a 404 while the web UI is off |
+| `POST /api/v1/auth/signout` (with Meko Cloud sign-in) | yes | 403 | yes | 401, or 403 with `auth = "none"` |
 | Every other route (`/mcp`, the data routes) | yes | yes | yes | 401, or yes with `auth = "none"` |
 | The knowledge-file links, `/api/v1/knowledge-uploads/<ticket>` and `/api/v1/knowledge-downloads/<ticket>` | yes | yes | yes | yes: the ticket is the credential |
 
@@ -40,7 +43,10 @@ The browsers' own routes:
 
 | Route | Credential | What |
 |---|---|---|
-| `GET /api/v1/auth/status` | none | `{access, local_access, signed_in, setup_required, reset, username, totp_enabled}`: `signed_in` is whether this request is let in as a browser; the last four are always `false` or `null`, kept for pages that read them (Kode's). No other `/api/v1/auth/*` route exists |
+| `GET /api/v1/auth/status` | none | `{access, signin, local_access, signed_in, setup_required, reset, username, totp_enabled}`: `signin` is `cloud` when remote access has browsers on other computers sign in through Meko Cloud, else `none`; `signed_in` is whether this request is let in as a browser; the last four are always `false` or `null`, kept for pages that read them (Kode's) |
+| `POST /api/v1/auth/signin/start` | none (only with `[web] signin = "cloud"` and remote access; else 404) | `{next}` → `{url}`: Meko Cloud's sign-in page to send the browser to, which sends it back to the web UI's `/signin/callback` ([cloud.md](cloud.md#signing-in-to-remote-access-through-meko-cloud)). `next` is a path on this server, else `/`. Sets `__Host-meko_signin` (HttpOnly, Secure, SameSite=Lax, 10 minutes): a nonce `finish` needs from the same browser. 400 `SIGNIN_NOT_NEEDED` over plain HTTP (this computer), 400 `WRONG_ADDRESS` when the request's Host isn't Meko's address (`[web] name` or the FQDN, and the port), 409 `CLOUD_NOT_LINKED`, 409 `CLOUD_NO_WEB_URL`. It doesn't ask Meko Cloud: one from before sign-in has no page to send the browser to, and the browser stops at its not-found page |
+| `POST /api/v1/auth/signin/finish` | none (as start) | `{code, state}`, with the `__Host-meko_signin` cookie `start` set in this browser, → `{next}`, with `Set-Cookie: __Host-meko_session` (HttpOnly, Secure, SameSite=Lax, 7 days) when the person who signed in owns the linked Meko Cloud account. 403 `NOT_THE_OWNER` when they don't; 400 `SIGNIN_EXPIRED` for a state that's unknown, used or older than 10 minutes, a nonce cookie missing or another browser's, a Meko Cloud link changed since `start`, or a code Meko Cloud refused; 400 `SIGNIN_NOT_NEEDED` and `WRONG_ADDRESS` as `start`, before anything is used up; 409 `CLOUD_SIGNIN_UNSUPPORTED` when the exchange route is missing; Meko Cloud's other failures as on its other routes (502 `CLOUD_UNREACHABLE`, `CLOUD_KEY_REFUSED`, `CLOUD_CALL_FAILED`). The sign-in is used up whatever the answer |
+| `POST /api/v1/auth/signout` | a browser | Ends this browser's session and clears its cookie: `{signed_out: true}` |
 | `GET /api/v1/extensions` | the owner | `[{name, title, description, installed, web_ui, path, available, job?}]`: every extension Meko knows, sorted by name. `installed` is registered in `extensions.json`; `path` is `/ext/<name>/` while it's served, else `""`; `available` is whether it accepts a connection on its socket (it's running; a socket file left by one that died doesn't count); `job` is the last action the Extensions page ran on it since the server started, `{action, state, started_at, finished_at?, error?, output}`, `state` `running`, `done` or `failed`, `output` its last 16 KiB with the client token blanked; a failed `install` or `start` of one that is now installed and running is left out, since something else (such as `meko extension install` in a terminal) has done it since |
 | `POST /api/v1/extensions/<name>/<action>` | the owner | `install`, `start` or `stop`, run in the background as the extension's job: 202 with its row. An install or a start of one with a web UI is done once it answers on its socket (30 s at most). 404 `NOT_FOUND` (not a known extension or action), 409 `CONFLICT` (start or stop on one that isn't installed, or a job running for it) |
 | `/ext/<name>/*` | a browser | The extension's web UI ([web.md](web.md)) |

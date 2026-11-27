@@ -1,7 +1,9 @@
 // Meko's API from the browser: /api/v1 routes in the {data, error} envelope, search and adding a
-// memory included (Meko's own routes, which run the MCP tools on this computer's datapack). There's
-// no credential: Meko takes the browser by its access (local or remote); a 401 UNAUTHORIZED (local
-// access that didn't look local) tells the app through onUnauthorized.
+// memory included (Meko's own routes, which run the MCP tools on this computer's datapack). Meko
+// takes the browser by its access (local or remote), and with Meko Cloud sign-in by its session
+// cookie, which the browser sends itself. A 401 UNAUTHORIZED (local access that didn't look local)
+// tells the app through onUnauthorized; a 401 SIGNIN_REQUIRED (a session that ended) through
+// onSignInRequired.
 
 import type {
   AgentChange,
@@ -78,12 +80,23 @@ export function onUnauthorized(handler: () => void): void {
   unauthorized = handler;
 }
 
+// The app's handler for a request refused because this browser isn't signed in (any more).
+let signInRequired: () => void = () => {};
+
+export function onSignInRequired(handler: () => void): void {
+  signInRequired = handler;
+}
+
+// The code Meko refuses a browser on another computer with while it isn't signed in.
+export const SIGNIN_REQUIRED = "SIGNIN_REQUIRED";
+
 // A failed reply's error, from Meko's envelope when it has one.
 async function failure(res: Response, fallback: string): Promise<ApiError> {
   const env = (await res.json().catch(() => null)) as { error?: { code: string; message: string } } | null;
   const err = new ApiError(env?.error?.message ?? res.statusText, res.status, env?.error?.code ?? fallback);
   // A 401 without an envelope comes from no other route either (as /mcp's might).
-  if (err.code === "UNAUTHORIZED" || (res.status === 401 && !env?.error)) unauthorized();
+  if (err.code === SIGNIN_REQUIRED) signInRequired();
+  else if (err.code === "UNAUTHORIZED" || (res.status === 401 && !env?.error)) unauthorized();
   return err;
 }
 
@@ -170,6 +183,13 @@ export const api = {
 
   // How Meko takes this browser (src/meko/docs/web-ui.md): local or remote access, with no login.
   authStatus: () => request<AuthStatus>("GET", "/auth/status"),
+  // Signing in to remote access through Meko Cloud: start answers the Meko Cloud page to go to,
+  // which sends the browser back to /signin/callback; finish trades its code and state for a
+  // session and answers the page to go to next. Sign out ends this browser's session.
+  startSignIn: (next: string) => request<{ url: string }>("POST", "/auth/signin/start", { next }),
+  finishSignIn: (code: string, state: string) =>
+    request<{ next: string }>("POST", "/auth/signin/finish", { code, state }),
+  signOut: () => request<{ signed_out: boolean }>("POST", "/auth/signout"),
   // Rows under an extension's old name (renamed_to) are for its releases from before the rename.
   extensions: () =>
     request<Extension[]>("GET", "/extensions").then((rows) => rows.filter((e) => !e.renamed_to)),

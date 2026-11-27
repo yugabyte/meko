@@ -34,6 +34,8 @@ type Service struct {
 	mu sync.Mutex
 	// signIns is the web UI's sign-in in progress (signin.go).
 	signIns signIns
+	// browserSignIns are the sign-ins to this Meko's remote access in progress (browser_signin.go).
+	browserSignIns browserSignIns
 	// state is the link as last read or saved, so a call that asks about it (every tools/call while
 	// linked) doesn't read the secret store, which on macOS runs a program each time. gen counts the
 	// changes saved, so a call that read the link before one can't use it after (remote.go).
@@ -78,6 +80,8 @@ func (s *Service) replace(st *State) {
 	s.gen++
 	old := s.remote.reset(s.gen)
 	s.stateMu.Unlock()
+	// A sign-in waiting to finish was started for the link before: it can't sign anyone in now.
+	s.browserSignIns.forget()
 	if old != nil {
 		_ = old.Close()
 	}

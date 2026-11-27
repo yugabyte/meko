@@ -44,12 +44,34 @@ export function SettingsPage({ auth }: { auth: AuthStatus }) {
   );
 }
 
-// Who reaches this page: [web] access, local or remote.
+// Who reaches this page: [web] access, local or remote, and with remote access whether other
+// computers sign in through Meko Cloud ([web] signin). A browser signed in that way can sign out.
 function AccessCard({ auth }: { auth: AuthStatus }) {
+  const [error, setError] = useState<Error>();
+  const cloud = auth.access === "remote" && auth.signin === "cloud";
+  const signOut = () =>
+    api.signOut().then(
+      () => window.location.assign("/"),
+      (err: Error) => setError(err),
+    );
   return (
     <Card className="space-y-2 p-4">
       <h3 className="font-medium">Access</h3>
-      <p className="text-sm text-muted-foreground">{auth.access === "remote" ? "Remote" : "Local"}</p>
+      <p className="text-sm text-muted-foreground">
+        {auth.access !== "remote" ? "Local" : cloud ? "Remote, with Meko Cloud sign-in" : "Remote"}
+      </p>
+      {auth.access === "remote" && !cloud && (
+        <p className="text-sm text-muted-foreground">
+          Anyone who can reach this computer's port can use Meko. To have other computers sign in with the Meko Cloud
+          account Meko is linked to, set <code>[web] signin = "cloud"</code> in <code>config.toml</code> and restart Meko.
+        </p>
+      )}
+      {cloud && !auth.local_access && (
+        <Button size="sm" onClick={signOut}>
+          Sign out
+        </Button>
+      )}
+      {error && <ErrorNote error={error} />}
     </Card>
   );
 }

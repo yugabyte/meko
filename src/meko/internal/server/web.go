@@ -19,14 +19,24 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/update"
 )
 
-// Web lets browsers into a Server, for Meko's web UI and its extensions' at /ext/<name>/, with no
-// login: over plain HTTP, requests from this computer (LocalAccess); over TLS (remote access), any
-// browser's that another site's page didn't send (SameSite).
+// Web lets browsers into a Server, for Meko's web UI and its extensions' at /ext/<name>/: over plain
+// HTTP, requests from this computer (LocalAccess), with no login; over TLS (remote access), any
+// browser's that another site's page didn't send (SameSite) and, with SignIn, that carries a session
+// from signing in through Meko Cloud (signin.go).
 type Web struct {
 	Access string // config.AccessLocal or config.AccessRemote
 	// Off keeps browsers out ([web] enabled = false, meko ui stop): the web UI and the extensions'
 	// answer 404, and only tokens get in.
 	Off bool
+	// SignIn ([web] signin = "cloud") has a browser on another computer sign in through the linked
+	// Meko Cloud before it gets in with remote access. It needs Address and Sessions, and Options.Cloud
+	// for the sign-in's routes; without them no such browser gets in.
+	SignIn bool
+	// Address is the web UI's address as Meko is set up with it (https://<[web] name or the FQDN>:
+	// <port>): the only one a sign-in starts from, and the one Meko Cloud sends the browser back to.
+	Address string
+	// Sessions keeps the sessions signing in makes.
+	Sessions Sessions
 	// Extensions are the extensions served at /ext/<name>/, read at each request.
 	Extensions func() []*extproxy.Proxy
 	// Installed names the registered extensions (extensions.json), read at each request; nil means
@@ -79,18 +89,23 @@ func (s *Server) registerWeb(v1 *echo.Group) {
 	v1.POST("/update/check", s.updateCheck, ownerOnly)
 	v1.POST("/update/apply", s.updateApply, ownerOnly)
 	s.registerCloudSignIn(v1)
+	s.registerSignIn(v1)
 	s.e.Any(extRootRoute, s.extensionRoot)
 	s.e.Any(extRoute, s.extension)
 }
 
 // browser is the credential a browser's request gets, or "" for none: over plain HTTP (only ever
 // from this computer), a request from this computer (LocalAccess); over TLS, which only remote
-// access serves, any request another site's page didn't send (SameSite). With the web UI off, none.
+// access serves, any request another site's page didn't send (SameSite), with a valid session when
+// sign-in is on (signedIn). With the web UI off, none.
 func (s *Server) browser(r *http.Request) string {
 	switch {
 	case s.opts.Web == nil || s.opts.Web.Off:
 		return ""
 	case r.TLS != nil && s.opts.Web.Access == config.AccessRemote && SameSite(r):
+		if s.signInRequired() && !s.signedIn(r) {
+			return ""
+		}
 		return CredentialRemote
 	case r.TLS == nil && LocalAccess(r):
 		return CredentialLocal
@@ -117,6 +132,8 @@ func (s *Server) refuseBrowser(c echo.Context) error {
 	switch {
 	case s.opts.Web == nil || s.opts.Web.Off:
 		return webOff(c)
+	case c.Request().TLS != nil && s.signInRequired() && SameSite(c.Request()):
+		return signInFirst(c)
 	case c.Request().TLS != nil:
 		return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN", "Only Meko's own pages may call it.")
 	}
@@ -129,12 +146,14 @@ func webOff(c echo.Context) error {
 	return envelope.Fail(c, http.StatusNotFound, "WEB_UI_OFF", "The web UI is off. Turn it on with meko ui start.")
 }
 
-// AuthStatus is GET /api/v1/auth/status: how this browser stands with Meko. There's no
-// login: signed_in is whether the request is let in, and setup_required, reset, username and
-// totp_enabled are always empty. It stays for pages that read it, Kode's among them, which go to
-// a sign-in screen only when it says remote and not signed in.
+// AuthStatus is GET /api/v1/auth/status: how this browser stands with Meko. signed_in is whether
+// the request is let in: with remote access and Meko Cloud sign-in (signin "cloud"), a browser on
+// another computer is only once it has signed in. setup_required, reset, username and totp_enabled
+// are always empty, from the login Meko once had. Pages read it, Kode's among them, which go to the
+// sign-in screen (/signin?next=<page>) when it says remote and not signed in.
 type AuthStatus struct {
 	Access        string  `json:"access"`       // local or remote
+	SignIn        string  `json:"signin"`       // none, or cloud: remote access asks other computers to sign in
 	LocalAccess   bool    `json:"local_access"` // this request came as a local one
 	SignedIn      bool    `json:"signed_in"`
 	SetupRequired bool    `json:"setup_required"`
@@ -145,7 +164,11 @@ type AuthStatus struct {
 
 func (s *Server) authStatus(c echo.Context) error {
 	cred := s.browser(c.Request())
-	return envelope.OK(c, AuthStatus{Access: s.opts.Web.Access, LocalAccess: cred == CredentialLocal,
+	signIn := config.SignInNone
+	if s.signInRequired() {
+		signIn = config.SignInCloud
+	}
+	return envelope.OK(c, AuthStatus{Access: s.opts.Web.Access, SignIn: signIn, LocalAccess: cred == CredentialLocal,
 		SignedIn: cred != ""})
 }
 
