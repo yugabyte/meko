@@ -392,12 +392,12 @@ meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--issue <
   passes, with the user's Meko token, at datapacks of its author's choosing: the review runs
   without them and says so (`untrustedPr`), as Kode runs a session on such a PR's head without the
   repo's config ([Code from public repos](security.md#code-from-public-repos)).
-- **Linked issues.** `--issue` (a number in the reviewed repo, `owner/name#n` or an issue link; once
-  per issue) is read with gh into the run folder and listed for the passes to read, as a task's
-  linked issues are (`writeIssue`, `linkedIssues` in the base prompt): what the change was meant to
-  do, from someone other than its author. One gh can't read goes to them by its link only, saying so
-  on stderr; a bare number in a folder whose origin isn't on GitHub stops the review before anything
-  is recorded.
+- **Linked issues.** `--issue` (a number in the reviewed repo, upstream's in a fork as its PRs are,
+  `owner/name#n` or an issue link; once per issue) is read with gh into the run folder and listed
+  for the passes to read, as a task's linked issues are (`writeIssue`, `linkedIssues` in the base
+  prompt): what the change was meant to do, from someone other than its author. One gh can't read
+  goes to them by its link only, saying so on stderr; a bare number in a folder where neither
+  upstream nor origin is on GitHub stops the review before anything is recorded.
 - **Earlier rounds.** `--prior` names a JSON file of the earlier runs on this change, as a task's
   next round is told about its earlier ones (`PriorRound`, `priorRounds` in the base prompt): an
   array of `{ round?, findings: [{ file, line, severity, comment, outcome?: { status: fixed |
@@ -409,17 +409,19 @@ meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--issue <
 - **Settings.** Strategy and depth are `[code_review]`'s, or `--strategy` and `--depth`; strategy
   Off runs the default, as **Run code review** does. Each tier's model is
   `[code_review.models.claude]`'s, or `--model`'s: a model for the large tier, or `<tier>=<model>`
-  for any (`large`, `mid`, `small`), once per tier (a tier named twice is refused), checked as a session's model is (`checkModel`). Re-review rounds and the check don't apply:
-  a script that runs it again passes what came of the earlier runs with `--prior`.
+  for any (`large`, `mid`, `small`), once per tier (a tier named twice is refused), checked as a
+  session's model is (`checkModel`). Re-review rounds and the check don't apply: a script that runs
+  it again passes what came of the earlier runs with `--prior`.
 - **Keeping the run.** `--out-dir` names a new or empty folder outside the reviewed repo (the next
   review would read one inside it as part of the change); one that isn't, or a file, is refused
-  before anything is recorded. Each step then streams every message (`--output-format stream-json`) into its own
-  owner-only transcript there as it runs (`r1s1-guide.jsonl`, `r1c3.jsonl`; `.2` for its ask-again:
-  `transcriptName`), its result read from the stream's last result line (`streamResult`). However
-  the review ends, the run folder is copied in beside them, `mcp.json` and its tokens left out, and
-  a finished one adds its result as `review.json`, what `--json` prints (one that can't be written
-  is said on stderr, and the result is still printed). Without it, nothing of
-  what the steps read or said outlives the run, only its record's counts.
+  before anything is recorded, and it is made owner-only, as the run folder is. Each step then
+  streams every message (`--output-format stream-json`) into its own owner-only transcript there as
+  it runs (`r1s1-guide.jsonl`, `r1c3.jsonl`; `.2` for its ask-again: `transcriptName`), its result
+  read from the stream's last result line (`streamResult`). However the review ends, the run folder
+  is copied in beside them, `mcp.json` and its tokens left out, and a finished one adds its result
+  as `review.json`, what `--json` prints (one that can't be written is said on stderr, and the
+  result is still printed). Without it, nothing of what the steps read or said outlives the run,
+  only its record's counts.
 - **Output.** stdout gets the kept findings, worst first, each with its comment (and **Caught with
   Meko** with the gotchas it credits), the passes' notes and a note for each pass that never
   reported (`missedPass`: the review went on without it, so it isn't taken for a whole one; it

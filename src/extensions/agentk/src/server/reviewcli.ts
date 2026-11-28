@@ -8,7 +8,7 @@
  */
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -20,7 +20,7 @@ import { isRepoName, parseGithubRef, parsePrInput } from '../shared/github-refs.
 import { checkModel } from '../shared/harnesses.js';
 import { REVIEW_MEKO_SERVER, signInSettings } from './claude.js';
 import { loadConfig, type Config } from './config.js';
-import { git, readMergeBase } from './git.js';
+import { git, readMergeBase, remoteRepo } from './git.js';
 import { issueOrPr, repoVisibility } from './github.js';
 import { SESSION_MARKERS } from './launcher.js';
 import { errMsg } from './log.js';
@@ -54,8 +54,9 @@ couldn't review.
   --pr <pr>              The PR this change is for (a number, owner/name#number or a link): its
                          title and description go to the review, which checks the change against them
   --description <text>   What the change is meant to do, for the review to check it against
-  --issue <issue>        An issue the change is for (a number in this repo, owner/name#number or a
-                         link): read with gh for the review to check the change against; again for more
+  --issue <issue>        An issue the change is for (a number in this repo, upstream's in a fork,
+                         owner/name#number or a link): read with gh for the review to check the
+                         change against; again for more
   --prior <file>         Earlier rounds of this review and what was done about each finding, as
                          JSON, so this one checks them instead of raising them again
   --depth <1-5>          Sweeps in a deep review (default: [code_review] depth)
@@ -489,8 +490,9 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
     base = await pickBase(folder, { base: a.base, prBase: pr?.baseRefName, pr: a.pr });
     for (const v of a.issues ?? []) {
       const bare = BARE_ISSUE.exec(v);
-      const repo = bare ? await repoNameOf(folder) : parseGithubRef(v)!.repo;
-      if (!isRepoName(repo)) throw new UsageError(`--issue ${v} names no repo, and this folder's origin isn't on GitHub: use owner/name#number.`);
+      // A fork's issues are upstream's, as its PRs are.
+      const repo = bare ? ((await remoteRepo(folder, 'upstream')) ?? (await remoteRepo(folder, 'origin'))) : parseGithubRef(v)!.repo;
+      if (!isRepoName(repo)) throw new UsageError(`--issue ${v} names no repo, and neither this folder's upstream nor its origin is on GitHub: use owner/name#number.`);
       issueRefs.push({ repo, number: bare ? Number(bare[1]) : parseGithubRef(v)!.number });
     }
   } catch (e) {
@@ -543,7 +545,11 @@ export async function runReview(paths: Paths, args: string[], io: ReviewIo = pro
   try {
     sweepOldRecords(paths);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    if (outDir) mkdirSync(outDir, { recursive: true, mode: 0o700 });
+    if (outDir) {
+      mkdirSync(outDir, { recursive: true, mode: 0o700 });
+      // One made beforehand too: what's copied in keeps the run folder's modes, which rely on its folder's.
+      chmodSync(outDir, 0o700);
+    }
     const untrusted = await untrustedPr(folder, pr, io.visibility);
     if (untrusted && pr) io.err(`${untrusted}, so anyone can have written PR #${pr.number}: the review runs without the repo's MEKO.md datapacks.\n`);
     const meko = untrusted ? null : await io.meko(paths, cfg).catch(() => null);

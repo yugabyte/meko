@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { all, openDb, run } from '../../src/server/db.js';
@@ -195,19 +195,28 @@ describe('meko kode review', () => {
       { url: 'https://github.com/acme/auth/issues/8', title: 'acme/auth#8', read: false },
     ]);
 
-    // A bare number is this repo's, and this one's origin isn't on GitHub.
+    // A bare number is this repo's on GitHub: upstream's in a fork, refused when neither remote is there.
     err = [];
+    g('remote', 'add', 'origin', 'https://gitlab.com/acme/demo-repo.git');
     expect(await runReview(paths, ['--issue', '7'], io({ issue }))).toBe(1);
-    expect(err.join('')).toBe("--issue 7 names no repo, and this folder's origin isn't on GitHub: use owner/name#number.\n");
+    expect(err.join('')).toBe("--issue 7 names no repo, and neither this folder's upstream nor its origin is on GitHub: use owner/name#number.\n");
+    g('remote', 'set-url', 'origin', 'https://github.com/me/demo-repo.git');
+    g('remote', 'add', 'upstream', 'https://github.com/acme/demo-repo.git');
+    asked.length = 0;
+    expect(await runReview(paths, ['--issue', '7'], io({ issue }))).toBe(0);
+    expect(asked).toEqual(['acme/demo-repo#7']);
   });
 
-  it('keeps the run with --out-dir: each step streamed to its own transcript, what the steps read, the result, never the tokens', async () => {
+  it('keeps the run with --out-dir, owner-only: each step streamed to its own transcript, what the steps read, the result, never the tokens', async () => {
     fake('review-reports.json', {
       ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number.', gotchas: [] }] },
     });
+    // Made beforehand, readable by others.
     const kept = join(home, 'kept', 'run1');
+    mkdirSync(kept, { recursive: true, mode: 0o755 });
     expect(await runReview(paths, ['--json', '--out-dir', kept], io())).toBe(0);
     expect(err.join('')).toContain(`Kept the run in ${kept}.`);
+    expect(statSync(kept).mode & 0o777).toBe(0o700);
     for (const x of steps()) expect(x.args[x.args.indexOf('--output-format') + 1]).toBe('stream-json');
     const files = readdirSync(kept).sort();
     expect(files).toEqual(expect.arrayContaining([
