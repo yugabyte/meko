@@ -21,7 +21,7 @@ import { HttpError } from '../projects.js';
 import type { FixAfter } from '../prompts.js';
 import { parseSettings, projectRow, sessionRepo, sessionReview, sessionRow, type SessionRow } from '../store.js';
 import { TOOLS_SERVER } from '../tooldefs.js';
-import { readChange } from './context.js';
+import { readChange, writeIssue } from './context.js';
 import { ASK_AGAIN, SCORE_BATCH, SCORER_TIER, countsOf, findingCredits, judgeRound, mergeNotes, mergeSweep, moreSweeps } from './merge.js';
 import { basePrompt, passPrompt, scoreBase, scorePrompt, stepList, sweepContext } from './prompt.js';
 import { checkOutcomes, checkReport, checkScore } from './schemas.js';
@@ -48,9 +48,6 @@ interface ReviewStep {
 
 /** What the review session is told for a step. */
 const readStep = (file: string) => `Read ${claudePath(file)} and do what it says.`;
-
-/** The most of a linked GitHub issue's text written for the passes. */
-const ISSUE_MAX_BYTES = 64 * 1024;
 
 /** A review row (`code_reviews`). */
 interface ReviewRow {
@@ -616,11 +613,7 @@ export class CodeReviews {
       if (ref?.kind === 'issue') {
         try {
           const issue = await github.issueOrPr(task.worktree_path, ref.repo, ref.number);
-          const text = `# ${issue.title}\n\n${issue.body}`;
-          const path = join(dir, 'issues', `${ref.repo.replace('/', '-')}-${ref.number}.md`);
-          mkdirSync(join(dir, 'issues'), { recursive: true });
-          writeFileSync(path, text.slice(0, ISSUE_MAX_BYTES));
-          out.push({ title: l.label, path, url: l.url });
+          out.push({ title: l.label, path: writeIssue(dir, ref.repo, ref.number, issue), url: l.url });
           continue;
         } catch (e) {
           this.core.log.warn(`reading ${l.url} for ${task.id}'s review failed`, errMsg(e));

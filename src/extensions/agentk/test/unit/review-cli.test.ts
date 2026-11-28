@@ -9,11 +9,15 @@ import { getPaths } from '../../src/server/paths.js';
 import {
   CLI_RECORD_MAX_AGE_MS, CLI_RUN_DIR_MAX_AGE_MS, cliReviewsDir, ingestCliRecords, projectForCheckout, readCliRecord, sweepOldRecords, writeCliRecord, type CliReviewRecord,
 } from '../../src/server/review/clirecords.js';
-import { HeadlessReview, ReviewFailed, noUsage, readStepResult, type HeadlessStep, type StepRunner } from '../../src/server/review/headless.js';
+import {
+  HeadlessReview, ReviewFailed, noUsage, readStepResult, streamResult, transcriptName, type HeadlessStep, type StepRunner,
+} from '../../src/server/review/headless.js';
 import { moreSweeps } from '../../src/server/review/merge.js';
 import { strategyFor } from '../../src/server/review/strategies.js';
 import type { Diff, FileChange, ReviewContext } from '../../src/server/review/types.js';
-import { UsageError, dollars, duration, formatFindings, parseReviewArgs, progressText, stepEnv, untrustedPr, type CliPr } from '../../src/server/reviewcli.js';
+import {
+  UsageError, dollars, duration, formatFindings, parseReviewArgs, progressText, readPriorRounds, stepEnv, untrustedPr, type CliPr,
+} from '../../src/server/reviewcli.js';
 import { reviewUsage } from '../../src/server/usage.js';
 import { tempDir } from '../helpers.js';
 
@@ -23,7 +27,62 @@ describe('meko kode review: the command line', () => {
     expect(parseReviewArgs(['--base', 'dev', '--depth=3', '--strategy', 'sirius-1.0', '--json'])).toEqual({ base: 'dev', depth: 3, strategy: 'sirius-1.0', json: true, help: false });
     expect(parseReviewArgs(['--pr', '41'])).toMatchObject({ pr: '41' });
     expect(parseReviewArgs(['--description=Adds a login page.'])).toMatchObject({ description: 'Adds a login page.' });
+    expect(parseReviewArgs(['--prior', 'rounds.json'])).toMatchObject({ prior: 'rounds.json' });
+    expect(parseReviewArgs(['--out-dir', 'runs/1'])).toMatchObject({ outDir: 'runs/1' });
+    expect(parseReviewArgs(['--issue', '12', '--issue=#13', '--issue', 'acme/other#14', '--issue', 'https://github.com/acme/other/issues/15']))
+      .toMatchObject({ issues: ['12', '#13', 'acme/other#14', 'https://github.com/acme/other/issues/15'] });
+    expect(parseReviewArgs(['--model', 'sonnet', '--model=small=claude-haiku-4-5', '--model', 'mid=opus[1m]']))
+      .toMatchObject({ models: { large: 'sonnet', small: 'claude-haiku-4-5', mid: 'opus[1m]' } });
     expect(parseReviewArgs(['--help']).help).toBe(true);
+  });
+
+  it("reads --prior's earlier rounds, numbering those without a number by their place", () => {
+    const rounds = readPriorRounds(JSON.stringify([
+      { round: 3, findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number.', outcome: { status: 'declined', note: 'Callers want one.' } }] },
+      { findings: [
+        { file: 'src/b.ts', line: 0, severity: 'minor', comment: 'Typo.', outcome: { status: 'fixed' } },
+        { file: 'src/c.ts', line: 7, severity: 'blocker', comment: 'Leaks the token.', dismissed: true, note: 'Test-only code.' },
+      ] },
+      { round: 5, findings: [] },
+    ]));
+    expect(rounds).toEqual([
+      { round: 3, findings: [{ file: 'src/a.ts', line: 2, severity: 'major', comment: 'Returns a number.', outcome: { status: 'declined', note: 'Callers want one.' }, dismissed: false, note: '' }] },
+      { round: 2, findings: [
+        { file: 'src/b.ts', line: 0, severity: 'minor', comment: 'Typo.', outcome: { status: 'fixed', note: '' }, dismissed: false, note: '' },
+        { file: 'src/c.ts', line: 7, severity: 'blocker', comment: 'Leaks the token.', outcome: null, dismissed: true, note: 'Test-only code.' },
+      ] },
+      { round: 5, findings: [] },
+    ]);
+    expect(readPriorRounds('[]')).toEqual([]);
+  });
+
+  it("says what is wrong with --prior's file", () => {
+    const refused = (raw: string) => {
+      try {
+        readPriorRounds(raw);
+      } catch (e) {
+        expect(e).toBeInstanceOf(UsageError);
+        return (e as Error).message;
+      }
+      throw new Error(`accepted ${raw}`);
+    };
+    const finding = { file: 'src/a.ts', line: 2, severity: 'major', comment: 'c' };
+    const one = (f: object) => JSON.stringify([{ findings: [finding, { ...finding, ...f }] }]);
+    expect(refused('{')).toMatch(/^--prior: the file isn't JSON \(/);
+    expect(refused('{"findings": []}')).toBe('--prior: the file holds a JSON array of rounds. See: meko kode review --help');
+    expect(refused('[[]]')).toBe('--prior: round 1: a round is an object. See: meko kode review --help');
+    expect(refused('[{"findings": ["x"]}]')).toBe('--prior: round 1, finding 1: a finding is an object. See: meko kode review --help');
+    expect(refused('[{"round": 0, "findings": []}]')).toBe('--prior: round 1: round is a whole number from 1. See: meko kode review --help');
+    expect(refused('[{"round": 1}]')).toBe('--prior: round 1: findings is an array. See: meko kode review --help');
+    expect(refused(one({ severity: 'critical' }))).toBe('--prior: round 1, finding 2: severity is blocker, major or minor. See: meko kode review --help');
+    expect(refused(one({ line: '2' }))).toBe('--prior: round 1, finding 2: line is a whole number. See: meko kode review --help');
+    expect(refused(one({ file: '' }))).toBe('--prior: round 1, finding 2: file is a path. See: meko kode review --help');
+    expect(refused(one({ comment: ' ' }))).toBe('--prior: round 1, finding 2: comment is text. See: meko kode review --help');
+    expect(refused(one({ outcome: { status: 'wontfix' } }))).toBe('--prior: round 1, finding 2: outcome.status is fixed or declined. See: meko kode review --help');
+    expect(refused(one({ dismissed: 'yes' }))).toBe('--prior: round 1, finding 2: dismissed is true or false. See: meko kode review --help');
+    // A round with a number is named by it, as the prompt names it, not by its place.
+    expect(refused(JSON.stringify([{ findings: [] }, { round: 5, findings: [{ ...finding, line: -1 }] }])))
+      .toBe('--prior: round 5, finding 1: line is a whole number. See: meko kode review --help');
   });
 
   it('says what is wrong with a command line it refuses', () => {
@@ -42,6 +101,12 @@ describe('meko kode review: the command line', () => {
     expect(refused(['--strategy', 'orion'])).toBe('--strategy takes sagittarius-3.0 or sirius-1.0.');
     expect(refused(['--base'])).toBe('--base needs a value. See: meko kode review --help');
     expect(refused(['--fast'])).toBe('Unknown option: --fast. See: meko kode review --help');
+    for (const issue of ['0', 'login', 'https://github.com/acme/demo/pull/3']) {
+      expect(refused(['--issue', issue])).toBe('--issue takes an issue number, owner/name#number or an issue link.');
+    }
+    expect(refused(['--model', 'huge=opus'])).toBe('--model takes a model, or <tier>=<model> with a tier of large, mid, small.');
+    expect(refused(['--model', 'small=op us'])).toBe("--model: op us isn't a model name: use letters, digits and . _ : / @ [ ] - only.");
+    expect(refused(['--model', 'opus', '--model', 'large=sonnet'])).toBe("--model names the large tier's model twice: give each tier once.");
     expect(refused(['src/'])).toContain('reviews the folder it runs in');
   });
 
@@ -75,6 +140,16 @@ describe('meko kode review: the command line', () => {
     ].join('\n'));
     expect(formatFindings({ kept: [], counts: noCounts(), notes: 'The migration has no down step.' }, [duration(45_000), dollars(0)], false))
       .toBe('Note: The migration has no down step.\n\nLGTM · 45s');
+    const pass = (name: string, sweep: number, reported: boolean, error: string | null) => ({ pass: name, sweep, reported, findings: 0, usage: noUsage(), error });
+    expect(formatFindings({
+      kept: [], counts: noCounts(), notes: '',
+      passes: [pass('guide', 1, true, null), pass('history', 1, false, 'Claude Code failed: overloaded'), pass('claims', 2, false, null)],
+    }, [duration(45_000)], false)).toBe([
+      "Note: The history pass didn't report (Claude Code failed: overloaded), so the review went on without it.",
+      "Note: The claims pass of sweep 2 didn't report, so the review went on without it.",
+      '',
+      'LGTM \u00b7 45s',
+    ].join('\n'));
   });
 
   it("uses the repo's MEKO.md only for the user's own work or a PR on a repo only people with access can push to", async () => {
@@ -116,6 +191,24 @@ describe('a review step on Claude Code', () => {
     expect(val('--permission-mode')).toBe('default');
     expect(val('--add-dir')).toBe('/run/r');
     expect(reviewStepArgs({ model: '', mcpConfig: '/m', runDir: '/r' })).not.toContain('--model');
+    expect(val('--output-format')).toBe('json');
+    // For a transcript: every message, then the result.
+    const stream = reviewStepArgs({ model: 'opus', mcpConfig: '/m', runDir: '/r', stream: true });
+    expect(stream[stream.indexOf('--output-format') + 1]).toBe('stream-json');
+    expect(stream).toContain('--verbose');
+    expect(stream).toContain('--no-session-persistence');
+  });
+
+  it("reads a streamed step's result from its last result line, and names its transcripts", () => {
+    const result = JSON.stringify({ type: 'result', is_error: false, total_cost_usd: 0.5 });
+    expect(streamResult(['{"type":"system"}', '{"type":"assistant","message":{}}', result, ''].join('\n'))).toBe(result);
+    // The tail kept can start mid-line.
+    expect(streamResult(`pe":"assistant"}\n${result}`)).toBe(result);
+    expect(streamResult('{"type":"assistant"}\n')).toBe('');
+    expect(readStepResult({ stdout: streamResult(result), stderr: '', code: 0, spawnError: null, timedOut: false }, 'claude').usage.costUsd).toBe(0.5);
+    expect(transcriptName('r1s1:guide', 1)).toBe('r1s1-guide.jsonl');
+    expect(transcriptName('r1s1:guide', 2)).toBe('r1s1-guide.2.jsonl');
+    expect(transcriptName('r1c12', 1)).toBe('r1c12.jsonl');
   });
 
   it('reads what a step spent and how it ended', () => {
@@ -221,6 +314,16 @@ describe('the headless review', () => {
     expect(r.notes).toBe('The migration has no down step.');
     expect(r.sweeps).toBe(1);
     expect(r.usage).toEqual({ input: 8, output: 16, cacheRead: 24, cacheWrite: 32, costUsd: 4 });
+    // Each pass's own run, in the strategy's order, and the scorers' together: they add up to the total.
+    const spent = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, costUsd: 0.5 };
+    expect(r.passes).toEqual([
+      { pass: 'guide', sweep: 1, reported: true, findings: 2, usage: spent, error: null },
+      { pass: 'diff', sweep: 1, reported: true, findings: 2, usage: spent, error: null },
+      { pass: 'dependents', sweep: 1, reported: true, findings: 0, usage: spent, error: null },
+      { pass: 'history', sweep: 1, reported: true, findings: 0, usage: spent, error: null },
+      { pass: 'claims', sweep: 1, reported: true, findings: 0, usage: spent, error: null },
+    ]);
+    expect(r.scoring).toEqual({ steps: 3, reported: 3, usage: { input: 3, output: 6, cacheRead: 9, cacheWrite: 12, costUsd: 1.5 } });
   });
 
   it('runs another sweep while one adds something, past the second', async () => {
@@ -246,6 +349,9 @@ describe('the headless review', () => {
     const r = await review.run();
     expect(log.filter((s) => s === 'r1s1:history')).toHaveLength(2);
     expect(r.counts).toEqual(noCounts());
+    // Said, so a review short of a pass isn't taken for a whole one.
+    expect(r.passes.filter((p) => !p.reported)).toEqual([{ pass: 'history', sweep: 1, reported: false, findings: 0, usage: noUsage(), error: 'it stopped' }]);
+    expect(r.scoring).toEqual({ steps: 0, reported: 0, usage: noUsage() });
   });
 
   it('fails when no pass reports in the first sweep, saying why', async () => {

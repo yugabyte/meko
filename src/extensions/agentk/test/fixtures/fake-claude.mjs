@@ -75,6 +75,10 @@ if (args[0] === '-p') {
     const server = JSON.parse(readFileSync(args[mcp + 1], 'utf8')).mcpServers.kode_sessions;
     await reviewStepsVia(fake, input, (body) => postTools(server.env.KODE_HOOK_SOCK, server.env.KODE_HOOK_TOKEN, body));
     const usage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 40 };
+    // stream-json: a message of the step's, then the result as its last line.
+    if (args[args.indexOf('--output-format') + 1] === 'stream-json') {
+      process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Read the step file; reported.' }] } }) + '\n');
+    }
     process.stdout.write(JSON.stringify({ type: 'result', is_error: false, result: 'Reported.', total_cost_usd: 0.25, usage }), () => process.exit(0));
     await new Promise(() => undefined);
   }

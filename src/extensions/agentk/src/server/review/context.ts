@@ -4,7 +4,7 @@
  * task's review in its worktree (`runner.ts`) and `meko kode review` in the folder it runs in
  * (`headless.ts`), so they review the same change the same way.
  */
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { isGotchasDatapack, parseMekoMd } from '../../shared/mekomd.js';
 import { shortRemote } from '../../shared/datapacks.js';
@@ -14,6 +14,17 @@ import { readDiff } from './diff.js';
 import { findGuides, findMekoMds } from './guides.js';
 import { readCommits, readHistory } from './history.js';
 import type { Diff, PriorRound, ReviewContext, ReviewDatapack, ReviewIssue } from './types.js';
+
+/** The most of a linked GitHub issue's text written for the passes. */
+export const ISSUE_MAX_BYTES = 64 * 1024;
+
+/** Writes a linked GitHub issue's title and body into the run folder for the passes to read; returns its path. */
+export function writeIssue(dir: string, repo: string, number: number, issue: { title: string; body: string }): string {
+  const path = join(dir, 'issues', `${repo.replace('/', '-')}-${number}.md`);
+  mkdirSync(join(dir, 'issues'), { recursive: true });
+  writeFileSync(path, `# ${issue.title}\n\n${issue.body}`.slice(0, ISSUE_MAX_BYTES));
+  return path;
+}
 
 /** The repo's GitHub `owner/name` from its origin, else its folder's name. */
 export async function repoNameOf(repo: string): Promise<string> {

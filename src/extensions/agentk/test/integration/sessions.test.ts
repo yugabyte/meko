@@ -1000,6 +1000,9 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await env.core.checkHookSocket();
     expect(existsSync(env.core.paths.hookSock)).toBe(true);
     await env.core.sessions.submit(s.id, 'second turn');
+    // The first turn may still be running at the rebind, so its Stop can come now too: idle counts after the second turn's reply.
+    const replies = () => readFileSync(join(env.fakeDir, `${s.claudeSessionId}.jsonl`), 'utf8').split('"end_turn"').length - 1;
+    await waitFor(replies, (n) => n === 2, 10000, 'the second turn');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the Stop hook');
     // Hooks arrive again, so the transcript no longer sets the status.
     writeFileSync(transcript, '{}\n{}\n{}\n');

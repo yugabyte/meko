@@ -363,12 +363,15 @@ with a notice. Cancelling or leaving the review drops its prompt, queued or out.
 no task, session or server: a person, a plain Claude Code session or a script can run it on any
 checkout (`src/server/reviewcli.ts`). It reads the change from where it left its base to the working
 tree, uncommitted and untracked files included, as a task's review does, prints what it kept and
-exits 0; it exits 1 when it couldn't review (bad options, not a git folder, no Claude Code, no base,
-a `--pr` gh can't read, no pass reporting, or Ctrl+C). It only reports: one round, no fix prompt,
-no triage, no PR, no line. Whoever ran it fixes what it found and runs it again.
+exits 0, or 2 when a pass didn't report and the review went on without it, so a script that reads
+only the exit code can tell a partial review from a whole one; it exits 1 when it couldn't review
+(bad options, not a git folder, no Claude Code, no base, a `--pr` gh can't read, a `--prior` file
+it can't read or take, no pass reporting in the first sweep, or Ctrl+C). It
+only reports: one round, no fix prompt, no triage, no PR, no line. Whoever ran it fixes what it
+found and runs it again, with `--prior` for what came of the earlier runs.
 
 ```
-meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--depth 1-5] [--strategy <id>] [--json]
+meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--issue <issue>]... [--prior <file>] [--depth 1-5] [--strategy <id>] [--model [<tier>=]<model>]... [--out-dir <dir>] [--json]
 ```
 
 - **What it reviews against.** `--base`, else `--pr`'s base branch, else the branch's
@@ -389,14 +392,47 @@ meko kode review [--base <branch>] [--pr <pr> | --description <text>] [--depth 1
   passes, with the user's Meko token, at datapacks of its author's choosing: the review runs
   without them and says so (`untrustedPr`), as Kode runs a session on such a PR's head without the
   repo's config ([Code from public repos](security.md#code-from-public-repos)).
+- **Linked issues.** `--issue` (a number in the reviewed repo, upstream's in a fork as its PRs are,
+  `owner/name#n` or an issue link; once per issue) is read with gh into the run folder and listed
+  for the passes to read, as a task's linked issues are (`writeIssue`, `linkedIssues` in the base
+  prompt): what the change was meant to do, from someone other than its author. One gh can't read
+  goes to them by its link only, saying so on stderr; a bare number in a folder where neither
+  upstream nor origin is on GitHub stops the review before anything is recorded.
+- **Earlier rounds.** `--prior` names a JSON file of the earlier runs on this change, as a task's
+  next round is told about its earlier ones (`PriorRound`, `priorRounds` in the base prompt): an
+  array of `{ round?, findings: [{ file, line, severity, comment, outcome?: { status: fixed |
+  declined, note? }, dismissed?, note? }] }`, a round without a number numbered by its place in
+  the array (`readPriorRounds`). The passes check those findings instead of raising them again;
+  the prompt carries the newest of them, as a task's does (`trimPriorRounds`). A file that isn't
+  one stops the review before anything is recorded, saying which round (by its number, else its
+  place) and finding is wrong.
 - **Settings.** Strategy and depth are `[code_review]`'s, or `--strategy` and `--depth`; strategy
-  Off runs the default, as **Run code review** does. Re-review rounds and the check don't apply.
+  Off runs the default, as **Run code review** does. Each tier's model is
+  `[code_review.models.claude]`'s, or `--model`'s: a model for the large tier, or `<tier>=<model>`
+  for any (`large`, `mid`, `small`), once per tier (a tier named twice is refused), checked as a
+  session's model is (`checkModel`). Re-review rounds and the check don't apply: a script that runs
+  it again passes what came of the earlier runs with `--prior`.
+- **Keeping the run.** `--out-dir` names a new or empty folder outside the reviewed repo (the next
+  review would read one inside it as part of the change); one that isn't, or a file, is refused
+  before anything is recorded, and it is made owner-only, as the run folder is. Each step then
+  streams every message (`--output-format stream-json`) into its own owner-only transcript there as
+  it runs (`r1s1-guide.jsonl`, `r1c3.jsonl`; `.2` for its ask-again: `transcriptName`), its result
+  read from the stream's last result line (`streamResult`). However the review ends, the run folder
+  is copied in beside them, `mcp.json` and its tokens left out, and a finished one adds its result
+  as `review.json`, what `--json` prints (one that can't be written is said on stderr, and the
+  result is still printed). Without it, nothing of what the steps read or said outlives the run,
+  only its record's counts.
 - **Output.** stdout gets the kept findings, worst first, each with its comment (and **Caught with
-  Meko** with the gotchas it credits), the passes' notes, then one line: the counts or `LGTM`, how
-  long it took and what Claude Code says it cost. `--json` gives `{ repo, branch, base, head,
-  strategy, depth, files, counts, findings: [{ key, file, line, severity, comment, confidence,
-  passes, credits }], notes, seconds, costUsd }` instead (with `files: 0` and no findings when
-  nothing changed). stderr gets what it's reviewing and its
+  Meko** with the gotchas it credits), the passes' notes and a note for each pass that never
+  reported (`missedPass`: the review went on without it, so it isn't taken for a whole one; it
+  also exits 2), then
+  one line: the counts or `LGTM`, how long it took and what Claude Code says it cost. `--json`
+  gives `{ repo, branch, base, head, strategy, depth, models, files, counts, findings: [{ key, file, line,
+  severity, comment, confidence, passes, credits }], notes, issues: [{ url, title, read }], passes: [{ name, sweep, reported,
+  findings, costUsd, error }], scoring: { steps, reported, costUsd }, seconds, costUsd }` instead:
+  each sweep's passes with what each raised and spent, its ask-again included, and why one that
+  failed didn't report (`PassRun`), then the scorers together (with `files: 0`, no findings and no
+  passes when nothing changed). stderr gets what it's reviewing and its
   progress (one line redrawn on a terminal, a line per phase elsewhere) and any error.
 
 **How it runs** (`src/server/review/headless.ts`, `HeadlessReview`). It runs headless in the CLI's
@@ -416,7 +452,7 @@ the run's record counts what they spent. Claude Code only for now: OpenCode and 
 need a headless launch and tool wiring of their own.
 
 A step's launch (`reviewStepArgs` in `src/server/claude.ts`): print mode, `--output-format json`
-(its tokens and cost), only Read, Grep and Glob of its own tools, `--strict-mcp-config` with the run's
+(its tokens and cost; `stream-json` with `--verbose` for a kept run's transcript), only Read, Grep and Glob of its own tools, `--strict-mcp-config` with the run's
 `mcp.json`, `--allowedTools` the two report tools and Meko's `knowledgebase_search` and
 `context_search` in the default permission mode (in `-p` anything else that asks is denied, so a
 step never hangs on a prompt), the run folder by `--add-dir`, and no session kept. It reads no
@@ -434,7 +470,7 @@ answers (`serveTools`, `KODE_HOOK_SOCK` and a one-time token), listing only thos
 (`KODE_TOOLS`). It names Meko's server (its URL and token from `meko token --json`, the way Kode
 reads them) only when the change's `MEKO.md` files list datapacks and Meko is running. The run's
 folder (`run/cli-reviews/<id>/`: the base prompt, step files, patches, `mcp.json`) is removed when
-it ends, however it ends; one a killed run left behind is removed by the next run once it's a day
+it ends, however it ends, after `--out-dir` copies it; one a killed run left behind is removed by the next run once it's a day
 old.
 
 **Counted with the other reviews** (`src/server/review/clirecords.ts`). Every run that got as far as
